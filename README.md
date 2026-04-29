@@ -1,6 +1,6 @@
 # MS Operations Hub
 
-Operations dashboard for Mosquito Shield of Long Island.
+Operations dashboard for Mosquito Shield of Long Island. Deployed at https://ms-operations-hub.vercel.app.
 
 Stack: Next.js 14 (App Router), TypeScript, Tailwind CSS, shadcn/ui. Deployed to Vercel.
 
