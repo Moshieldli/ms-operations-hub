@@ -1,4 +1,4 @@
-import type { Bucket, CustomerRecord, SalesSummary, SheetParseResult } from "./types";
+import type { Bucket, SalesSummary, SheetParseResult } from "./types";
 
 const CURRENT_YEAR = String(new Date().getFullYear());
 
