@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
 import { cn } from "@/lib/utils";
-import { Nav } from "@/components/nav";
+import { Shell } from "@/components/shell";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -34,8 +34,7 @@ export default function RootLayout({
           "min-h-screen bg-background font-sans antialiased"
         )}
       >
-        <Nav />
-        <main className="mx-auto max-w-6xl px-6 py-8">{children}</main>
+        <Shell>{children}</Shell>
       </body>
     </html>
   );

@@ -5,33 +5,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  categorizeFromSheet,
-  fetchTagsCsv,
-  parseTagsCsv,
-  type SalesSummary,
-} from "@/lib/sheets";
+import { AutoRefresh } from "@/components/auto-refresh";
+import { RefreshedAt } from "@/components/refreshed-at";
+import { loadSalesSummary, REFRESH_INTERVAL_MS } from "@/lib/sales-data";
+import type { SalesSummary } from "@/lib/sheets";
+import Link from "next/link";
 
 export const dynamic = "force-dynamic";
-
-const SHEET_ID = "1RGPeS5Mir2p3flA9oDOfaxyfC8xfoXyZnoe1kKCL11s";
-const TAB = "Tags";
-const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(TAB)}`;
-
-type LoadResult =
-  | { ok: true; summary: SalesSummary }
-  | { ok: false; error: string };
-
-async function loadSummary(): Promise<LoadResult> {
-  try {
-    const csv = await fetchTagsCsv(CSV_URL);
-    const parsed = parseTagsCsv(csv);
-    const summary = categorizeFromSheet(parsed, { sheetId: SHEET_ID, tab: TAB });
-    return { ok: true, summary };
-  } catch (e) {
-    return { ok: false, error: (e as Error).message };
-  }
-}
 
 function fmt(n: number) {
   return n.toLocaleString("en-US");
@@ -50,7 +30,9 @@ function Stat({
     <Card>
       <CardHeader className="pb-2">
         <CardDescription>{label}</CardDescription>
-        <CardTitle className="text-3xl tabular-nums">{value}</CardTitle>
+        <CardTitle className="text-2xl tabular-nums sm:text-3xl">
+          {value}
+        </CardTitle>
       </CardHeader>
       {hint ? (
         <CardContent className="pt-0 text-xs text-muted-foreground">
@@ -61,16 +43,58 @@ function Stat({
   );
 }
 
+function BucketCell({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: number;
+  hint?: string;
+}) {
+  return (
+    <div className="rounded-md border p-3 sm:p-4">
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-1 text-xl font-semibold tabular-nums sm:text-2xl">
+        {fmt(value)}
+      </div>
+      {hint ? (
+        <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
+      ) : null}
+    </div>
+  );
+}
+
 export default async function SalesPage() {
-  const result = await loadSummary();
+  const result = await loadSalesSummary();
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Sales</h1>
-        <p className="mt-1 text-muted-foreground">
-          Customer pipeline by year-tag bucket.
-        </p>
+      <AutoRefresh intervalMs={REFRESH_INTERVAL_MS} />
+
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
+            Sales
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground sm:text-base">
+            Customer pipeline by year-tag bucket.
+          </p>
+        </div>
+        {result.ok ? (
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+            <RefreshedAt asOf={result.summary.asOf} />
+            <Link
+              href="/tv/sales"
+              className="rounded-md border px-2 py-1 text-xs font-medium hover:bg-muted"
+            >
+              TV mode
+            </Link>
+          </div>
+        ) : null}
       </div>
 
       {!result.ok ? (
@@ -92,12 +116,12 @@ export default async function SalesPage() {
 }
 
 function SalesDashboard({ summary }: { summary: SalesSummary }) {
-  const { totals, buckets, retainedSubtypes, debug, year, asOf } = summary;
+  const { totals, buckets, retainedSubtypes, debug, year } = summary;
   const retainedHint = `Auto ${retainedSubtypes.auto} · SEB ${retainedSubtypes.seb} · EB ${retainedSubtypes.eb}`;
 
   return (
     <>
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
         <Stat label="Active Customers" value={fmt(totals.activeCustomers)} />
         <Stat label="Active Services" value={fmt(totals.activeServices)} />
         <Stat
@@ -124,7 +148,7 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-5">
             <BucketCell label="New" value={buckets.NEW} />
             <BucketCell label="Returning" value={buckets.RETURNING} />
             <BucketCell
@@ -137,35 +161,6 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
           </div>
         </CardContent>
       </Card>
-
-      <p className="text-xs text-muted-foreground">
-        As of {new Date(asOf).toLocaleString()} &middot; source:{" "}
-        <code className="font-mono">{summary.source.tab}</code> tab
-      </p>
     </>
-  );
-}
-
-function BucketCell({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: number;
-  hint?: string;
-}) {
-  return (
-    <div className="rounded-md border p-4">
-      <div className="text-xs uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-      <div className="mt-1 text-2xl font-semibold tabular-nums">
-        {fmt(value)}
-      </div>
-      {hint ? (
-        <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
-      ) : null}
-    </div>
   );
 }
