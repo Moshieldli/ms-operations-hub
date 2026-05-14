@@ -1,9 +1,13 @@
 import { AutoRefresh } from "@/components/auto-refresh";
 import { RefreshedAt } from "@/components/refreshed-at";
-import { loadSalesSummary, REFRESH_INTERVAL_MS } from "@/lib/sales-data";
-import type { SalesSummary } from "@/lib/sheets";
+import {
+  loadSalesSummary,
+  REFRESH_INTERVAL_MS,
+  type SalesSummary,
+} from "@/lib/sales-data";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 const fmt = (n: number) => n.toLocaleString("en-US");
 

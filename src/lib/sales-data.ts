@@ -1,13 +1,6 @@
-import {
-  categorizeFromSheet,
-  fetchTagsCsv,
-  parseTagsCsv,
-  type SalesSummary,
-} from "@/lib/sheets";
+import { getSalesSummary, type SalesSummary } from "@/lib/pocomos";
 
-const SHEET_ID = "1RGPeS5Mir2p3flA9oDOfaxyfC8xfoXyZnoe1kKCL11s";
-const TAB = "Tags";
-const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(TAB)}`;
+export type { SalesSummary };
 
 export type LoadResult =
   | { ok: true; summary: SalesSummary }
@@ -15,9 +8,7 @@ export type LoadResult =
 
 export async function loadSalesSummary(): Promise<LoadResult> {
   try {
-    const csv = await fetchTagsCsv(CSV_URL);
-    const parsed = parseTagsCsv(csv);
-    const summary = categorizeFromSheet(parsed, { sheetId: SHEET_ID, tab: TAB });
+    const summary = await getSalesSummary();
     return { ok: true, summary };
   } catch (e) {
     return { ok: false, error: (e as Error).message };

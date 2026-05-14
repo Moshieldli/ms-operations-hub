@@ -7,11 +7,15 @@ import {
 } from "@/components/ui/card";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { RefreshedAt } from "@/components/refreshed-at";
-import { loadSalesSummary, REFRESH_INTERVAL_MS } from "@/lib/sales-data";
-import type { SalesSummary } from "@/lib/sheets";
+import {
+  loadSalesSummary,
+  REFRESH_INTERVAL_MS,
+  type SalesSummary,
+} from "@/lib/sales-data";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 function fmt(n: number) {
   return n.toLocaleString("en-US");
@@ -80,7 +84,7 @@ export default async function SalesPage() {
             Sales
           </h1>
           <p className="mt-1 text-sm text-muted-foreground sm:text-base">
-            Customer pipeline by year-tag bucket.
+            Live customer pipeline from Pocomos · year tags.
           </p>
         </div>
         {result.ok ? (
@@ -104,8 +108,7 @@ export default async function SalesPage() {
             <CardDescription>{result.error}</CardDescription>
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground">
-            The Tags sheet must be readable by anyone with the link or
-            published to web.
+            Pocomos API may be rate-limited or credentials may be missing.
           </CardContent>
         </Card>
       ) : (
@@ -118,6 +121,14 @@ export default async function SalesPage() {
 function SalesDashboard({ summary }: { summary: SalesSummary }) {
   const { totals, buckets, retainedSubtypes, debug, year } = summary;
   const retainedHint = `Auto ${retainedSubtypes.auto} · SEB ${retainedSubtypes.seb} · EB ${retainedSubtypes.eb}`;
+  const onHoldHint = totals.onHoldCustomers
+    ? `${fmt(totals.onHoldCustomers)} on hold`
+    : undefined;
+  const fetchSeconds = (debug.fetchDurationMs / 1000).toFixed(1);
+  const tagsHint =
+    debug.tagsFailed > 0
+      ? `${fmt(debug.tagsFetched)} fetched · ${debug.tagsFailed} failed`
+      : `${fmt(debug.tagsFetched)} fetched in ${fetchSeconds}s`;
 
   return (
     <>
@@ -125,9 +136,9 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
         <Stat label="Active Customers" value={fmt(totals.activeCustomers)} />
         <Stat label="Active Services" value={fmt(totals.activeServices)} />
         <Stat
-          label="Junk Skipped"
-          value={fmt(totals.junkRowsSkipped)}
-          hint={`of ${fmt(totals.totalRowsSeen)} rows seen`}
+          label="Cancelled"
+          value={fmt(totals.cancelledCustomers)}
+          hint={onHoldHint}
         />
         <Stat
           label="Untagged"
@@ -135,7 +146,7 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
           hint={
             debug.uncategorized
               ? `${debug.uncategorized} uncategorized`
-              : undefined
+              : tagsHint
           }
         />
       </div>
@@ -144,7 +155,7 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
         <CardHeader>
           <CardTitle>Buckets &middot; {year}</CardTitle>
           <CardDescription>
-            Categorization based on year tags in the Tags sheet.
+            Live categorization from Pocomos year tags.
           </CardDescription>
         </CardHeader>
         <CardContent>
