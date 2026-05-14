@@ -6,7 +6,7 @@
 import { getSalesSummary } from "../src/lib/pocomos";
 
 (async () => {
-  console.log("Building summary (this may take a few minutes on first run)...");
+  console.log("Building summary (this may take ~60s on cold start)...");
   const t0 = Date.now();
   const s = await getSalesSummary({ force: true });
   console.log(`\nDone in ${((Date.now() - t0) / 1000).toFixed(1)}s\n`);
@@ -19,6 +19,21 @@ import { getSalesSummary } from "../src/lib/pocomos";
 
   console.log("\n=== Retained subtypes ===");
   console.log(s.retainedSubtypes);
+
+  console.log("\n=== Cancelled breakdown ===");
+  console.log({
+    total: s.cancelled.total,
+    thisYear: s.cancelled.thisYear,
+    lastYear: s.cancelled.lastYear,
+    earlier: s.cancelled.earlier,
+    unknown: s.cancelled.unknown,
+  });
+  const yearEntries = Object.entries(s.cancelled.byYear)
+    .map(([y, n]) => [parseInt(y, 10), n] as const)
+    .filter(([y]) => Number.isFinite(y))
+    .sort((a, b) => b[0] - a[0]);
+  console.log("byYear (desc):");
+  for (const [y, n] of yearEntries) console.log(`  ${y}: ${n}`);
 
   console.log("\n=== Debug ===");
   console.log({

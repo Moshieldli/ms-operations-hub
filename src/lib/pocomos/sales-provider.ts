@@ -1,9 +1,17 @@
-import { fetchAllCustomers } from "./customers";
-import { fetchContractsForCustomers } from "./contracts";
-import { fetchTagsForPestContracts } from "./contract-tags";
+import { getDataset, clearDatasetCache } from "./dataset";
 import { bucketFor, CURRENT_YEAR } from "./categorize";
 import { pocomosOffice } from "./client";
-import type { Bucket, PocomosContract, PocomosCustomer } from "./types";
+import type { NormalizedCustomer, PocomosDataset } from "./dataset-types";
+import type { Bucket } from "./types";
+
+export interface CancelledBreakdown {
+  total: number;
+  thisYear: number;
+  lastYear: number;
+  earlier: number;
+  unknown: number;
+  byYear: Record<string, number>;
+}
 
 export interface SalesSummary {
   asOf: string;
@@ -17,6 +25,7 @@ export interface SalesSummary {
   };
   buckets: Record<Bucket, number>;
   retainedSubtypes: { auto: number; seb: number; eb: number };
+  cancelled: CancelledBreakdown;
   debug: {
     untagged: number;
     uncategorized: number;
@@ -30,168 +39,140 @@ export interface SalesSummary {
   };
 }
 
-const CACHE_TTL_MS = 10 * 60 * 1000;
-
-interface CacheEntry {
-  summary: SalesSummary;
-  fetchedAt: number;
-}
-
-// Module-level cache. On Vercel, persists for the lifetime of a warm Lambda
-// instance (often much longer than the 10-min TTL when traffic is steady).
-let cache: CacheEntry | null = null;
-let inFlight: Promise<SalesSummary> | null = null;
-
 export function clearSalesCache() {
-  cache = null;
+  clearDatasetCache();
 }
 
 export async function getSalesSummary(
   options: { force?: boolean } = {}
 ): Promise<SalesSummary> {
-  const now = Date.now();
-  if (!options.force && cache && now - cache.fetchedAt < CACHE_TTL_MS) {
-    return cache.summary;
-  }
-  if (inFlight) return inFlight;
-
-  inFlight = (async () => {
-    try {
-      const summary = await buildSummary();
-      cache = { summary, fetchedAt: Date.now() };
-      return summary;
-    } finally {
-      inFlight = null;
-    }
-  })();
-  return inFlight;
+  const dataset = await getDataset(options);
+  return summarize(dataset);
 }
 
-function statusOf(s: unknown): string {
-  return String(s || "").toLowerCase();
+function parseYear(s: string | null | undefined): number | null {
+  if (!s) return null;
+  const m = String(s).trim().match(/^(\d{4})/);
+  if (!m) return null;
+  const y = parseInt(m[1], 10);
+  return Number.isFinite(y) ? y : null;
 }
 
-async function buildSummary(): Promise<SalesSummary> {
-  const t0 = Date.now();
+export function summarize(dataset: PocomosDataset): SalesSummary {
   const year = CURRENT_YEAR;
+  const yearNum = parseInt(year, 10);
 
-  // 1. All customers (active + cancelled + on-hold). We need cancelled/on-hold
-  //    only as headline counts; we don't fetch their contracts/tags.
-  const allCustomers: PocomosCustomer[] = await fetchAllCustomers();
-
-  const activeCustomers = allCustomers.filter((c) => statusOf(c.status) === "active");
-  // Pocomos uses "Inactive" for cancelled/lost customers; no "Cancelled" status
-  // exists at the customer level. We treat Inactive as cancelled for headline
-  // reporting — this matches what the operations team thinks of as "cancelled".
-  const cancelledCount = allCustomers.filter((c) => statusOf(c.status) === "inactive").length;
-  const onHoldCount = allCustomers.filter((c) => statusOf(c.status) === "on-hold").length;
-
-  const activeIds = activeCustomers.map((c) => c.id);
-
-  // 2. Contracts for every active customer. Need all contracts (including
-  //    cancelled ones) because prior-year tags live on prior-year contracts.
-  const contractsResult = await fetchContractsForCustomers(activeIds);
-  const contractsByCustomer = contractsResult.results;
-  const contractsFailed = contractsResult.failures.length;
-  const contractsFetched = contractsByCustomer.size;
-
-  // 3. Collect every pest_contract.id we'll need tags for. Map back to the
-  //    customer so we can union tags per-customer afterwards.
-  const pestIdToCustomer = new Map<string | number, string | number>();
-  let activeServices = 0;
-  for (const customer of activeCustomers) {
-    const contracts: PocomosContract[] = contractsByCustomer.get(customer.id) || [];
-    for (const contract of contracts) {
-      const pc = contract.pest_contract as { id?: string | number } | undefined;
-      const pestId = pc?.id;
-      if (pestId != null && !pestIdToCustomer.has(pestId)) {
-        pestIdToCustomer.set(pestId, customer.id);
-      }
-      if (statusOf(contract.status) === "active") {
-        activeServices++;
-      }
-    }
-  }
-
-  // 4. Fetch tags for every pest_contract via the new endpoint.
-  const pestIds = Array.from(pestIdToCustomer.keys());
-  const tagsResult = await fetchTagsForPestContracts(pestIds);
-  const tagsByPestId = tagsResult.results;
-  const tagsFailed = tagsResult.failures.length;
-  const tagsFetched = tagsByPestId.size;
-
-  // 5. Union tags per customer.
-  const tagsByCustomer = new Map<string | number, Set<string>>();
-  for (const [pestId, customerId] of pestIdToCustomer.entries()) {
-    const tags = tagsByPestId.get(pestId) || [];
-    let set = tagsByCustomer.get(customerId);
-    if (!set) {
-      set = new Set<string>();
-      tagsByCustomer.set(customerId, set);
-    }
-    for (const t of tags) set.add(t);
-  }
-
-  // 6. Bucket each active customer.
   const buckets: Record<Bucket, number> = {
     NEW: 0,
     RETURNING: 0,
     RETAINED: 0,
     AT_RISK: 0,
-    CANCELLED: cancelledCount,
+    CANCELLED: 0,
   };
   let auto = 0;
   let seb = 0;
   let eb = 0;
+  let activeServices = 0;
   let untagged = 0;
   let uncategorized = 0;
   const untaggedSampleIds: string[] = [];
   const uncategorizedSampleIds: string[] = [];
 
-  for (const customer of activeCustomers) {
-    const tags = tagsByCustomer.get(customer.id);
-    if (!tags || tags.size === 0) {
-      untagged++;
-      if (untaggedSampleIds.length < 10) untaggedSampleIds.push(String(customer.id));
-      continue;
-    }
-    const b = bucketFor(tags, year);
-    if (!b) {
-      uncategorized++;
-      if (uncategorizedSampleIds.length < 10)
-        uncategorizedSampleIds.push(String(customer.id));
-      continue;
-    }
-    buckets[b]++;
-    if (b === "RETAINED") {
-      if (tags.has(`${year} - Auto`)) auto++;
-      else if (tags.has(`${year} - SEB`)) seb++;
-      else if (tags.has(`${year} - EB`)) eb++;
+  const cancelledByYear: Record<string, number> = {};
+  let cancelledTotal = 0;
+  let cancelledUnknown = 0;
+
+  for (const customer of dataset.customers) {
+    const status = customer.status.toLowerCase();
+    if (status === "active") {
+      // Active services = active-status contracts.
+      for (const c of customer.contracts) {
+        if (String(c.status || "").toLowerCase() === "active") activeServices++;
+      }
+      const tagSet = new Set(customer.tags);
+      if (tagSet.size === 0) {
+        untagged++;
+        if (untaggedSampleIds.length < 10)
+          untaggedSampleIds.push(String(customer.id));
+        continue;
+      }
+      const b = bucketFor(tagSet, year);
+      if (!b) {
+        uncategorized++;
+        if (uncategorizedSampleIds.length < 10)
+          uncategorizedSampleIds.push(String(customer.id));
+        continue;
+      }
+      buckets[b]++;
+      if (b === "RETAINED") {
+        if (tagSet.has(`${year} - Auto`)) auto++;
+        else if (tagSet.has(`${year} - SEB`)) seb++;
+        else if (tagSet.has(`${year} - EB`)) eb++;
+      }
+    } else if (status === "inactive") {
+      cancelledTotal++;
+      const y = parseYear(customer.cancelDate);
+      if (y == null) {
+        cancelledUnknown++;
+      } else {
+        const key = String(y);
+        cancelledByYear[key] = (cancelledByYear[key] || 0) + 1;
+      }
     }
   }
 
+  buckets.CANCELLED = cancelledTotal;
+
+  const cancelled: CancelledBreakdown = {
+    total: cancelledTotal,
+    thisYear: cancelledByYear[String(yearNum)] || 0,
+    lastYear: cancelledByYear[String(yearNum - 1)] || 0,
+    earlier: 0,
+    unknown: cancelledUnknown,
+    byYear: cancelledByYear,
+  };
+  for (const [k, v] of Object.entries(cancelledByYear)) {
+    const ky = parseInt(k, 10);
+    if (Number.isFinite(ky) && ky < yearNum - 1) cancelled.earlier += v;
+  }
+
   return {
-    asOf: new Date().toISOString(),
+    asOf: dataset.asOf,
     year,
     source: { kind: "pocomos-api", office: pocomosOffice() },
     totals: {
-      activeCustomers: activeCustomers.length,
+      activeCustomers: dataset.diagnostics.activeCount,
       activeServices,
-      cancelledCustomers: cancelledCount,
-      onHoldCustomers: onHoldCount,
+      cancelledCustomers: dataset.diagnostics.inactiveCount,
+      onHoldCustomers: dataset.diagnostics.onHoldCount,
     },
     buckets,
     retainedSubtypes: { auto, seb, eb },
+    cancelled,
     debug: {
       untagged,
       uncategorized,
       untaggedSampleIds,
       uncategorizedSampleIds,
-      contractsFetched,
-      contractsFailed,
-      tagsFetched,
-      tagsFailed,
-      fetchDurationMs: Date.now() - t0,
+      contractsFetched: dataset.diagnostics.contractsFetched,
+      contractsFailed: dataset.diagnostics.contractsFailed,
+      tagsFetched: dataset.diagnostics.tagsFetched,
+      tagsFailed: dataset.diagnostics.tagsFailed,
+      fetchDurationMs: dataset.diagnostics.fetchDurationMs,
     },
   };
+}
+
+export type FilterPredicate = (c: NormalizedCustomer) => boolean;
+
+/**
+ * Future filtering hook — return customers matching a predicate against the
+ * cached dataset. Not used by the sales page yet, but exposed so filter UIs
+ * (or a /api/customers endpoint) can build on the same data layer.
+ */
+export async function filterCustomers(
+  predicate: FilterPredicate
+): Promise<NormalizedCustomer[]> {
+  const ds = await getDataset();
+  return ds.customers.filter(predicate);
 }

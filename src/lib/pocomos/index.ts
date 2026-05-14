@@ -19,8 +19,22 @@ export { bucketFor, startOfSaturdayWeek, CURRENT_YEAR } from "./categorize";
 export {
   getSalesSummary,
   clearSalesCache,
+  filterCustomers,
+  summarize,
 } from "./sales-provider";
-export type { SalesSummary } from "./sales-provider";
+export type {
+  SalesSummary,
+  CancelledBreakdown,
+  FilterPredicate,
+} from "./sales-provider";
+export { getDataset, clearDatasetCache } from "./dataset";
+export type {
+  NormalizedCustomer,
+  NormalizedContract,
+  CustomerDepth,
+  DatasetDiagnostics,
+  PocomosDataset,
+} from "./dataset-types";
 export type {
   PocomosCustomer,
   PocomosContract,

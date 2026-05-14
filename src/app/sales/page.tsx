@@ -119,7 +119,7 @@ export default async function SalesPage() {
 }
 
 function SalesDashboard({ summary }: { summary: SalesSummary }) {
-  const { totals, buckets, retainedSubtypes, debug, year } = summary;
+  const { totals, buckets, retainedSubtypes, cancelled, debug, year } = summary;
   const retainedHint = `Auto ${retainedSubtypes.auto} · SEB ${retainedSubtypes.seb} · EB ${retainedSubtypes.eb}`;
   const onHoldHint = totals.onHoldCustomers
     ? `${fmt(totals.onHoldCustomers)} on hold`
@@ -129,6 +129,9 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
     debug.tagsFailed > 0
       ? `${fmt(debug.tagsFetched)} fetched · ${debug.tagsFailed} failed`
       : `${fmt(debug.tagsFetched)} fetched in ${fetchSeconds}s`;
+  const yearNum = parseInt(year, 10);
+  const prevYear = yearNum - 1;
+  const cancelledHint = `${fmt(cancelled.thisYear)} in ${year} · ${fmt(cancelled.lastYear)} in ${prevYear} · ${fmt(cancelled.earlier)} earlier`;
 
   return (
     <>
@@ -168,10 +171,112 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
               hint={retainedHint}
             />
             <BucketCell label="At Risk" value={buckets.AT_RISK} />
-            <BucketCell label="Cancelled" value={buckets.CANCELLED} />
+            <BucketCell
+              label="Cancelled"
+              value={buckets.CANCELLED}
+              hint={cancelledHint}
+            />
           </div>
         </CardContent>
       </Card>
+
+      <CancelledByYearCard summary={summary} />
+
+      <BucketRulesCard year={year} />
     </>
+  );
+}
+
+function CancelledByYearCard({ summary }: { summary: SalesSummary }) {
+  const { cancelled, year } = summary;
+  const yearNum = parseInt(year, 10);
+  const olderYears = Object.entries(cancelled.byYear)
+    .filter(([y]) => {
+      const n = parseInt(y, 10);
+      return Number.isFinite(n) && n < yearNum - 1;
+    })
+    .sort((a, b) => parseInt(b[0], 10) - parseInt(a[0], 10));
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Cancellations by year</CardTitle>
+        <CardDescription>
+          Derived from each Inactive customer&rsquo;s last service date.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
+          <BucketCell label={`${year}`} value={cancelled.thisYear} />
+          <BucketCell label={`${yearNum - 1}`} value={cancelled.lastYear} />
+          <BucketCell
+            label="Earlier"
+            value={cancelled.earlier}
+            hint={
+              olderYears.length
+                ? olderYears
+                    .slice(0, 4)
+                    .map(([y, n]) => `${y}: ${n.toLocaleString("en-US")}`)
+                    .join(" · ")
+                : undefined
+            }
+          />
+        </div>
+        {cancelled.unknown > 0 ? (
+          <p className="mt-3 text-xs text-muted-foreground">
+            {fmt(cancelled.unknown)} cancelled customer
+            {cancelled.unknown === 1 ? "" : "s"} have no last-service date and
+            are excluded from the year breakdown.
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function BucketRulesCard({ year }: { year: string }) {
+  const rules: Array<{ label: string; rule: string }> = [
+    {
+      label: "NEW",
+      rule: `Has "${year} - New Sale" tag AND no prior YYYY tag — brand-new customer this year.`,
+    },
+    {
+      label: "RETURNING",
+      rule: `Has "${year} - New Sale" tag AND at least one prior YYYY tag — came back after a gap.`,
+    },
+    {
+      label: "RETAINED",
+      rule: `Has "${year} - Auto / SEB / EB / Prepaid / Committed" — service continued from prior year.`,
+    },
+    {
+      label: "AT RISK",
+      rule: `Has a prior YYYY tag but NO ${year} tag — last year's customer not yet renewed.`,
+    },
+    {
+      label: "CANCELLED",
+      rule: "Pocomos customer status = Inactive. Year breakdown uses each customer's last service date.",
+    },
+  ];
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>How are buckets calculated?</CardTitle>
+        <CardDescription>
+          Buckets read live Pocomos year tags per customer.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <dl className="grid gap-3 text-sm sm:grid-cols-2">
+          {rules.map((r) => (
+            <div key={r.label} className="rounded-md border p-3">
+              <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                {r.label}
+              </dt>
+              <dd className="mt-1 text-sm leading-snug">{r.rule}</dd>
+            </div>
+          ))}
+        </dl>
+      </CardContent>
+    </Card>
   );
 }
