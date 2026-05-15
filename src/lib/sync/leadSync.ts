@@ -232,19 +232,32 @@ export async function runLeadSync(opts: RunOptions = {}): Promise<LeadSyncResult
       if (opts.limit && processed >= opts.limit) break outer;
       processed += 1;
 
+      // Advance the watermark for every lead we resolve (added or skipped),
+      // not just on successful creates. Otherwise, a page where every lead
+      // dedup-skips leaves the watermark at its previous value and the next
+      // cron tick re-fetches the same page, re-skips it, and never reaches
+      // older leads — the sync gets stuck on its first page. Errored creates
+      // intentionally do NOT advance the watermark (the lead retries next tick).
+      const advanceWatermark = () => {
+        if (dateAddedMs > newWatermarkMs) newWatermarkMs = dateAddedMs;
+      };
+
       const phoneRaw = pickStr(row, "phone", "phone_number");
       const phone = normalizePhone(phoneRaw);
       if (!phone) {
         result.skipped_nophone += 1;
+        advanceWatermark();
         continue;
       }
 
       if (alreadySynced.has(leadId)) {
         result.skipped_dup += 1;
+        advanceWatermark();
         continue;
       }
       if (existingPbPhones.has(phone)) {
         result.skipped_dup += 1;
+        advanceWatermark();
         continue;
       }
 
@@ -306,7 +319,7 @@ export async function runLeadSync(opts: RunOptions = {}): Promise<LeadSyncResult
           payload: payload as Record<string, unknown>,
           notes_block: notesBlock,
         });
-        if (dateAddedMs > newWatermarkMs) newWatermarkMs = dateAddedMs;
+        advanceWatermark();
         continue;
       }
 
@@ -330,8 +343,9 @@ export async function runLeadSync(opts: RunOptions = {}): Promise<LeadSyncResult
         alreadySynced.add(leadId);
         existingPbPhones.add(phone);
         result.added += 1;
-        if (dateAddedMs > newWatermarkMs) newWatermarkMs = dateAddedMs;
+        advanceWatermark();
       } catch (e) {
+        // Don't advance the watermark — we want to retry this lead next tick.
         result.errors.push({ pocomos_id: leadId, error: (e as Error).message });
       }
     }
