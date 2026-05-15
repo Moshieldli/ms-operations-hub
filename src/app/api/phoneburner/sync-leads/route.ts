@@ -29,7 +29,13 @@ export async function GET(request: Request) {
   }
 
   const t0 = Date.now();
-  const leadSync = await runLeadSync().catch((e) => ({
+  // Per-invocation cap so the function fits inside Vercel's 300s timeout.
+  // Each lead costs ~1s for the HTML-scraped Pocomos notes + ~250ms for the
+  // PhoneBurner POST + gate; 50 leads runs in ~60-90s with headroom for
+  // conversionCleanup. At */15 cadence the initial 3000-lead backfill
+  // finishes in ~15h; after that it's effectively realtime.
+  const leadSyncLimit = Number(process.env.LEAD_SYNC_LIMIT || 50);
+  const leadSync = await runLeadSync({ limit: leadSyncLimit }).catch((e) => ({
     error: (e as Error).message,
     added: 0,
     skipped_dup: 0,
