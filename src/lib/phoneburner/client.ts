@@ -174,10 +174,14 @@ export interface CreateContactInput {
   state?: string;
   zip?: string;
   notes?: string;
-  website?: string;
   /** Folder to drop the contact in. `category_id` and `folder_id` both work; using `category_id` for consistency with the request docs. */
   category_id: string;
-  /** Each entry must have name, value, type. PB serializes as `custom_fields[i][name]=...`. */
+  /**
+   * Each entry must have name, value, type. PB serializes as
+   * `custom_fields[i][name]=...`. NOTE: the `website` body field is
+   * silently dropped by PB — to attach the Pocomos URL, add a
+   * `{ name: "Pocomos Profile", type: 1, value: url }` entry here.
+   */
   custom_fields?: Array<{ name: string; value: string; type?: number }>;
 }
 
@@ -192,7 +196,6 @@ function buildCreateBody(input: CreateContactInput): URLSearchParams {
   if (input.state) p.set("state", input.state);
   if (input.zip) p.set("zip", input.zip);
   if (input.notes) p.set("notes", input.notes);
-  if (input.website) p.set("website", input.website);
   p.set("category_id", input.category_id);
   if (input.custom_fields && input.custom_fields.length) {
     input.custom_fields.forEach((cf, i) => {
@@ -273,7 +276,6 @@ export async function updateContact(userId: string, input: Partial<CreateContact
   if (input.state !== undefined) body.set("state", input.state);
   if (input.zip !== undefined) body.set("zip", input.zip);
   if (input.notes !== undefined) body.set("notes", input.notes);
-  if (input.website !== undefined) body.set("website", input.website);
   if (input.category_id !== undefined) body.set("category_id", input.category_id);
   if (input.custom_fields) {
     input.custom_fields.forEach((cf, i) => {
@@ -293,6 +295,12 @@ export async function deleteContact(userId: string): Promise<void> {
 /**
  * Page through one folder's contacts. Yields rows in their PB GET shape.
  * Each page is one HTTP call.
+ *
+ * NOTE on the query parameter: PhoneBurner's `?folder_id=N` is silently
+ * ignored — it returns every contact in the account regardless of folder.
+ * The actually-filtering parameter is `?category_id=N`, even though the
+ * folder list endpoint refers to these as `folder_id`. PB's inconsistency,
+ * not ours. Discovered during the rev-4 deep probe (see docs/REFERENCE.md §4).
  */
 export async function* listContactsInFolder(
   folderId: string | number,
@@ -302,7 +310,7 @@ export async function* listContactsInFolder(
   for (;;) {
     const resp = await request<PBContactsListResponse>(
       "GET",
-      `/contacts?folder_id=${encodeURIComponent(String(folderId))}&page=${page}&page_size=${pageSize}`
+      `/contacts?category_id=${encodeURIComponent(String(folderId))}&page=${page}&page_size=${pageSize}`
     );
     const inner = resp.contacts;
     const rows = inner?.contacts ?? [];

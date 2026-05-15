@@ -11,6 +11,7 @@ import { FOLDERS } from "@/lib/phoneburner/folders";
 const WATERMARK_KEY = "phoneburner_last_sync_at";
 const PAGE_SIZE = 100;
 const POCOMOS_BASE = process.env.POCOMOS_BASE || "https://mypocomos.net";
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
  * Shape of one row in the `aaData` array returned by POST /leads/data. The
@@ -134,11 +135,41 @@ async function loadAlreadySyncedIds(): Promise<Set<string>> {
   return new Set(rows.map((r) => r.pocomos_id));
 }
 
-async function loadFreshFolderPhones(): Promise<Set<string>> {
+/**
+ * Loads the phone set we dedup against — every contact that already
+ * exists ANYWHERE in PhoneBurner. Pocomos has three lifecycle states
+ * (Lead → Active Customer → Cancelled) and they don't cross back: a
+ * cancelled customer never reverts to a lead, and an active customer
+ * never demotes either. So if a phone is already in any PB folder
+ * (lead bucket, cancelled bucket, active customer, no-add-ons, follow
+ * up, or the catch-all), the lead is the same person and we should not
+ * duplicate. Spanning all business folders prevents that.
+ *
+ * Sample Contacts (66223502) and Test Folder (66224471) are excluded —
+ * they're PB defaults / test scratch space, not customer-real data.
+ */
+async function loadAllExistingPbPhones(): Promise<Set<string>> {
   const phones = new Set<string>();
-  for await (const c of listContactsInFolder(FOLDERS.LEADS_FRESH)) {
-    const norm = normalizePhone(c.raw_phone);
-    if (norm) phones.add(norm);
+  const folders: string[] = [
+    FOLDERS.LEADS_FRESH,
+    FOLDERS.LEADS_GENERAL,
+    FOLDERS.LEADS_COMPETITOR,
+    FOLDERS.LEADS_FINANCIAL,
+    FOLDERS.CANCELLED_COMPETITOR,
+    FOLDERS.CANCELLED_FINANCIAL,
+    FOLDERS.CANCELLED_RESULTS,
+    FOLDERS.CANCELLED_NO_REACH,
+    FOLDERS.CANCELLED_PERSONAL,
+    FOLDERS.CUSTOMER_NO_ADD_ONS,
+    FOLDERS.ACTIVE_CUSTOMER,
+    FOLDERS.FOLLOW_UP,
+    FOLDERS.DEFAULT_CONTACTS,
+  ];
+  for (const folder of folders) {
+    for await (const c of listContactsInFolder(folder)) {
+      const norm = normalizePhone(c.raw_phone);
+      if (norm) phones.add(norm);
+    }
   }
   return phones;
 }
@@ -173,7 +204,7 @@ export async function runLeadSync(opts: RunOptions = {}): Promise<LeadSyncResult
   };
 
   const alreadySynced = opts.dryRun ? new Set<string>() : await loadAlreadySyncedIds();
-  const freshPhones = opts.dryRun ? new Set<string>() : await loadFreshFolderPhones();
+  const existingPbPhones = opts.dryRun ? new Set<string>() : await loadAllExistingPbPhones();
 
   let processed = 0;
   let newWatermarkMs = watermarkBeforeMs;
@@ -212,7 +243,7 @@ export async function runLeadSync(opts: RunOptions = {}): Promise<LeadSyncResult
         result.skipped_dup += 1;
         continue;
       }
-      if (freshPhones.has(phone)) {
+      if (existingPbPhones.has(phone)) {
         result.skipped_dup += 1;
         continue;
       }
@@ -240,6 +271,15 @@ export async function runLeadSync(opts: RunOptions = {}): Promise<LeadSyncResult
         );
       }
 
+      // Age-based folder routing: leads with date_added in the last 30
+      // days go to Fresh (Rena's active queue); older ones go to General
+      // so historical backfill doesn't drown the Fresh folder. Threshold
+      // is from `now`, not from `last_sync_at` — a stale lead is stale
+      // regardless of when we got around to syncing it.
+      const ageMs = dateAddedMs ? Date.now() - dateAddedMs : Number.POSITIVE_INFINITY;
+      const isFresh = ageMs <= THIRTY_DAYS_MS;
+      const targetFolder = isFresh ? FOLDERS.LEADS_FRESH : FOLDERS.LEADS_GENERAL;
+
       const payload = {
         first_name: first,
         last_name: last,
@@ -249,9 +289,14 @@ export async function runLeadSync(opts: RunOptions = {}): Promise<LeadSyncResult
         city,
         state,
         zip,
-        category_id: FOLDERS.LEADS_FRESH,
-        website: pocomosUrl,
-        custom_fields: [{ name: "Customer ID", type: 1, value: leadId }],
+        category_id: targetFolder,
+        // The earlier (working) integration stores the Pocomos URL as a
+        // SECOND custom_field named "Pocomos Profile" — there is no top-level
+        // `website` field that PB honors. See REFERENCE.md §4.
+        custom_fields: [
+          { name: "Customer ID", type: 1, value: leadId },
+          { name: "Pocomos Profile", type: 1, value: pocomosUrl },
+        ],
         notes: notesBlock,
       };
 
@@ -273,7 +318,7 @@ export async function runLeadSync(opts: RunOptions = {}): Promise<LeadSyncResult
             pocomos_id, pocomos_type, pb_contact_id, folder_id,
             synced_at, last_updated_at, last_notes_refresh_at
           ) VALUES (
-            ${leadId}, 'lead', ${pbId}, ${FOLDERS.LEADS_FRESH},
+            ${leadId}, 'lead', ${pbId}, ${targetFolder},
             NOW(), NOW(), NOW()
           )
           ON CONFLICT (pocomos_id) DO UPDATE
@@ -283,7 +328,7 @@ export async function runLeadSync(opts: RunOptions = {}): Promise<LeadSyncResult
                 last_notes_refresh_at = NOW()
         `;
         alreadySynced.add(leadId);
-        freshPhones.add(phone);
+        existingPbPhones.add(phone);
         result.added += 1;
         if (dateAddedMs > newWatermarkMs) newWatermarkMs = dateAddedMs;
       } catch (e) {

@@ -353,11 +353,15 @@ GET /contacts/{user_id}
     custom_fields: [{custom_field_id, name, type, value}]
     primary_phone.{phone, raw_phone, type}
 
-GET /contacts?folder_id={N}&page=1&page_size=200
-→ List contacts in a folder. List query uses `folder_id`, NOT `category_id`.
+GET /contacts?category_id={N}&page=1&page_size=200
+→ List contacts whose category.category_id equals N. THIS is the filter.
   Response: { contacts: { contacts: [...], total_results: N, total_pages: M, page: 1 } }
-  Note: folder_id=47718 is the master "all contacts" view — returns every contact
-  the office has across all folders, not just contacts whose category_id IS 47718.
+
+  **CRITICAL: do NOT use `?folder_id=N` for filtering — PB silently
+  ignores it and returns every contact in the entire account.** Proved
+  by probing five different folder ids, all returning the same 4,959
+  total. (The folder list endpoint refers to folders as `folder_id`,
+  but the contact list endpoint filters on `category_id`. PB's inconsistency.)
 
 PUT /contacts/{user_id}
 Content-Type: application/x-www-form-urlencoded
@@ -418,7 +422,14 @@ This endpoint runs **two phases in sequence**: lead sync, then conversion cleanu
 6. Skip if the Fresh folder (`66223880`) already has a contact with the same 10-digit phone.
 7. Pull Pocomos notes via `getNotesForLead(leadId)`, filter out any whose `summary` starts with `📞 PhoneBurner Call —` (those originated from PhoneBurner — re-pushing them would loop), reverse-chronological sort.
 8. Format notes block: 10 most recent in full; if more than 10, append `[+ N older notes from {oldest_year} — see Pocomos for full history: https://mypocomos.net/lead/{lead_id}/lead-information]`.
-9. `POST /contacts` to PhoneBurner (form-urlencoded, see §4) with `category_id: 66223880` (all leads currently route to Fresh — tag-based routing is deferred to v2; see §9), `custom_fields[0][name]=Customer ID`, `custom_fields[0][value]={lead_id}`, `custom_fields[0][type]=1`, `website: https://mypocomos.net/lead/{lead_id}/lead-information`, and the formatted `notes` block.
+9. **Age-based folder routing (30-day rule):**
+   - Lead `date_added` within the last 30 days → `category_id = 66223880` (Fresh, Rena's active queue)
+   - Older lead → `category_id = 66223881` (General — historical backfill bucket)
+   Tag-based routing (Competitor/Financial sub-folders) is still deferred to v2; see §9.
+10. `POST /contacts` to PhoneBurner (form-urlencoded, see §4) with the routed `category_id`, plus TWO custom_fields:
+    - `custom_fields[0][name]=Customer ID`, `[0][value]={lead_id}`, `[0][type]=1`
+    - `custom_fields[1][name]=Pocomos Profile`, `[1][value]=https://mypocomos.net/lead/{lead_id}/lead-information`, `[1][type]=1`
+    The earlier working integration stored the Pocomos URL as this second custom_field. Top-level `website` was tried; PB silently dropped it.
 10. On success: insert `phoneburner_contacts` row with `last_notes_refresh_at = NOW()`.
 11. Update `sync_state.phoneburner_last_sync_at` to `max(date_added)` of the leads actually processed.
 
