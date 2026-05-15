@@ -29,17 +29,34 @@ interface RawResponse {
   json: unknown;
 }
 
+/**
+ * One HTTP call to the PhoneBurner REST v1 API.
+ *
+ * `body` may be:
+ *   - undefined          → no request body
+ *   - URLSearchParams    → application/x-www-form-urlencoded (PB REQUIRES this for /contacts writes)
+ *   - any other object   → application/json (only used for the rare endpoint that accepts JSON)
+ */
 async function rawRequest(
   method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
-  jsonBody?: unknown
+  body?: URLSearchParams | unknown
 ): Promise<RawResponse> {
   const url = path.startsWith("http") ? path : `${BASE}${path}`;
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token()}`,
     Accept: "application/json",
   };
-  if (jsonBody !== undefined) headers["Content-Type"] = "application/json";
+  let serializedBody: string | undefined;
+  if (body !== undefined) {
+    if (body instanceof URLSearchParams) {
+      headers["Content-Type"] = "application/x-www-form-urlencoded";
+      serializedBody = body.toString();
+    } else {
+      headers["Content-Type"] = "application/json";
+      serializedBody = JSON.stringify(body);
+    }
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PER_REQUEST_TIMEOUT_MS);
@@ -48,18 +65,18 @@ async function rawRequest(
     const resp = await fetch(url, {
       method,
       headers,
-      body: jsonBody === undefined ? undefined : JSON.stringify(jsonBody),
+      body: serializedBody,
       signal: controller.signal,
       cache: "no-store",
     });
-    const body = await resp.text();
+    const bodyText = await resp.text();
     let json: unknown = null;
     try {
-      json = body.length ? JSON.parse(body) : null;
+      json = bodyText.length ? JSON.parse(bodyText) : null;
     } catch {
       json = null;
     }
-    return { status: resp.status, body, json };
+    return { status: resp.status, body: bodyText, json };
   } finally {
     clearTimeout(timer);
   }
@@ -68,11 +85,11 @@ async function rawRequest(
 async function request<T>(
   method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
-  jsonBody?: unknown
+  body?: URLSearchParams | unknown
 ): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     await gate();
-    const resp = await rawRequest(method, path, jsonBody);
+    const resp = await rawRequest(method, path, body);
     if (resp.status >= 200 && resp.status < 300) {
       return resp.json as T;
     }
@@ -94,108 +111,223 @@ export interface PBContact {
   user_id?: string;
   first_name?: string;
   last_name?: string;
+  /** Top-level phone (returned by GET; supplied via `phone` request key, NOT `raw_phone`). */
   raw_phone?: string;
+  /** Returned at `primary_email.email_address` from GET. */
   email_address?: string;
+  /** Returned inside `primary_address.address` etc. */
+  address1?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  /** Stored as `notes.notes` inside the GET response. PB prepends a date/author header. */
+  notes?: string;
+  website?: string;
+  /** Returned as `category.category_id` from GET; supplied via `category_id` (also accepts `folder_id`). */
+  category_id?: string;
+  custom_fields?: Array<{ name: string; type?: number; value: string }>;
+}
+
+export interface PBFolder {
+  folder_id: string;
+  folder_name?: string;
+  description?: string;
+}
+
+interface PBContactsListResponse {
+  contacts?: {
+    contacts?: PBContact[];
+    total_results?: number;
+    next_page?: string | null;
+    page?: number;
+    total_pages?: number;
+  };
+}
+
+interface PBContactCreateResponse {
+  contacts?: {
+    /** PB returns this as a single object (not an array) for POST. */
+    contacts?: Record<string, unknown>;
+  };
+}
+
+interface PBContactSingleGetResponse {
+  contacts?: {
+    /** PB returns this as a single-element array for GET /contacts/{id}. */
+    contacts?: Array<Record<string, unknown>>;
+  };
+}
+
+interface PBFoldersResponse {
+  folders?: Record<string, PBFolder>;
+}
+
+export interface CreateContactInput {
+  first_name?: string;
+  last_name?: string;
+  /** PB request key is `phone`, NOT `raw_phone`. The 10-digit string. */
+  phone?: string;
+  /** PB request key is `email`, NOT `email_address`. */
+  email?: string;
   address1?: string;
   city?: string;
   state?: string;
   zip?: string;
   notes?: string;
   website?: string;
-  category_id?: string | number;
-  custom_fields?: Array<{ name: string; type?: number; value: string }>;
-}
-
-export interface PBFolder {
+  /** Folder to drop the contact in. `category_id` and `folder_id` both work; using `category_id` for consistency with the request docs. */
   category_id: string;
-  category_name?: string;
-  name?: string;
+  /** Each entry must have name, value, type. PB serializes as `custom_fields[i][name]=...`. */
+  custom_fields?: Array<{ name: string; value: string; type?: number }>;
 }
 
-export interface PBContactsListResponse {
-  contacts?: {
-    contacts?: PBContact[];
-    total_results?: number;
-    next_page?: string | null;
+function buildCreateBody(input: CreateContactInput): URLSearchParams {
+  const p = new URLSearchParams();
+  if (input.first_name) p.set("first_name", input.first_name);
+  if (input.last_name) p.set("last_name", input.last_name);
+  if (input.phone) p.set("phone", input.phone);
+  if (input.email) p.set("email", input.email);
+  if (input.address1) p.set("address1", input.address1);
+  if (input.city) p.set("city", input.city);
+  if (input.state) p.set("state", input.state);
+  if (input.zip) p.set("zip", input.zip);
+  if (input.notes) p.set("notes", input.notes);
+  if (input.website) p.set("website", input.website);
+  p.set("category_id", input.category_id);
+  if (input.custom_fields && input.custom_fields.length) {
+    input.custom_fields.forEach((cf, i) => {
+      p.set(`custom_fields[${i}][name]`, cf.name);
+      p.set(`custom_fields[${i}][value]`, cf.value);
+      p.set(`custom_fields[${i}][type]`, String(cf.type ?? 1));
+    });
+  }
+  return p;
+}
+
+/** Normalize a row from a GET /contacts/{id} response into the public PBContact shape. */
+function normalizeGetRow(row: Record<string, unknown>): PBContact {
+  const primaryEmail = row.primary_email as { email_address?: string } | null | undefined;
+  const primaryAddress = row.primary_address as
+    | { address?: string; city?: string; state?: string; zip?: string }
+    | null
+    | undefined;
+  const category = row.category as { category_id?: string } | null | undefined;
+  const notesObj = row.notes as { notes?: string } | string | null | undefined;
+  return {
+    user_id: row.user_id != null ? String(row.user_id) : undefined,
+    first_name: typeof row.first_name === "string" ? row.first_name : undefined,
+    last_name: typeof row.last_name === "string" ? row.last_name : undefined,
+    raw_phone: typeof row.raw_phone === "string" ? row.raw_phone : undefined,
+    email_address: primaryEmail?.email_address,
+    address1: primaryAddress?.address,
+    city: primaryAddress?.city,
+    state: primaryAddress?.state,
+    zip: primaryAddress?.zip,
+    category_id: category?.category_id,
+    notes: typeof notesObj === "string" ? notesObj : notesObj?.notes,
+    custom_fields: Array.isArray(row.custom_fields) ? (row.custom_fields as PBContact["custom_fields"]) : undefined,
   };
 }
 
-export async function createContact(payload: PBContact): Promise<PBContact> {
-  const resp = await request<{ contact?: PBContact } & PBContact>("POST", "/contacts", payload);
-  return (resp.contact ?? resp) as PBContact;
-}
-
-export async function updateContact(userId: string, patch: PBContact): Promise<PBContact> {
-  const resp = await request<{ contact?: PBContact } & PBContact>(
-    "PUT",
-    `/contacts/${encodeURIComponent(userId)}`,
-    patch
-  );
-  return (resp.contact ?? resp) as PBContact;
+export async function createContact(input: CreateContactInput): Promise<PBContact> {
+  const body = buildCreateBody(input);
+  const resp = await request<PBContactCreateResponse>("POST", "/contacts", body);
+  const inner = resp.contacts?.contacts;
+  if (!inner || typeof inner !== "object") {
+    throw new Error(`PhoneBurner create: unexpected response shape, no contacts.contacts`);
+  }
+  return {
+    user_id: inner.user_id != null ? String(inner.user_id) : undefined,
+    first_name: typeof inner.first_name === "string" ? inner.first_name : undefined,
+    last_name: typeof inner.last_name === "string" ? inner.last_name : undefined,
+  };
 }
 
 export async function getContact(userId: string): Promise<PBContact | null> {
+  if (!userId) return null;
   try {
-    const resp = await request<{ contact?: PBContact } & PBContact>(
+    const resp = await request<PBContactSingleGetResponse>(
       "GET",
       `/contacts/${encodeURIComponent(userId)}`
     );
-    return (resp.contact ?? resp) as PBContact;
+    const arr = resp.contacts?.contacts;
+    if (!Array.isArray(arr) || arr.length === 0) return null;
+    return normalizeGetRow(arr[0]);
   } catch (e) {
     if (/failed: 404/.test((e as Error).message)) return null;
     throw e;
   }
 }
 
+/** Update a contact via PUT /contacts/{id}. Body fields use the same names as create. */
+export async function updateContact(userId: string, input: Partial<CreateContactInput>): Promise<void> {
+  if (!userId) throw new Error("updateContact requires a non-empty userId");
+  // updateContact reuses the create body builder for any fields that overlap.
+  const body = new URLSearchParams();
+  if (input.first_name !== undefined) body.set("first_name", input.first_name);
+  if (input.last_name !== undefined) body.set("last_name", input.last_name);
+  if (input.phone !== undefined) body.set("phone", input.phone);
+  if (input.email !== undefined) body.set("email", input.email);
+  if (input.address1 !== undefined) body.set("address1", input.address1);
+  if (input.city !== undefined) body.set("city", input.city);
+  if (input.state !== undefined) body.set("state", input.state);
+  if (input.zip !== undefined) body.set("zip", input.zip);
+  if (input.notes !== undefined) body.set("notes", input.notes);
+  if (input.website !== undefined) body.set("website", input.website);
+  if (input.category_id !== undefined) body.set("category_id", input.category_id);
+  if (input.custom_fields) {
+    input.custom_fields.forEach((cf, i) => {
+      body.set(`custom_fields[${i}][name]`, cf.name);
+      body.set(`custom_fields[${i}][value]`, cf.value);
+      body.set(`custom_fields[${i}][type]`, String(cf.type ?? 1));
+    });
+  }
+  await request<unknown>("PUT", `/contacts/${encodeURIComponent(userId)}`, body);
+}
+
+export async function deleteContact(userId: string): Promise<void> {
+  if (!userId) throw new Error("deleteContact requires a non-empty userId");
+  await request<unknown>("DELETE", `/contacts/${encodeURIComponent(userId)}`);
+}
+
 /**
- * Page through one folder's contacts. Yields raw `PBContact` rows. Each page
- * is one HTTP call; the gate() in `request` handles the 200ms pause.
+ * Page through one folder's contacts. Yields rows in their PB GET shape.
+ * Each page is one HTTP call.
  */
 export async function* listContactsInFolder(
-  categoryId: string | number,
-  pageSize = 500
+  folderId: string | number,
+  pageSize = 200
 ): AsyncGenerator<PBContact, void, unknown> {
   let page = 1;
   for (;;) {
     const resp = await request<PBContactsListResponse>(
       "GET",
-      `/contacts?category_id=${encodeURIComponent(String(categoryId))}&page=${page}&page_size=${pageSize}`
+      `/contacts?folder_id=${encodeURIComponent(String(folderId))}&page=${page}&page_size=${pageSize}`
     );
     const inner = resp.contacts;
     const rows = inner?.contacts ?? [];
-    for (const row of rows) yield row;
-    if (rows.length < pageSize || !inner?.next_page) return;
+    for (const row of rows) yield normalizeGetRow(row as unknown as Record<string, unknown>);
+    if (rows.length < pageSize) return;
+    if (inner?.total_pages != null && page >= inner.total_pages) return;
     page += 1;
-    if (page > 1000) return; // sanity guard
+    if (page > 5000) return; // sanity cap
   }
 }
 
-/**
- * Materialized version of listContactsInFolder for callers that want an
- * array. Fine on folders up to a few thousand; for big folders prefer the
- * generator above.
- */
 export async function listAllContactsInFolder(
-  categoryId: string | number,
-  pageSize = 500
+  folderId: string | number,
+  pageSize = 200
 ): Promise<PBContact[]> {
   const out: PBContact[] = [];
-  for await (const row of listContactsInFolder(categoryId, pageSize)) out.push(row);
+  for await (const row of listContactsInFolder(folderId, pageSize)) out.push(row);
   return out;
 }
 
 export async function listFolders(): Promise<PBFolder[]> {
-  const resp = await request<{ categories?: PBFolder[] } & { categories?: { categories?: PBFolder[] } }>(
-    "GET",
-    "/contacts/categories"
-  );
-  // PB shape: { categories: [...] } sometimes wrapped.
-  const inner = resp.categories;
-  if (Array.isArray(inner)) return inner;
-  if (inner && Array.isArray((inner as { categories?: PBFolder[] }).categories)) {
-    return (inner as { categories: PBFolder[] }).categories;
-  }
-  return [];
+  const resp = await request<PBFoldersResponse>("GET", "/folders");
+  const obj = resp.folders;
+  if (!obj) return [];
+  return Object.values(obj);
 }
 
 export async function getContactNotes(userId: string): Promise<string> {
@@ -204,11 +336,7 @@ export async function getContactNotes(userId: string): Promise<string> {
 }
 
 export async function addContactNote(userId: string, note: string): Promise<void> {
-  // PhoneBurner stores notes as a single text field on the contact, so an
-  // "add" is really "fetch existing + prepend + update". Newest first.
-  const existing = await getContactNotes(userId);
-  const next = existing ? `${note}\n\n${existing}` : note;
-  await updateContact(userId, { notes: next });
+  await updateContact(userId, { notes: note });
 }
 
 /**

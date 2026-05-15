@@ -243,8 +243,8 @@ export async function runLeadSync(opts: RunOptions = {}): Promise<LeadSyncResult
       const payload = {
         first_name: first,
         last_name: last,
-        raw_phone: phone,
-        email_address: email,
+        phone,
+        email,
         address1: street,
         city,
         state,

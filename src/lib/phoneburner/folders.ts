@@ -1,21 +1,27 @@
 /**
- * Real PhoneBurner folder (`view_id`) constants. See §2 of docs/REFERENCE.md
- * for how these were obtained — the dialer URL fragments base64-decode to
- * `view_id={ID}&page=1`.
+ * Real PhoneBurner folder IDs, sourced from `GET /folders` (NOT from the
+ * `view_id=N` URL fragment in the dialer UI — those are dialer view session
+ * IDs, not folder IDs). REFERENCE.md rev 3 mistakenly substituted view_ids
+ * for folder IDs; the original 8-digit values from rev 1/2 were correct
+ * all along. All values below confirmed against the live `GET /folders`
+ * response as of 2026-05-15.
  */
 export const FOLDERS = {
-  LEADS_FRESH: "3275950",
-  LEADS_GENERAL: "3275951",
-  LEADS_COMPETITOR: "3275952",
-  LEADS_FINANCIAL: "3275953",
-  CANCELLED_COMPETITOR: "3275954",
-  CANCELLED_FINANCIAL: "3275955",
-  CANCELLED_RESULTS: "3275956",
-  CANCELLED_NO_REACH: "3275957",
-  CANCELLED_PERSONAL: "3275958",
-  CUSTOMER_NO_ADD_ONS: "3282794",
-  ACTIVE_CUSTOMER: "3287921",
-  FOLLOW_UP: "3275487",
+  LEADS_FRESH: "66223880",
+  LEADS_GENERAL: "66223881",
+  LEADS_COMPETITOR: "66223882",
+  LEADS_FINANCIAL: "66223883",
+  CANCELLED_COMPETITOR: "66223884",
+  CANCELLED_FINANCIAL: "66223885",
+  CANCELLED_RESULTS: "66223886",
+  CANCELLED_NO_REACH: "66223887",
+  CANCELLED_PERSONAL: "66223888",
+  CUSTOMER_NO_ADD_ONS: "66229452",
+  ACTIVE_CUSTOMER: "66233602",
+  FOLLOW_UP: "66223503",
+  // Default catch-all where contacts land when category_id is invalid.
+  // Used by the cleanup script — never written to by the sync.
+  DEFAULT_CONTACTS: "47718",
 } as const;
 
 export type FolderId = (typeof FOLDERS)[keyof typeof FOLDERS];

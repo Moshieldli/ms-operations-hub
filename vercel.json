@@ -4,13 +4,10 @@
     {
       "path": "/api/cron/snapshot",
       "schedule": "0 5 * * *"
-    }
-  ],
-  "_disabled_crons": [
+    },
     {
       "path": "/api/phoneburner/sync-leads",
-      "schedule": "*/15 * * * *",
-      "_note": "Disabled while fixing PB folder ID + form-encoded body bugs (see commit msg). Re-enable after cleanup + verify."
+      "schedule": "*/15 * * * *"
     }
   ]
 }

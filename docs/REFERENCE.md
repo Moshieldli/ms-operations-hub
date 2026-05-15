@@ -1,6 +1,6 @@
 # MS Operations Hub — Master Reference
 
-**Last updated:** May 14, 2026 (rev 3 — replaced placeholder folder IDs with real `view_id`s decoded from the PhoneBurner UI URLs, documented the three Pocomos API surfaces (JWT, web back-door, HTML scrape), wired the lead sync to the web back-door instead of the shallow JWT lead endpoints, added the conversion-cleanup pass, added the bidirectional notes-sync design including infinite-loop prefix dedup, and added `last_notes_refresh_at` to `phoneburner_contacts`)
+**Last updated:** May 15, 2026 (rev 4 — REVERTED rev 3's folder IDs back to the original 8-digit `66223880`-series; the `view_id` numbers I extracted from the dialer URL fragment in rev 3 are dialer view session IDs, NOT folder IDs. Also: fixed the PhoneBurner POST shape (form-urlencoded, not JSON; field names `phone` not `raw_phone`, `email` not `email_address`; `custom_fields[i][name]=...` PHP-array format), the response shape (POST returns `contacts.contacts` as object, GET as single-element array), the folder-list endpoint (`/folders` not `/contacts/categories`), and the list query parameter (`folder_id` not `category_id`). All corrected against live `GET /folders` and probe POSTs.)
 **Project:** MS Analytics — Mosquito Shield of Long Island (Progranic LLC)
 **Office ID:** 1512
 **Live URL:** https://ms-operations-hub.vercel.app
@@ -60,20 +60,23 @@ PhoneBurner has no lead/customer distinction — everything is a **contact** in 
 
 | Folder ID | Name | What lives here |
 |---|---|---|
-| `3275950` | **Leads — Fresh** | New leads from Pocomos lead module, auto-pushed by cron |
-| `3275951` | **Leads — General** | Bulk-imported existing leads (one-time historical load) |
-| `3275952` | **Leads — Competitor** | Leads tagged `L - Competitor` (deferred to v2 — see §9) |
-| `3275953` | **Leads — Financial** | Leads tagged `L - Financial` (deferred to v2 — see §9) |
-| `3275954` | **Cancelled — Competitor Win-Back** | Former customers, cancelled for competitor |
-| `3275955` | **Cancelled — Financial/Price** | Former customers, cancelled over price |
-| `3275956` | **Cancelled — Results Issues** | Former customers, cancelled over service results |
-| `3275957` | **Cancelled — Could Not Reach** | Former customers we couldn't reach |
-| `3275958` | **Cancelled — Personal/Other** | Former customers, other reasons |
-| `3282794` | Customer — No Add Ons | Reserved, not in v1 flow |
-| `3287921` | **Active Customer** | New folder — written by conversion cleanup when a lead/cancelled contact converts back to active |
-| `3275487` | Follow Up | Exists, not used by sync |
+| `66223880` | **Leads — Fresh** | New leads from Pocomos lead module, auto-pushed by cron |
+| `66223881` | **Leads — General** | Bulk-imported existing leads (one-time historical load) |
+| `66223882` | **Leads — Competitor** | Leads tagged `L - Competitor` (deferred to v2 — see §9) |
+| `66223883` | **Leads — Financial** | Leads tagged `L - Financial` (deferred to v2 — see §9) |
+| `66223884` | **Canc - Competitor Win-Back** | Former customers, cancelled for competitor |
+| `66223885` | **Canc - Financial / Price** | Former customers, cancelled over price |
+| `66223886` | **Canc - Results Issues** | Former customers, cancelled over service results |
+| `66223887` | **Canc - Could Not Reach** | Former customers we couldn't reach |
+| `66223888` | **Canc - Personal / Other** | Former customers, other reasons |
+| `66229452` | Customers — No Add-Ons | Customers without add-on services (in scope for prior integration; reserved by v1 sync) |
+| `66233602` | **Active Customer** | Written by conversion cleanup when a lead/cancelled contact converts back to active |
+| `66223503` | Follow Up | Exists, not used by sync |
+| `47718` | Contacts (default catch-all) | PhoneBurner's root "all contacts" view. NOT a target folder — contacts land here when `category_id` is invalid (which is exactly what happened during the rev-3 incident). |
 
-**How folder IDs are encoded in PhoneBurner URLs:** the dialer UI surfaces folder IDs as base64-encoded URL fragments like `dmlld19pZD0zMjc1OTUwJnBhZ2U9MQ==`, which decodes to `view_id=3275950&page=1`. The number after `view_id=` is the folder ID. All previous 8-digit IDs (`66223880`-style) in earlier revs of this doc were placeholders; the IDs in the table above are the real `view_id`s.
+**How folder IDs are obtained:** call `GET /folders` (NOT `/contacts/categories` — that path 404s despite earlier docs claiming it). The response is `{ folders: { "0": { folder_id, folder_name, ... }, "1": {...}, ... } }`.
+
+**Do NOT use the dialer URL `view_id=N` numbers.** Earlier revs of this doc claimed the base64-decoded `view_id=3275950` URL fragment was the folder ID — that was wrong. Those values are dialer view session IDs, not folder IDs. Sync runs that used them silently landed contacts in folder 47718 (the catch-all) with most fields stripped, because PhoneBurner accepted the POST but ignored the unrecognized `category_id`. See the rev-4 incident in this doc's history.
 
 **How we link back to Pocomos from a PhoneBurner contact:**
 - `custom_fields: [{ name: "Customer ID", type: 1, value: lead_id_or_customer_id }]` — stores the Pocomos ID
@@ -312,26 +315,61 @@ Token lives in env var `PHONEBURNER_TOKEN`.
 
 ### Contact endpoints
 
+**CRITICAL: PhoneBurner's POST/PUT to `/contacts` requires `application/x-www-form-urlencoded`. JSON bodies are silently partial — `first_name` / `last_name` may stick, but `phone`, `email`, `notes`, `custom_fields`, `category_id` are all dropped.** Discovered the hard way during the rev-4 cleanup; see commit history.
+
+**Field name corrections (request body, form-encoded):**
+
+| What you'd guess | What PB actually wants |
+|---|---|
+| `raw_phone` | **`phone`** (10-digit string; PB stores it as `raw_phone` in the GET response — inconsistent on purpose) |
+| `email_address` | **`email`** (PB stores it at `primary_email.email_address` in GET) |
+| `notes` | `notes` ✓ (PB prepends `-- DATE @ TIME by USER -- ` automatically) |
+| `address1`, `city`, `state`, `zip` | same ✓ |
+| `category_id` | `category_id` ✓ (also accepts `folder_id`) |
+| `custom_fields: [{name,value,type}]` | **PHP-array form syntax**: `custom_fields[0][name]=Customer ID&custom_fields[0][value]=12345&custom_fields[0][type]=1` |
+
 ```http
 POST /contacts
-Body: {
-  first_name, last_name, raw_phone,
-  email_address, address1, city, state, zip,
-  notes, website,
-  category_id: "66223880",                                  // folder
-  custom_fields: [{ name: "Customer ID", type: 1, value: "154427" }]
-}
-→ Create a contact in a folder.
+Content-Type: application/x-www-form-urlencoded
 
-GET /contacts?category_id={folder}&page=1&page_size=500
-→ List contacts in a folder. Use for dedup checks.
-  Response: { contacts: { contacts: [...], total_results: N, next_page: ... } }
+first_name=John&last_name=Doe&phone=5551234567&email=j@example.com
+&address1=100+Main+St&city=Queens&state=NY&zip=11691
+&category_id=66223880
+&notes=Optional+text+(PB+prepends+timestamp)
+&custom_fields[0][name]=Customer+ID&custom_fields[0][value]=154427&custom_fields[0][type]=1
+
+→ Returns 201 with body `{contacts: {contacts: { user_id, first_name, last_name, ... } } }`
+  Note: `contacts.contacts` is a SINGLE OBJECT on POST.
+
+GET /contacts/{user_id}
+→ Single-contact detail. Returns body `{contacts: {contacts: [ { ... } ] } }`
+  Note: `contacts.contacts` is a SINGLE-ELEMENT ARRAY on GET (different shape from POST).
+  Useful fields:
+    user_id, first_name, last_name, raw_phone, date_added, owner_id
+    primary_email.email_address
+    primary_address.{address, city, state, zip}
+    category.{category_id, name}
+    notes.notes (full PB-prepended history string, newline-separated entries)
+    custom_fields: [{custom_field_id, name, type, value}]
+    primary_phone.{phone, raw_phone, type}
+
+GET /contacts?folder_id={N}&page=1&page_size=200
+→ List contacts in a folder. List query uses `folder_id`, NOT `category_id`.
+  Response: { contacts: { contacts: [...], total_results: N, total_pages: M, page: 1 } }
+  Note: folder_id=47718 is the master "all contacts" view — returns every contact
+  the office has across all folders, not just contacts whose category_id IS 47718.
 
 PUT /contacts/{user_id}
-→ Update a contact (move folders, change custom_fields, add notes, etc.)
+Content-Type: application/x-www-form-urlencoded
+→ Update a contact. Same body shape as POST. Used by conversion-cleanup to
+  move contacts to ACTIVE_CUSTOMER (66233602) and to refresh notes.
 
-GET /contacts/categories
-→ List all folders with IDs and names. Useful for sanity-checking folder IDs.
+DELETE /contacts/{user_id}
+→ Remove a contact. Used by the rev-4 cleanup script.
+
+GET /folders
+→ List all folders with IDs and names. (NOT `/contacts/categories` — that 404s.)
+  Response: { folders: { "0": {folder_id, folder_name, description}, "1": {...}, ... } }
 ```
 
 ### Webhook event
@@ -377,18 +415,18 @@ This endpoint runs **two phases in sequence**: lead sync, then conversion cleanu
 3. `POST /leads/data` with `statuses[]=Lead`, paginated (`length=100`), iterating until `aaData` is short.
 4. Filter to leads where `date_added > last_sync_at` and `phone` is non-empty after stripping to 10 digits.
 5. Skip if `phoneburner_contacts` already has the `pocomos_id`.
-6. Skip if the Fresh folder (`3275950`) already has a contact with the same 10-digit phone.
+6. Skip if the Fresh folder (`66223880`) already has a contact with the same 10-digit phone.
 7. Pull Pocomos notes via `getNotesForLead(leadId)`, filter out any whose `summary` starts with `📞 PhoneBurner Call —` (those originated from PhoneBurner — re-pushing them would loop), reverse-chronological sort.
 8. Format notes block: 10 most recent in full; if more than 10, append `[+ N older notes from {oldest_year} — see Pocomos for full history: https://mypocomos.net/lead/{lead_id}/lead-information]`.
-9. `POST /contacts` to PhoneBurner with `category_id: 3275950` (all leads currently route to Fresh — tag-based routing is deferred to v2; see §9), `custom_fields: [{ name: "Customer ID", type: 1, value: lead_id }]`, `website: https://mypocomos.net/lead/{lead_id}/lead-information`, and the formatted `notes` block.
+9. `POST /contacts` to PhoneBurner (form-urlencoded, see §4) with `category_id: 66223880` (all leads currently route to Fresh — tag-based routing is deferred to v2; see §9), `custom_fields[0][name]=Customer ID`, `custom_fields[0][value]={lead_id}`, `custom_fields[0][type]=1`, `website: https://mypocomos.net/lead/{lead_id}/lead-information`, and the formatted `notes` block.
 10. On success: insert `phoneburner_contacts` row with `last_notes_refresh_at = NOW()`.
 11. Update `sync_state.phoneburner_last_sync_at` to `max(date_added)` of the leads actually processed.
 
 **Phase B — conversionCleanup (Pocomos → PhoneBurner, status changes on existing contacts)**
 
-1. Query `phoneburner_contacts` for rows in folders `3275950`, `3275951`, `3275952`, `3275953`, `3275954`, `3275955`, `3275956`, `3275957`, `3275958` (leads + cancelled).
+1. Query `phoneburner_contacts` for rows in folders `66223880`, `66223881`, `66223882`, `66223883`, `66223884`, `66223885`, `66223886`, `66223887`, `66223888` (leads + cancelled).
 2. For each, look up the current Pocomos status:
-   - **Lead → Customer (active):** `PUT /contacts/{pb_id}` to set `category_id = 3287921` (Active Customer); update `phoneburner_contacts.folder_id`, `last_updated_at`; write a Pocomos note `Moved out of PhoneBurner outbound — now Active`.
+   - **Lead → Customer (active):** `PUT /contacts/{pb_id}` to set `category_id = 66233602` (Active Customer); update `phoneburner_contacts.folder_id`, `last_updated_at`; write a Pocomos note `Moved out of PhoneBurner outbound — now Active`.
    - **Cancelled → Active:** same as above.
    - **No conversion AND `last_notes_refresh_at > 24h ago`:** pull current Pocomos notes (skip `source='pb'`), re-format using the same 10-most-recent rule, `PUT /contacts/{pb_id}` to update the `notes` field, set `last_notes_refresh_at = NOW()`.
 3. Returns `{ moved, refreshed_notes, checked, errors, duration_ms }`.
@@ -603,11 +641,11 @@ Status as of May 14, 2026 — after the rev 3 probe round.
 
 1. **Lead detail shape — RESOLVED.** The JWT lead endpoints (`/jwt/{office}/lead/list`, `/jwt/{office}/lead/{id}`) really are shallow — phone/email/date are NOT exposed there at any depth. The web back-door `POST /leads/data` (Surface B in §3.5) returns those fields, and the lead sync uses it directly. No more probing of `?include=` / `?expand=` etc. is needed.
 
-2. **Tag-based folder routing for leads — DEFERRED to v2.** No working endpoint to read lead tags via API. In v1 every new lead routes to Fresh (`3275950`). Possible v2 paths:
-   - The `marketing_type_name` field on `/leads/data` may proxy for the routing decision (e.g., a "Competitor switch" marketing type → folder `3275952`).
+2. **Tag-based folder routing for leads — DEFERRED to v2.** No working endpoint to read lead tags via API. In v1 every new lead routes to Fresh (`66223880`). Possible v2 paths:
+   - The `marketing_type_name` field on `/leads/data` may proxy for the routing decision (e.g., a "Competitor switch" marketing type → folder `66223882`).
    - Pocomos may add a lead-tags read endpoint.
    - Scrape `/lead/{id}/lead-information` HTML for the tag chips.
-   - **TODO when a working source lands:** route `L - Competitor` → `3275952`, `L - Financial` → `3275953`, skip `NT - No Marketing` and `L - DNC`.
+   - **TODO when a working source lands:** route `L - Competitor` → `66223882`, `L - Financial` → `66223883`, skip `NT - No Marketing` and `L - DNC`.
 
 3. **Pocomos → PhoneBurner notes read — RESOLVED via probe-in-build.** Strategy: try `GET /jwt/pronexis/{office}/customer/{url_id}/notes` (and equivalent lead path) first, fall back to scraping `/customer/{url_id}/customer-information` (or `/lead/{id}/lead-information`) HTML for the notes table. `notes.ts` does both.
 
