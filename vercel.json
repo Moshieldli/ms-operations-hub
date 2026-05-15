@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/snapshot",
       "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/phoneburner/sync-leads",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

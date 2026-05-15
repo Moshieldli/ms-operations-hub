@@ -1,0 +1,34 @@
+/**
+ * Real PhoneBurner folder (`view_id`) constants. See §2 of docs/REFERENCE.md
+ * for how these were obtained — the dialer URL fragments base64-decode to
+ * `view_id={ID}&page=1`.
+ */
+export const FOLDERS = {
+  LEADS_FRESH: "3275950",
+  LEADS_GENERAL: "3275951",
+  LEADS_COMPETITOR: "3275952",
+  LEADS_FINANCIAL: "3275953",
+  CANCELLED_COMPETITOR: "3275954",
+  CANCELLED_FINANCIAL: "3275955",
+  CANCELLED_RESULTS: "3275956",
+  CANCELLED_NO_REACH: "3275957",
+  CANCELLED_PERSONAL: "3275958",
+  CUSTOMER_NO_ADD_ONS: "3282794",
+  ACTIVE_CUSTOMER: "3287921",
+  FOLLOW_UP: "3275487",
+} as const;
+
+export type FolderId = (typeof FOLDERS)[keyof typeof FOLDERS];
+
+/** All folders that conversionCleanup should walk to look for status changes. */
+export const OUTBOUND_FOLDERS: FolderId[] = [
+  FOLDERS.LEADS_FRESH,
+  FOLDERS.LEADS_GENERAL,
+  FOLDERS.LEADS_COMPETITOR,
+  FOLDERS.LEADS_FINANCIAL,
+  FOLDERS.CANCELLED_COMPETITOR,
+  FOLDERS.CANCELLED_FINANCIAL,
+  FOLDERS.CANCELLED_RESULTS,
+  FOLDERS.CANCELLED_NO_REACH,
+  FOLDERS.CANCELLED_PERSONAL,
+];

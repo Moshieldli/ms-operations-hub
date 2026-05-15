@@ -89,5 +89,68 @@ export async function initSchema(): Promise<void> {
   await c`CREATE INDEX IF NOT EXISTS customers_last_service_date_idx ON customers(last_service_date)`;
   await c`CREATE INDEX IF NOT EXISTS customers_refreshed_at_idx ON customers(refreshed_at DESC)`;
 
+  await c`
+    CREATE TABLE IF NOT EXISTS sync_state (
+      key TEXT PRIMARY KEY,
+      value JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
+  await c`
+    CREATE TABLE IF NOT EXISTS phoneburner_contacts (
+      pocomos_id TEXT PRIMARY KEY,
+      pocomos_type TEXT NOT NULL CHECK (pocomos_type IN ('lead', 'customer')),
+      pb_contact_id TEXT NOT NULL,
+      folder_id TEXT NOT NULL,
+      synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_updated_at TIMESTAMPTZ,
+      last_notes_refresh_at TIMESTAMPTZ
+    )
+  `;
+  await c`CREATE INDEX IF NOT EXISTS phoneburner_contacts_folder_idx ON phoneburner_contacts(folder_id)`;
+  await c`CREATE INDEX IF NOT EXISTS phoneburner_contacts_pb_id_idx ON phoneburner_contacts(pb_contact_id)`;
+  // Backfill the column on environments where the table predates rev 3.
+  await c`ALTER TABLE phoneburner_contacts ADD COLUMN IF NOT EXISTS last_notes_refresh_at TIMESTAMPTZ`;
+
+  await c`
+    CREATE TABLE IF NOT EXISTS webhook_log (
+      id BIGSERIAL PRIMARY KEY,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      pocomos_id TEXT,
+      disposition TEXT,
+      csr_name TEXT,
+      note_written BOOLEAN NOT NULL DEFAULT FALSE,
+      error TEXT,
+      raw_payload JSONB
+    )
+  `;
+  await c`CREATE INDEX IF NOT EXISTS webhook_log_received_at_idx ON webhook_log(received_at DESC)`;
+
   schemaInitialized = true;
+}
+
+/**
+ * Read a typed value from the single-row-per-key sync_state table.
+ * Returns null when the key doesn't exist. Use to check pre-existence
+ * before writing — the value is JSONB so the caller can store any
+ * shape (timestamps, watermarks, session blobs).
+ */
+export async function getSyncState<T = unknown>(key: string): Promise<T | null> {
+  const c = client();
+  const rows = (await c`SELECT value FROM sync_state WHERE key = ${key}`) as Array<{
+    value: T;
+  }>;
+  return rows.length ? rows[0].value : null;
+}
+
+/** Upsert a sync_state row. Caller serializes whatever JSON-able value they want. */
+export async function setSyncState(key: string, value: unknown): Promise<void> {
+  const c = client();
+  await c`
+    INSERT INTO sync_state (key, value, updated_at)
+    VALUES (${key}, ${JSON.stringify(value)}::jsonb, NOW())
+    ON CONFLICT (key) DO UPDATE
+      SET value = EXCLUDED.value, updated_at = NOW()
+  `;
 }
