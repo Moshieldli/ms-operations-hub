@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import crypto from "node:crypto";
+import { waitUntil } from "@vercel/functions";
 import { sql, initSchema } from "@/lib/db";
 import { getJson, postJson, pocomosOffice } from "@/lib/pocomos";
 import { POCOMOS_CALL_INTERACTION_TYPE } from "@/lib/pocomos/interactionTypes";
@@ -11,34 +12,6 @@ import {
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
-
-/**
- * Resolves Vercel's `waitUntil` if the function runtime exposes it via
- * @vercel/functions; otherwise degrades to fire-and-forget. The fallback
- * works in local dev but on serverless the function may be killed before
- * the background promise settles — install @vercel/functions to fix.
- */
-type WaitUntilFn = (p: Promise<unknown>) => void;
-let cachedWaitUntil: WaitUntilFn | null = null;
-async function resolveWaitUntil(): Promise<WaitUntilFn> {
-  if (cachedWaitUntil) return cachedWaitUntil;
-  try {
-    // @ts-expect-error — @vercel/functions is optional; install it to get real waitUntil.
-    const mod = (await import("@vercel/functions").catch(() => null)) as
-      | { waitUntil?: WaitUntilFn }
-      | null;
-    if (mod?.waitUntil) {
-      cachedWaitUntil = mod.waitUntil;
-      return cachedWaitUntil;
-    }
-  } catch {
-    /* fall through */
-  }
-  cachedWaitUntil = (p) => {
-    p.catch((e) => console.error("webhook background task failed", e));
-  };
-  return cachedWaitUntil;
-}
 
 interface FindCustomerResponse {
   results?: Array<{ id?: string | number; external_account_id?: string }>;
@@ -199,7 +172,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "invalid JSON" }, { status: 400 });
   }
 
-  const waitUntil = await resolveWaitUntil();
   waitUntil(
     processNoteWrite(payload).catch((e) =>
       console.error(JSON.stringify({ event: "webhook.processing.error", error: (e as Error).message }))
