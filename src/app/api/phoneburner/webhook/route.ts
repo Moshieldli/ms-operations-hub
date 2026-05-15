@@ -3,6 +3,11 @@ import crypto from "node:crypto";
 import { sql, initSchema } from "@/lib/db";
 import { getJson, postJson, pocomosOffice } from "@/lib/pocomos";
 import { POCOMOS_CALL_INTERACTION_TYPE } from "@/lib/pocomos/interactionTypes";
+import {
+  parseWebhook,
+  type PBCallDonePayload,
+  type ParsedWebhook,
+} from "@/lib/sync/webhookProcessor";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -35,57 +40,8 @@ async function resolveWaitUntil(): Promise<WaitUntilFn> {
   return cachedWaitUntil;
 }
 
-interface PBWebhookPayload {
-  status?: string;
-  disposition?: string;
-  duration?: number | string;
-  call_recording_url?: string;
-  notes?: string;
-  csr_name?: string;
-  csr?: { name?: string; first_name?: string; last_name?: string };
-  user?: { name?: string; first_name?: string; last_name?: string };
-  contact?: {
-    user_id?: string | number;
-    custom_fields?: Array<{ name?: string; value?: string }>;
-  };
-}
-
 interface FindCustomerResponse {
   results?: Array<{ id?: string | number; external_account_id?: string }>;
-}
-
-function pickDisposition(p: PBWebhookPayload): string {
-  return p.status || p.disposition || "Unknown";
-}
-
-function pickCsrName(p: PBWebhookPayload): string {
-  if (p.csr_name) return p.csr_name;
-  const c = p.csr || p.user;
-  if (!c) return "";
-  if (c.name) return c.name;
-  return [c.first_name, c.last_name].filter(Boolean).join(" ");
-}
-
-function pickPocomosId(p: PBWebhookPayload): string {
-  const fields = p.contact?.custom_fields || [];
-  for (const f of fields) {
-    if (f.name === "Customer ID" && f.value) return String(f.value);
-  }
-  return "";
-}
-
-function buildNoteSummary(p: PBWebhookPayload): string {
-  const disposition = pickDisposition(p);
-  const duration = p.duration != null ? String(p.duration) : "0";
-  const csr = pickCsrName(p) || "(unknown)";
-  const noteText = (p.notes || "").trim();
-  const recording = (p.call_recording_url || "").trim();
-  return [
-    `📞 PhoneBurner Call — ${disposition}`,
-    `Duration: ${duration}s · CSR: ${csr}`,
-    `Notes: ${noteText || "(none)"}`,
-    `Recording: ${recording || "(none)"}`,
-  ].join("\n");
 }
 
 interface TrackedRow {
@@ -94,6 +50,7 @@ interface TrackedRow {
 }
 
 async function lookupTrackedContact(pbContactId: string): Promise<TrackedRow | null> {
+  if (!pbContactId) return null;
   const rows = (await sql`
     SELECT pocomos_type, folder_id
       FROM phoneburner_contacts
@@ -141,19 +98,20 @@ async function writeLeadNote(leadId: string, summary: string): Promise<void> {
 }
 
 async function logWebhook(args: {
-  pocomosId: string;
-  disposition: string;
-  csrName: string;
+  parsed: ParsedWebhook;
   noteWritten: boolean;
   error: string | null;
   raw: unknown;
 }): Promise<void> {
   await sql`
-    INSERT INTO webhook_log (pocomos_id, disposition, csr_name, note_written, error, raw_payload)
-    VALUES (
-      ${args.pocomosId || null},
-      ${args.disposition || null},
-      ${args.csrName || null},
+    INSERT INTO webhook_log (
+      pocomos_id, pb_contact_id, disposition, csr_name,
+      note_written, error, raw_payload
+    ) VALUES (
+      ${args.parsed.pocomosId || null},
+      ${args.parsed.pbContactId || null},
+      ${args.parsed.disposition || null},
+      ${args.parsed.csrName || null},
       ${args.noteWritten},
       ${args.error},
       ${JSON.stringify(args.raw)}::jsonb
@@ -161,44 +119,24 @@ async function logWebhook(args: {
   `;
 }
 
-async function processNoteWrite(payload: PBWebhookPayload): Promise<void> {
+async function processNoteWrite(payload: PBCallDonePayload): Promise<void> {
   await initSchema();
-  const pocomosId = pickPocomosId(payload);
-  const summary = buildNoteSummary(payload);
-  const disposition = pickDisposition(payload);
-  const csrName = pickCsrName(payload);
+  const parsed = parseWebhook(payload);
 
-  if (summary.startsWith("[Pocomos]")) {
-    await logWebhook({
-      pocomosId,
-      disposition,
-      csrName,
-      noteWritten: false,
-      error: "loop guard: summary started with [Pocomos]",
-      raw: payload,
-    });
+  if (parsed.skipReason) {
+    console.warn(
+      JSON.stringify({
+        event: "webhook.skipped",
+        reason: parsed.skipReason,
+        pb_contact_id: parsed.pbContactId,
+        disposition: parsed.disposition,
+      })
+    );
+    await logWebhook({ parsed, noteWritten: false, error: parsed.skipReason, raw: payload });
     return;
   }
 
-  if (!pocomosId) {
-    console.warn(JSON.stringify({ event: "webhook.missing_customer_id", payload }));
-    await logWebhook({
-      pocomosId: "",
-      disposition,
-      csrName,
-      noteWritten: false,
-      error: "no Customer ID in custom_fields",
-      raw: payload,
-    });
-    return;
-  }
-
-  const pbContactId = payload.contact?.user_id ? String(payload.contact.user_id) : "";
-  const tracked = pbContactId ? await lookupTrackedContact(pbContactId) : null;
-
-  // pocomos_type from the tracking row tells us lead vs customer. When the
-  // contact isn't in the tracking table (manual upload, etc.) we default to
-  // customer since that's the dominant case for dialer activity.
+  const tracked = await lookupTrackedContact(parsed.pbContactId);
   const isLead = tracked?.pocomos_type === "lead";
 
   let noteWritten = false;
@@ -206,14 +144,14 @@ async function processNoteWrite(payload: PBWebhookPayload): Promise<void> {
 
   try {
     if (isLead) {
-      await writeLeadNote(pocomosId, summary);
+      await writeLeadNote(parsed.pocomosId, parsed.pocomosSummary);
       noteWritten = true;
     } else {
-      const urlId = await resolveCustomerUrlId(pocomosId);
+      const urlId = await resolveCustomerUrlId(parsed.pocomosId);
       if (!urlId) {
-        error = `could not resolve URL ID for Customer ID ${pocomosId}`;
+        error = `could not resolve URL ID for Customer ID ${parsed.pocomosId}`;
       } else {
-        await writeCustomerNote(urlId, summary);
+        await writeCustomerNote(urlId, parsed.pocomosSummary);
         noteWritten = true;
       }
     }
@@ -221,26 +159,18 @@ async function processNoteWrite(payload: PBWebhookPayload): Promise<void> {
     error = (e as Error).message;
   }
 
-  await logWebhook({
-    pocomosId,
-    disposition,
-    csrName,
-    noteWritten,
-    error,
-    raw: payload,
-  });
+  await logWebhook({ parsed, noteWritten, error, raw: payload });
 }
 
 /**
- * PhoneBurner `api_calldone` webhook handler.
+ * PhoneBurner `api_calldone` (Call End) webhook handler.
  *
  *   POST /api/phoneburner/webhook?secret=$WEBHOOK_SECRET
  *
  * Returns 200 immediately and runs the Pocomos note write in the
- * background via waitUntil (with a fire-and-forget fallback when
- * @vercel/functions isn't available). PhoneBurner's webhook timeout
- * is ~3s — note writes can take longer than that, so the response
- * has to fly out before the work starts.
+ * background via waitUntil. PhoneBurner's webhook timeout is ~3s — note
+ * writes can take longer than that, so the response has to fly out
+ * before the work starts.
  */
 export async function POST(request: Request) {
   const expected = process.env.WEBHOOK_SECRET;
@@ -262,9 +192,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
-  let payload: PBWebhookPayload;
+  let payload: PBCallDonePayload;
   try {
-    payload = (await request.json()) as PBWebhookPayload;
+    payload = (await request.json()) as PBCallDonePayload;
   } catch {
     return NextResponse.json({ ok: false, error: "invalid JSON" }, { status: 400 });
   }

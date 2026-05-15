@@ -118,6 +118,7 @@ export async function initSchema(): Promise<void> {
       id BIGSERIAL PRIMARY KEY,
       received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       pocomos_id TEXT,
+      pb_contact_id TEXT,
       disposition TEXT,
       csr_name TEXT,
       note_written BOOLEAN NOT NULL DEFAULT FALSE,
@@ -126,6 +127,9 @@ export async function initSchema(): Promise<void> {
     )
   `;
   await c`CREATE INDEX IF NOT EXISTS webhook_log_received_at_idx ON webhook_log(received_at DESC)`;
+  // Defensive: the column was added after the table; cover environments
+  // where the table predates this migration.
+  await c`ALTER TABLE webhook_log ADD COLUMN IF NOT EXISTS pb_contact_id TEXT`;
 
   schemaInitialized = true;
 }
