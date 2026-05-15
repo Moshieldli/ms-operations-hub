@@ -1,6 +1,6 @@
 # MS Operations Hub — Master Reference
 
-**Last updated:** May 14, 2026 (rev 2 — added complete API catalog from prior chat, corrected tags endpoint, updated probe findings)
+**Last updated:** May 14, 2026 (rev 3 — replaced placeholder folder IDs with real `view_id`s decoded from the PhoneBurner UI URLs, documented the three Pocomos API surfaces (JWT, web back-door, HTML scrape), wired the lead sync to the web back-door instead of the shallow JWT lead endpoints, added the conversion-cleanup pass, added the bidirectional notes-sync design including infinite-loop prefix dedup, and added `last_notes_refresh_at` to `phoneburner_contacts`)
 **Project:** MS Analytics — Mosquito Shield of Long Island (Progranic LLC)
 **Office ID:** 1512
 **Live URL:** https://ms-operations-hub.vercel.app
@@ -60,21 +60,26 @@ PhoneBurner has no lead/customer distinction — everything is a **contact** in 
 
 | Folder ID | Name | What lives here |
 |---|---|---|
-| `66223880` | **Leads — Fresh** | New leads from Pocomos lead module, auto-pushed by cron |
-| `66223881` | **Leads — General** | Bulk-imported existing leads (one-time historical load) |
-| `66223882` | **Leads — Competitor** | Leads tagged `L - Competitor` |
-| `66223883` | **Leads — Financial** | Leads tagged `L - Financial` |
-| `66223884` | **Cancelled — Competitor Win-Back** | Former customers, cancelled for competitor |
-| `66223885` | **Cancelled — Financial/Price** | Former customers, cancelled over price |
-| `66223886` | **Cancelled — Results Issues** | Former customers, cancelled over service results |
-| `66223887` | **Cancelled — Could Not Reach** | Former customers we couldn't reach |
-| `66223888` | **Cancelled — Personal/Other** | Former customers, other reasons |
+| `3275950` | **Leads — Fresh** | New leads from Pocomos lead module, auto-pushed by cron |
+| `3275951` | **Leads — General** | Bulk-imported existing leads (one-time historical load) |
+| `3275952` | **Leads — Competitor** | Leads tagged `L - Competitor` (deferred to v2 — see §9) |
+| `3275953` | **Leads — Financial** | Leads tagged `L - Financial` (deferred to v2 — see §9) |
+| `3275954` | **Cancelled — Competitor Win-Back** | Former customers, cancelled for competitor |
+| `3275955` | **Cancelled — Financial/Price** | Former customers, cancelled over price |
+| `3275956` | **Cancelled — Results Issues** | Former customers, cancelled over service results |
+| `3275957` | **Cancelled — Could Not Reach** | Former customers we couldn't reach |
+| `3275958` | **Cancelled — Personal/Other** | Former customers, other reasons |
+| `3282794` | Customer — No Add Ons | Reserved, not in v1 flow |
+| `3287921` | **Active Customer** | New folder — written by conversion cleanup when a lead/cancelled contact converts back to active |
+| `3275487` | Follow Up | Exists, not used by sync |
+
+**How folder IDs are encoded in PhoneBurner URLs:** the dialer UI surfaces folder IDs as base64-encoded URL fragments like `dmlld19pZD0zMjc1OTUwJnBhZ2U9MQ==`, which decodes to `view_id=3275950&page=1`. The number after `view_id=` is the folder ID. All previous 8-digit IDs (`66223880`-style) in earlier revs of this doc were placeholders; the IDs in the table above are the real `view_id`s.
 
 **How we link back to Pocomos from a PhoneBurner contact:**
 - `custom_fields: [{ name: "Customer ID", type: 1, value: lead_id_or_customer_id }]` — stores the Pocomos ID
 - `website: https://mypocomos.net/lead/{lead_id}/lead-information` (for leads) — one-click jump to the record
 
-**Excluded from sync:** Leads tagged `NT - No Marketing` or `L - DNC` (Do Not Call) are never pushed to PhoneBurner.
+**Excluded from sync (v2 — once a lead-tag read path is found):** Leads tagged `NT - No Marketing` or `L - DNC` (Do Not Call). In v1 nothing is excluded by tag because we have no lead-tag read endpoint; the `marketing_type_name` field on `/leads/data` may be a workable substitute and is being investigated.
 
 ---
 
@@ -206,6 +211,58 @@ There is currently NO known endpoint to read lead tags via API. Open gap.
 
 This endpoint is the unlock for CUSTOMER tags — before it existed, all tag data required CSV export. Lead tags are still in that pre-API state.
 
+---
+
+## 3.5 Pocomos has three API surfaces
+
+Pocomos is not one API — it's three layered systems, and any non-trivial integration ends up using all three because none of them is complete on its own. They differ in auth scheme, payload shape, and which fields they expose.
+
+### Surface A — JWT API (the "official" one)
+
+- **Auth:** `XauthToken: {jwt}` header. JWT obtained from `POST /public/technician/jwt_token`.
+- **Paths:** `/jwt/pronexis/...` (customers, contracts) and `/jwt/{office}/...` (leads, tags).
+- **Returns JSON.**
+- **Strengths:** stable, documented, what Pocomos support points you to.
+- **Weaknesses:** the lead endpoints are shallow — `GET /jwt/{office}/lead/list` and `GET /jwt/{office}/lead/{id}` both omit `phone`, `email`, `date_added`, and the marketing source. Tag-read by lead is not exposed.
+- **Use it for:** customer reads, customer note writes (`/jwt/pronexis/{office}/customer/{url_id}/note/create`), tags-by-contract, lead writes, the salesperson/agreement reference data.
+
+### Surface B — Web UI back-door (DataTables endpoints)
+
+- **Auth:** `Cookie: PHPSESSID=…` from a real web login. The same `mstli.apiuser` credentials that authenticate the JWT API also work against `POST /login_submit` — confirmed in this session.
+- **Paths:** `POST /leads/data` and `POST /customers/data`. These are the AJAX endpoints the web UI itself uses to populate its tables.
+- **Returns JSON** in legacy DataTables 1.9 shape (`aaData`, `iTotalRecords`, `iTotalDisplayRecords`, `sEcho`).
+- **Strengths:** returns the rich fields the JWT API hides — phone, email, `date_added`, `marketing_type_name`, status — exactly the fields needed for outbound dialer feeding.
+- **Weaknesses:** session-based, expires (~30 min idle), can return `{"type":"redirect","redirect":"/login"}` on expiry, requires Symfony CSRF dance to authenticate, schema is whatever the table happens to render today.
+- **Use it for:** the lead sync. This is the only known way to read lead phone/email via Pocomos.
+
+### Surface C — HTML scrape
+
+- **Auth:** same PHPSESSID cookie as Surface B.
+- **Paths:** the customer/lead detail pages (`/lead/{id}/lead-information`, `/customer/{url_id}/customer-information`, etc.).
+- **Returns HTML.**
+- **Use it for:** anything that's neither in the JWT API nor in the DataTables JSON — currently a candidate for reading the Pocomos-side note history of a lead/customer (the `notes.ts` library probes for a JSON endpoint first and falls back to scraping).
+
+### The web-login flow (Surface B/C session bootstrap)
+
+Since the lead sync depends on Surface B, this flow has to work from a serverless function. Confirmed sequence:
+
+1. **`GET /login`** — capture `PHPSESSID` from the response `Set-Cookie` and parse the `value="…"` of the `<input name="form[_token]">` hidden field from the HTML body. This is the Symfony CSRF token; it is per-session and must be sent back on the submit.
+2. **`POST /login_submit`** with:
+   - `Content-Type: application/x-www-form-urlencoded`
+   - `Cookie: PHPSESSID=…`
+   - `Origin: https://mypocomos.net`
+   - `Referer: https://mypocomos.net/login`
+   - body: `form[username]=mstli.apiuser&form[password]=mstli.apiuser&form[_token]={token}`
+3. On success: `302 → /` then `302 → /message-board`. The `PHPSESSID` is rotated by the login (different value than step 1) — the rotated cookie is the authenticated one.
+4. **Session expiry:** any subsequent `/leads/data` or `/customers/data` call may return `{"type":"redirect","redirect":"/login"}` instead of DataTables JSON. Treat that as "session dead, re-login."
+
+**Do not send** the following — Symfony rejects the form with `"This form should not contain extra fields"`:
+- `_csrf_token` (the form uses `form[_token]`, not `_csrf_token`)
+- `form[email]` (the form has no email field — `form[username]` is the only identifier)
+- `form[rememberMe]` (not in the form schema in the version we're hitting)
+
+The probe at `scripts/probe-pocomos-web-login.ts` walks this end-to-end and was the source of the above.
+
 ### Tag values used in routing/categorization
 
 | Tag | Meaning | Used for |
@@ -311,26 +368,40 @@ Two endpoints in the `ms-operations-hub` Vercel project handle the entire flow.
 
 ### 5.1 `/api/phoneburner/sync-leads` — Pocomos → PhoneBurner (cron, every 15 min)
 
-**Flow:**
+This endpoint runs **two phases in sequence**: lead sync, then conversion cleanup. They share a request and return a combined result. The cron entry is in `vercel.json` but is added in the disabled state until production sign-off.
 
-1. Get cached JWT (refresh if >50 min old)
-2. Read `last_sync_at` watermark from storage (Neon Postgres recommended — table `sync_state`)
-3. `GET /jwt/1512/lead/list?limit=200&offset=0` and paginate
-4. Filter to leads where:
-   - `status.value === 'Lead'`
-   - `created_at > last_sync_at` (field name to be confirmed via probe)
-5. For each lead, fetch tags: `GET /jwt/office/1512/contract/{x}/tags?lead_id={lead_id}`
-6. Skip if tagged `NT - No Marketing` or `L - DNC`
-7. Route to folder:
-   - `L - Competitor` → 66223882
-   - `L - Financial` → 66223883
-   - default → 66223880 (Fresh)
-8. Check PhoneBurner for existing contact by phone match — skip if exists
-9. `POST /contacts` with all fields plus `custom_fields: [{ name: "Customer ID", type: 1, value: lead_id }]` and `website` linking back to Pocomos
-10. Update watermark to current timestamp
-11. Log `{ added, skipped, errors, duration_ms }`
+**Phase A — leadSync (Pocomos → PhoneBurner, new leads only)**
 
-**Cron config in `vercel.json`:**
+1. Get cached `PHPSESSID` via `getPocomosSession()` — refresh on first use, on `302→/login`, after 30 min idle. (Web back-door, NOT JWT — see §3.5.)
+2. Read `last_sync_at` watermark from `sync_state` (key `phoneburner_last_sync_at`).
+3. `POST /leads/data` with `statuses[]=Lead`, paginated (`length=100`), iterating until `aaData` is short.
+4. Filter to leads where `date_added > last_sync_at` and `phone` is non-empty after stripping to 10 digits.
+5. Skip if `phoneburner_contacts` already has the `pocomos_id`.
+6. Skip if the Fresh folder (`3275950`) already has a contact with the same 10-digit phone.
+7. Pull Pocomos notes via `getNotesForLead(leadId)`, filter out any whose `summary` starts with `📞 PhoneBurner Call —` (those originated from PhoneBurner — re-pushing them would loop), reverse-chronological sort.
+8. Format notes block: 10 most recent in full; if more than 10, append `[+ N older notes from {oldest_year} — see Pocomos for full history: https://mypocomos.net/lead/{lead_id}/lead-information]`.
+9. `POST /contacts` to PhoneBurner with `category_id: 3275950` (all leads currently route to Fresh — tag-based routing is deferred to v2; see §9), `custom_fields: [{ name: "Customer ID", type: 1, value: lead_id }]`, `website: https://mypocomos.net/lead/{lead_id}/lead-information`, and the formatted `notes` block.
+10. On success: insert `phoneburner_contacts` row with `last_notes_refresh_at = NOW()`.
+11. Update `sync_state.phoneburner_last_sync_at` to `max(date_added)` of the leads actually processed.
+
+**Phase B — conversionCleanup (Pocomos → PhoneBurner, status changes on existing contacts)**
+
+1. Query `phoneburner_contacts` for rows in folders `3275950`, `3275951`, `3275952`, `3275953`, `3275954`, `3275955`, `3275956`, `3275957`, `3275958` (leads + cancelled).
+2. For each, look up the current Pocomos status:
+   - **Lead → Customer (active):** `PUT /contacts/{pb_id}` to set `category_id = 3287921` (Active Customer); update `phoneburner_contacts.folder_id`, `last_updated_at`; write a Pocomos note `Moved out of PhoneBurner outbound — now Active`.
+   - **Cancelled → Active:** same as above.
+   - **No conversion AND `last_notes_refresh_at > 24h ago`:** pull current Pocomos notes (skip `source='pb'`), re-format using the same 10-most-recent rule, `PUT /contacts/{pb_id}` to update the `notes` field, set `last_notes_refresh_at = NOW()`.
+3. Returns `{ moved, refreshed_notes, checked, errors, duration_ms }`.
+
+**Combined result returned by the route:**
+```jsonc
+{
+  "leadSync": { "added": N, "skipped_dup": N, "skipped_nophone": N, "errors": [], "duration_ms": N },
+  "conversionCleanup": { "moved": N, "refreshed_notes": N, "checked": N, "errors": [], "duration_ms": N }
+}
+```
+
+**Cron config in `vercel.json`** (added but disabled — uncomment once Phase 2 is signed off):
 ```json
 {
   "crons": [
@@ -369,6 +440,44 @@ Read-only dashboard:
 - Total syncs today / this week
 - Last 10 webhook calls received
 - Folder contact counts
+
+### 5.4 Bidirectional notes sync
+
+Notes flow both directions, with strict prefix-based dedup so they never echo back.
+
+**Pocomos → PhoneBurner (read into the contact `notes` field):**
+- Pulled **once at contact creation** during `leadSync`.
+- Refreshed **lazily** during `conversionCleanup`, but only when `last_notes_refresh_at > 24 hours ago` for that contact. The 24h floor exists to keep the cleanup pass cheap — most leads don't add 50 notes a day, and PhoneBurner's `notes` field doesn't render in real time anyway.
+- **Loop guard:** when reading from Pocomos, **skip any note whose `summary` starts with `📞 PhoneBurner Call —`** — those originated from PhoneBurner via the webhook and re-pushing them would feed the loop.
+
+**PhoneBurner → Pocomos (real-time, via the webhook):**
+- Written on **every** `api_calldone` event regardless of disposition or whether the CSR typed a note. Full call history is preserved — even No Answer / Busy with no note get a row, so the customer record shows the contact attempt.
+- **Loop guard:** when reading from PhoneBurner (we don't currently, but if a future sync does), **skip any note that starts with `[Pocomos]`** — those are echoes of Pocomos notes.
+
+**Ordering in the PhoneBurner `notes` field:**
+- Reverse chronological (newest first).
+- Show the 10 most recent in full.
+- If more than 10 notes exist, append a single line:
+  ```
+  [+ N older notes from {oldest_year} — see Pocomos for full history: https://mypocomos.net/customer/{url_id}/customer-information]
+  ```
+
+**Format strings (verbatim — these are the strings the prefix dedup keys off, do not edit casually):**
+
+Pocomos → PhoneBurner (one note per line in the `notes` field):
+```
+[Pocomos] {YYYY-MM-DD} — {summary}
+```
+
+PhoneBurner → Pocomos (one Pocomos `summary`, multi-line):
+```
+📞 PhoneBurner Call — {disposition}
+Duration: {duration}s · CSR: {csr_name}
+Notes: {pb_note_text or "(none)"}
+Recording: {call_recording_url or "(none)"}
+```
+
+The leading emoji + literal "PhoneBurner Call —" prefix is the loop guard for the Pocomos→PB direction. The `[Pocomos]` literal prefix is the loop guard for the PB→Pocomos direction. Both prefixes are case-sensitive and must match exactly — don't pluralize, don't drop the em-dash, don't swap the brackets.
 
 ---
 
@@ -430,7 +539,7 @@ CREATE TABLE sync_state (
 -- Key 'phoneburner_last_sync_at' holds { timestamp: '...', last_lead_id: ... }
 ```
 
-**`phoneburner_contacts`** — maps Pocomos IDs to PhoneBurner contact IDs to prevent duplicates.
+**`phoneburner_contacts`** — maps Pocomos IDs to PhoneBurner contact IDs to prevent duplicates and tracks lazy notes refresh.
 ```sql
 CREATE TABLE phoneburner_contacts (
   pocomos_id TEXT PRIMARY KEY,
@@ -438,7 +547,8 @@ CREATE TABLE phoneburner_contacts (
   pb_contact_id TEXT NOT NULL,
   folder_id TEXT NOT NULL,
   synced_at TIMESTAMPTZ DEFAULT NOW(),
-  last_updated_at TIMESTAMPTZ
+  last_updated_at TIMESTAMPTZ,
+  last_notes_refresh_at TIMESTAMPTZ        -- driven by §5.4 lazy refresh; NULL means "never refreshed since creation"
 );
 ```
 
@@ -489,21 +599,30 @@ POSTGRES_URL_NON_POOLING=...
 
 ## 9. Open Questions / Known Gaps
 
-Status as of May 14, 2026 — after the first round of probes.
+Status as of May 14, 2026 — after the rev 3 probe round.
 
-1. **Lead GET endpoints are shallow.** Probe (5/14) confirmed `GET /jwt/1512/lead/{lead_id}` returns the same fields as the list: `id, company_name, first_name, last_name, status.value, reason, contact_address, quote.found_by_type`. **No phone, email, or created date.** Yet `POST /jwt/pronexis/customer/save-lead/{office}` accepts phone/email/marketing source — proving the data exists in Pocomos. There must be a richer read path. **Probing in progress** for `?include=`, `?expand=*`, POST search, and `contact_address.id` resolution.
+1. **Lead detail shape — RESOLVED.** The JWT lead endpoints (`/jwt/{office}/lead/list`, `/jwt/{office}/lead/{id}`) really are shallow — phone/email/date are NOT exposed there at any depth. The web back-door `POST /leads/data` (Surface B in §3.5) returns those fields, and the lead sync uses it directly. No more probing of `?include=` / `?expand=` etc. is needed.
 
-2. **Tag-based folder routing for leads has no working endpoint.** Tags endpoint with `?lead_id=` rejected with 400 / 404 across all variants. We don't know if leads even have tags via API (only confirmed via CSV exports). Worth confirming with Rivka whether `L - Competitor` / `L - Financial` tags live on leads or only on customers/contracts.
+2. **Tag-based folder routing for leads — DEFERRED to v2.** No working endpoint to read lead tags via API. In v1 every new lead routes to Fresh (`3275950`). Possible v2 paths:
+   - The `marketing_type_name` field on `/leads/data` may proxy for the routing decision (e.g., a "Competitor switch" marketing type → folder `3275952`).
+   - Pocomos may add a lead-tags read endpoint.
+   - Scrape `/lead/{id}/lead-information` HTML for the tag chips.
+   - **TODO when a working source lands:** route `L - Competitor` → `3275952`, `L - Financial` → `3275953`, skip `NT - No Marketing` and `L - DNC`.
 
-3. **Lead-note write path unverified** — `POST /jwt/1512/lead/{lead_id}/note` is best guess; not yet tested against production.
+3. **Pocomos → PhoneBurner notes read — RESOLVED via probe-in-build.** Strategy: try `GET /jwt/pronexis/{office}/customer/{url_id}/notes` (and equivalent lead path) first, fall back to scraping `/customer/{url_id}/customer-information` (or `/lead/{id}/lead-information`) HTML for the notes table. `notes.ts` does both.
 
-4. **PhoneBurner webhook payload field names** — verify exact names against PB docs at build time; common ones expected (`status`, `duration`, `contact.custom_fields`).
+4. **Lead-note write path** — `POST /jwt/{office}/lead/{lead_id}/note` is still best guess. Webhook tries it and falls back to logging-only on 404. Will be confirmed by the first real PhoneBurner→Pocomos webhook firing against a lead-folder contact.
 
-5. **Conversion handling** — when a Pocomos lead converts to a customer (via `POST /jwt/pronexis/{office}/customer/create?lead_id={lead_id}`), what should happen to the PhoneBurner contact? Currently undecided. Phase 2.
+5. **PhoneBurner webhook payload field names** — verify exact names against PB docs at build time; common ones expected (`status`, `duration`, `contact.custom_fields`).
 
-### Fallback if lead read endpoint stays shallow
+6. **Pocomos `interactionType` accepted values** — `interactionTypes.ts` probes the customer-note endpoint with a test payload to learn whether `"Call"` is accepted; default fallback is `"Other"` which is known-good from the API catalog (§12).
 
-If further probes fail to find phone/date on leads via API, the fallback is a nightly CSV export from Pocomos UI (manual or automated via headless browser) that feeds an `inbound_leads` table in Neon. Sync then reads from Neon, not Pocomos directly. Hacky but proven — that's how the historical lead import already worked.
+### Fallback if the web back-door breaks
+
+The web back-door (Surface B) is the load-bearing piece for the lead sync. If Pocomos changes the form, the CSRF scheme, the `/leads/data` schema, or the session cookie name, the sync silently empties out. Mitigations:
+- `webSession.ts` re-logs on `{"type":"redirect","redirect":"/login"}` and surfaces a clear error if even the re-login fails.
+- The `phoneburner_contacts` watermark table means even if a sync misses a window, the next successful run picks up everything since `last_sync_at` — no gaps.
+- Last-resort fallback is the same as before: nightly CSV export → `inbound_leads` Neon table → sync reads from Neon.
 
 ---
 
