@@ -16,7 +16,6 @@ export const FOLDERS = {
   CANCELLED_RESULTS: "66223886",
   CANCELLED_NO_REACH: "66223887",
   CANCELLED_PERSONAL: "66223888",
-  CUSTOMER_NO_ADD_ONS: "66229452",
   ACTIVE_CUSTOMER: "66233602",
   FOLLOW_UP: "66223503",
   // Default catch-all where contacts land when category_id is invalid.

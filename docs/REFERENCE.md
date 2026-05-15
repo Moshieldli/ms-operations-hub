@@ -69,7 +69,6 @@ PhoneBurner has no lead/customer distinction — everything is a **contact** in 
 | `66223886` | **Canc - Results Issues** | Former customers, cancelled over service results |
 | `66223887` | **Canc - Could Not Reach** | Former customers we couldn't reach |
 | `66223888` | **Canc - Personal / Other** | Former customers, other reasons |
-| `66229452` | Customers — No Add-Ons | Customers without add-on services (in scope for prior integration; reserved by v1 sync) |
 | `66233602` | **Active Customer** | Written by conversion cleanup when a lead/cancelled contact converts back to active |
 | `66223503` | Follow Up | Exists, not used by sync |
 | `47718` | Contacts (default catch-all) | PhoneBurner's root "all contacts" view. NOT a target folder — contacts land here when `category_id` is invalid (which is exactly what happened during the rev-3 incident). |
