@@ -1,6 +1,6 @@
 # MS Operations Hub — Master Reference
 
-**Last updated:** May 15, 2026 (rev 4 — REVERTED rev 3's folder IDs back to the original 8-digit `66223880`-series; the `view_id` numbers I extracted from the dialer URL fragment in rev 3 are dialer view session IDs, NOT folder IDs. Also: fixed the PhoneBurner POST shape (form-urlencoded, not JSON; field names `phone` not `raw_phone`, `email` not `email_address`; `custom_fields[i][name]=...` PHP-array format), the response shape (POST returns `contacts.contacts` as object, GET as single-element array), the folder-list endpoint (`/folders` not `/contacts/categories`), and the list query parameter (`folder_id` not `category_id`). All corrected against live `GET /folders` and probe POSTs.)
+**Last updated:** May 18, 2026 (rev 5 — synced doc with shipped reality per commit fe1f12d. Marked PhoneBurner sync (cron, age-based folder routing, two-custom-field write) as LIVE rather than planned; replaced the speculative §6 file tree with the files that actually shipped; updated §4 webhook field-name bullets against the real Call End payload; moved webhook field-name reverse-engineering and several integration-quirk items from §9 OPEN to RESOLVED. No factual changes to API auth, payload shapes, or routing decisions — rev 4 was already correct on those.)
 **Project:** MS Analytics — Mosquito Shield of Long Island (Progranic LLC)
 **Office ID:** 1512
 **Live URL:** https://ms-operations-hub.vercel.app
@@ -385,13 +385,14 @@ POST /api/phoneburner/webhook?secret={WEBHOOK_SECRET}
 
 Setup in PhoneBurner UI: Settings → API Webhooks → Add Webhook → Event `api_calldone`, URL above.
 
-**Payload fields we use** (verify exact names against PB docs at build time):
-- `status` (the disposition: Booked, Left VM, No Answer, Not Interested, etc.)
-- `duration`
-- `call_recording_url`
-- `contact.user_id`
-- `contact.custom_fields` — pull `Customer ID` from here to find the Pocomos record
-- `notes` (CSR-typed notes)
+**Payload fields we use** (verified against the real Call End example payload — see §9 item 3 and `src/lib/sync/webhookProcessor.ts`):
+- `status` (the disposition: Booked, Left VM, No Answer, Not Interested, etc.) — NOT `disposition`
+- `duration` (seconds, number or string)
+- `recording_url_public` (preferred) / `recording_url` (fallback) — NOT `call_recording_url`
+- `agent.first_name` + `agent.last_name` (some payloads also send `agent.name`) — NOT `csr_name`
+- `contact.user_id` — the PhoneBurner contact ID
+- `contact.typed_custom_fields[]` — array of `{type, name, value}`; we look for `name === "Customer ID"` to find the Pocomos record
+- `contact.notes` — FULL newline-separated history; `parseLatestNoteEntry` extracts the latest entry (PB prepends, so the first line that matches the date-header regex is newest)
 
 ### PhoneBurner gotchas
 
@@ -409,7 +410,7 @@ Two endpoints in the `ms-operations-hub` Vercel project handle the entire flow.
 
 ### 5.1 `/api/phoneburner/sync-leads` — Pocomos → PhoneBurner (cron, every 15 min)
 
-This endpoint runs **two phases in sequence**: lead sync, then conversion cleanup. They share a request and return a combined result. The cron entry is in `vercel.json` but is added in the disabled state until production sign-off.
+This endpoint runs **two phases in sequence**: lead sync, then conversion cleanup. They share a request and return a combined result. The cron entry is in `vercel.json` and has been LIVE on a 15-minute schedule since 2026-05-15.
 
 **Phase A — leadSync (Pocomos → PhoneBurner, new leads only)**
 
@@ -421,16 +422,16 @@ This endpoint runs **two phases in sequence**: lead sync, then conversion cleanu
 6. Skip if the Fresh folder (`66223880`) already has a contact with the same 10-digit phone.
 7. Pull Pocomos notes via `getNotesForLead(leadId)`, filter out any whose `summary` starts with `📞 PhoneBurner Call —` (those originated from PhoneBurner — re-pushing them would loop), reverse-chronological sort.
 8. Format notes block: 10 most recent in full; if more than 10, append `[+ N older notes from {oldest_year} — see Pocomos for full history: https://mypocomos.net/lead/{lead_id}/lead-information]`.
-9. **Age-based folder routing (30-day rule):**
+9. **Age-based folder routing (30-day rule) — LIVE v1 routing.**
    - Lead `date_added` within the last 30 days → `category_id = 66223880` (Fresh, Rena's active queue)
    - Older lead → `category_id = 66223881` (General — historical backfill bucket)
-   Tag-based routing (Competitor/Financial sub-folders) is still deferred to v2; see §9.
+   Implemented in `src/lib/sync/leadSync.ts` (constant `THIRTY_DAYS_MS`; threshold is from `now`, not from the watermark — a stale lead is stale regardless of when we synced it). Tag-based routing (Competitor/Financial sub-folders) is still deferred to v2 — see §9.
 10. `POST /contacts` to PhoneBurner (form-urlencoded, see §4) with the routed `category_id`, plus TWO custom_fields:
     - `custom_fields[0][name]=Customer ID`, `[0][value]={lead_id}`, `[0][type]=1`
     - `custom_fields[1][name]=Pocomos Profile`, `[1][value]=https://mypocomos.net/lead/{lead_id}/lead-information`, `[1][type]=1`
-    The earlier working integration stored the Pocomos URL as this second custom_field. Top-level `website` was tried; PB silently dropped it.
-10. On success: insert `phoneburner_contacts` row with `last_notes_refresh_at = NOW()`.
-11. Update `sync_state.phoneburner_last_sync_at` to `max(date_added)` of the leads actually processed.
+    This two-custom-field shape is the LIVE implementation. Top-level `website` was tried first; PB silently dropped it, so the Pocomos URL ships as the second custom_field (PB field id `994147`).
+11. On success: insert `phoneburner_contacts` row with `last_notes_refresh_at = NOW()`.
+12. Update `sync_state.phoneburner_last_sync_at` to `max(date_added)` of the leads actually processed.
 
 **Phase B — conversionCleanup (Pocomos → PhoneBurner, status changes on existing contacts)**
 
@@ -449,10 +450,12 @@ This endpoint runs **two phases in sequence**: lead sync, then conversion cleanu
 }
 ```
 
-**Cron config in `vercel.json`** (added but disabled — uncomment once Phase 2 is signed off):
+**Cron config in `vercel.json`** (LIVE since 2026-05-15):
 ```json
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "crons": [
+    { "path": "/api/cron/snapshot", "schedule": "0 5 * * *" },
     { "path": "/api/phoneburner/sync-leads", "schedule": "*/15 * * * *" }
   ]
 }
@@ -529,37 +532,40 @@ The leading emoji + literal "PhoneBurner Call —" prefix is the loop guard for 
 
 ---
 
-## 6. File Structure (target)
+## 6. File Structure (shipped)
 
 ```
 src/
 ├── lib/
-│   ├── db.ts                          ← Neon client, initSchema (exists)
-│   ├── snapshots.ts                   ← writeSnapshot, listSnapshots (exists)
-│   ├── enrichment.ts                  ← enrichInactiveCustomers (exists)
-│   ├── pocomos/                       ← Pocomos client (exists)
-│   │   ├── client.ts
-│   │   ├── auth.ts
-│   │   ├── categorize.ts
-│   │   └── types.ts
-│   ├── phoneburner/                   ← NEW
-│   │   ├── client.ts                  ← API wrapper
-│   │   ├── contacts.ts                ← create/update/list/dedup
-│   │   ├── folders.ts                 ← FOLDERS constant + helpers
-│   │   └── types.ts
-│   └── sync/                          ← NEW
-│       ├── state.ts                   ← last_sync_at storage
-│       ├── leadRouter.ts              ← tag → folder logic
-│       └── webhookProcessor.ts        ← disposition → Pocomos note
+│   ├── db.ts                          ← Neon client, initSchema, getSyncState/setSyncState
+│   ├── snapshots.ts                   ← writeSnapshot, listSnapshots
+│   ├── enrichment.ts                  ← enrichInactiveCustomers (overnight)
+│   ├── pocomos/
+│   │   ├── webSession.ts              ← PHPSESSID cache, Symfony login, postSessioned helper (Surface B/C bootstrap)
+│   │   ├── notes.ts                   ← getNotesForLead, formatNotesForPhoneBurner (JSON-first, HTML fallback)
+│   │   ├── client.ts                  ← JWT API wrapper (Surface A)
+│   │   ├── auth.ts                    ← JWT token mint + cache
+│   │   ├── categorize.ts              ← bucket logic (NEW / RETURNING / RETAINED / AT_RISK / CANCELLED)
+│   │   ├── types.ts
+│   │   └── interactionTypes.ts        ← probes accepted `interactionType` values for customer note/create
+│   ├── phoneburner/
+│   │   ├── client.ts                  ← createContact, listContactsInFolder, normalizePhone
+│   │   └── folders.ts                 ← FOLDERS constant (LEADS_FRESH, LEADS_GENERAL, ACTIVE_CUSTOMER, …)
+│   └── sync/
+│       ├── leadSync.ts                ← Phase A: Pocomos → PhoneBurner, age-based folder routing, watermark advance
+│       ├── conversionCleanup.ts       ← Phase B: status-change folder moves + lazy notes refresh
+│       └── webhookProcessor.ts        ← PB webhook payload parser (status, recording_url_public, agent, contact.notes)
 └── app/
     ├── api/
-    │   ├── cron/snapshot/route.ts     ← existing daily snapshot
-    │   ├── snapshots/route.ts         ← existing read endpoint
-    │   └── phoneburner/               ← NEW
-    │       ├── sync-leads/route.ts
-    │       └── webhook/route.ts
-    └── phoneburner/page.tsx           ← NEW status page
+    │   ├── cron/snapshot/route.ts     ← daily 05:00 ET snapshot
+    │   ├── snapshots/route.ts         ← snapshot read endpoint
+    │   └── phoneburner/
+    │       ├── sync-leads/route.ts    ← runs Phase A + Phase B in sequence
+    │       └── webhook/route.ts       ← `api_calldone` receiver, writes Pocomos note via waitUntil
+    └── phoneburner/page.tsx           ← status page
 ```
+
+The old plan listed `sync/state.ts` and `sync/leadRouter.ts`; neither ended up as its own file. State (watermarks) lives in `lib/db.ts` via `getSyncState`/`setSyncState`, and routing is inline in `leadSync.ts`. The `pocomos/` directory has additional files outside the PhoneBurner integration story (`customers.ts`, `tags.ts`, `contracts.ts`, `pool.ts`, `contract-tags.ts`, `dataset.ts`, `sales-provider.ts`, `index.ts`) that drive `/sales` and the daily snapshot — they're not listed because they're not part of the PhoneBurner flow this document covers.
 
 ---
 
@@ -647,23 +653,45 @@ POSTGRES_URL_NON_POOLING=...
 
 ## 9. Open Questions / Known Gaps
 
-Status as of May 14, 2026 — after the rev 3 probe round.
+Status as of May 18, 2026 — after the rev 5 shipping pass.
 
-1. **Lead detail shape — RESOLVED.** The JWT lead endpoints (`/jwt/{office}/lead/list`, `/jwt/{office}/lead/{id}`) really are shallow — phone/email/date are NOT exposed there at any depth. The web back-door `POST /leads/data` (Surface B in §3.5) returns those fields, and the lead sync uses it directly. No more probing of `?include=` / `?expand=` etc. is needed.
+### Resolved
 
-2. **Tag-based folder routing for leads — DEFERRED to v2.** No working endpoint to read lead tags via API. In v1 every new lead routes to Fresh (`66223880`). Possible v2 paths:
+1. **Lead detail shape — RESOLVED (rev 3).** The JWT lead endpoints (`/jwt/{office}/lead/list`, `/jwt/{office}/lead/{id}`) really are shallow — phone/email/date are NOT exposed there at any depth. The web back-door `POST /leads/data` (Surface B in §3.5) returns those fields, and the lead sync uses it directly.
+
+2. **Pocomos → PhoneBurner notes read — RESOLVED (rev 3).** `notes.ts` tries `GET /jwt/pronexis/{office}/customer/{url_id}/notes` (and equivalent lead path) first and falls back to scraping `/customer/{url_id}/customer-information` (or `/lead/{id}/lead-information`) HTML.
+
+3. **PhoneBurner webhook payload field names — RESOLVED.** Real names documented in `src/lib/sync/webhookProcessor.ts`:
+   - `status` (the disposition) — NOT `disposition`
+   - `recording_url_public` (preferred), `recording_url` (fallback) — NOT `call_recording_url`
+   - `agent.first_name` + `agent.last_name` — NOT `csr_name`
+   - `contact.typed_custom_fields[]` (array of `{type, name, value}`) — `Customer ID` lives here
+   - `contact.notes` is the FULL history string, newline-separated; `parseLatestNoteEntry` extracts the latest entry (PB prepends, so the first non-continuation line is newest)
+   - `contact.user_id` is the PhoneBurner contact ID
+
+4. **30-day age-based folder routing — LIVE in `src/lib/sync/leadSync.ts`.** New leads ≤ 30 days old route to Fresh (`66223880`); older leads route to General (`66223881`). Threshold is from `now`, not from the watermark.
+
+5. **Pocomos URL via `Pocomos Profile` custom_field (PB field id `994147`) — LIVE.** PB silently drops a top-level `website` field, so the URL ships as the second custom_field. See §5.1 step 10.
+
+6. **PhoneBurner contact list filter quirk — LIVE.** `GET /contacts?category_id={N}` correctly filters to the folder; `?folder_id={N}` is silently accepted and returns every contact in the entire account. `loadAllExistingPbPhones` in `leadSync.ts` relies on `category_id`. See §4.
+
+7. **PhoneBurner write body shape — LIVE.** `POST /contacts` must be `application/x-www-form-urlencoded` with `phone` (not `raw_phone`) and `email` (not `email_address`); custom_fields use PHP-array form syntax (`custom_fields[0][name]=...&custom_fields[0][value]=...&custom_fields[0][type]=1`). JSON bodies are silently partial. See §4.
+
+8. **Watermark advance on every evaluated lead — LIVE.** `leadSync.ts` advances `phoneburner_last_sync_at` for every lead it RESOLVES (added, `skipped_dup`, or `skipped_nophone`); only `errors` skip the advance, so the lead retries next tick. Earlier behavior of advancing only on successful adds left the watermark frozen whenever a page deduped entirely, causing the cron to re-fetch page 1 forever.
+
+### Still open
+
+1. **Lead-tag read endpoint.** No working API path for reading lead tags; tag-based routing is deferred. Possible v2 paths:
    - The `marketing_type_name` field on `/leads/data` may proxy for the routing decision (e.g., a "Competitor switch" marketing type → folder `66223882`).
    - Pocomos may add a lead-tags read endpoint.
    - Scrape `/lead/{id}/lead-information` HTML for the tag chips.
    - **TODO when a working source lands:** route `L - Competitor` → `66223882`, `L - Financial` → `66223883`, skip `NT - No Marketing` and `L - DNC`.
 
-3. **Pocomos → PhoneBurner notes read — RESOLVED via probe-in-build.** Strategy: try `GET /jwt/pronexis/{office}/customer/{url_id}/notes` (and equivalent lead path) first, fall back to scraping `/customer/{url_id}/customer-information` (or `/lead/{id}/lead-information`) HTML for the notes table. `notes.ts` does both.
+2. **`conversionCleanup` batching performance.** The cleanup pass walks every row of `phoneburner_contacts` in lead/cancelled folders on every cron tick. Fine today; expected to bite around ~3k tracked rows. Plan: batch by `last_updated_at` ascending and cap rows-per-tick.
 
-4. **Lead-note write path** — `POST /jwt/{office}/lead/{lead_id}/note` is still best guess. Webhook tries it and falls back to logging-only on 404. Will be confirmed by the first real PhoneBurner→Pocomos webhook firing against a lead-folder contact.
+3. **Real-time Pocomos → PhoneBurner notes refresh.** PB-side notes are refreshed lazily by `conversionCleanup` only when `last_notes_refresh_at > 24h ago`. A CSR opening a contact within that window sees stale notes. Real-time refresh would require either a Pocomos→hub webhook (Pocomos has no outbound webhooks — §12) or an on-demand "refresh now" link from the dialer.
 
-5. **PhoneBurner webhook payload field names** — verify exact names against PB docs at build time; common ones expected (`status`, `duration`, `contact.custom_fields`).
-
-6. **Pocomos `interactionType` accepted values** — `interactionTypes.ts` probes the customer-note endpoint with a test payload to learn whether `"Call"` is accepted; default fallback is `"Other"` which is known-good from the API catalog (§12).
+4. **Active-customer upsell sync.** Customer No Add-Ons folder (`66229452`) was removed from PB on 2026-05-15 along with the v1 plan to feed active customers without renewal/upsell contracts into a follow-up bucket. Deferred until product decides what the upsell motion actually looks like.
 
 ### Fallback if the web back-door breaks
 
