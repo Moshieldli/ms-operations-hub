@@ -679,6 +679,8 @@ Status as of May 18, 2026 — after the rev 5 shipping pass.
 
 8. **Watermark advance on every evaluated lead — LIVE.** `leadSync.ts` advances `phoneburner_last_sync_at` for every lead it RESOLVES (added, `skipped_dup`, or `skipped_nophone`); only `errors` skip the advance, so the lead retries next tick. Earlier behavior of advancing only on successful adds left the watermark frozen whenever a page deduped entirely, causing the cron to re-fetch page 1 forever.
 
+9. **Pocomos `/leads/data` is DataTables 1.9, not 1.10+ — RESOLVED (2026-05-18).** `POST /leads/data` uses legacy DataTables 1.9 form-data parameters (`iSortCol_0`, `sSortDir_0`, `mDataProp_N`, `iDisplayStart`, `iDisplayLength`, `sEcho`). Modern DataTables 1.10+ params (`order[0][column]`, `start`, `length`, `columns[N][...]`) are silently ignored and produce an unsorted default-order response. Symptom we hit: the watermark sat at 2024-12-17 for months because the response wasn't actually sorted desc by `date_added`, so the watermark short-circuit broke on whichever stale row appeared first and skipped all newer leads. Always send the legacy format; the canonical body lives in `leadSync.ts::fetchLeadsPage`. Note that the **response** shape was already legacy 1.9 (`aaData` / `iTotalRecords` per §3.5 Surface B) — it's just that the **request** shape was modern and silently mismatched.
+
 ### Still open
 
 1. **Lead-tag read endpoint.** No working API path for reading lead tags; tag-based routing is deferred. Possible v2 paths:
