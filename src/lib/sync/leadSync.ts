@@ -9,9 +9,26 @@ import {
 import { FOLDERS } from "@/lib/phoneburner/folders";
 
 const WATERMARK_KEY = "phoneburner_last_sync_at";
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 200;
 const POCOMOS_BASE = process.env.POCOMOS_BASE || "https://mypocomos.net";
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+// Column layout the Pocomos /leads UI declares to its DataTables widget.
+// Indexes matter: iSortCol_0 = 5 means "sort by date_added desc" — the
+// endpoint resolves the index to the field name via these mDataProp_N
+// declarations, so the array order is load-bearing, not cosmetic.
+const LEADS_COLUMNS = [
+  "name_with_company",
+  "address",
+  "phone",
+  "map_code",
+  "status",
+  "date_added",
+  "salesperson",
+  "note",
+  "function",
+] as const;
+const DATE_ADDED_COL_INDEX = LEADS_COLUMNS.indexOf("date_added");
 
 /**
  * Shape of one row in the `aaData` array returned by POST /leads/data. The
@@ -110,22 +127,34 @@ function dateAddedOf(row: PocomosLeadRow): string {
 }
 
 async function fetchLeadsPage(start: number): Promise<LeadsDataResponse> {
+  // Pocomos /leads/data is DataTables 1.9 server-side, NOT 1.10+. Modern
+  // params (`start`, `length`, `search[value]`, `order[0][column]`) are
+  // silently ignored — the endpoint returns its default view regardless,
+  // which is why earlier versions of this code saw a frozen window topped
+  // at 2024-12-17 and Karen/Saul never surfaced. The legacy body below
+  // matches exactly what the browser UI sends; the 9 mDataProp_N entries
+  // are required so iSortCol_0=5 resolves to `date_added`.
   const body = new URLSearchParams();
-  body.set("draw", "1");
   body.set("sEcho", "1");
-  // Pocomos's DataTables endpoint only honors the legacy 1.9 pagination keys
-  // (`iDisplayStart` / `iDisplayLength`) — the modern `start` / `length` are
-  // accepted but ignored, so the page never advances. Send both for safety.
-  body.set("start", String(start));
-  body.set("length", String(PAGE_SIZE));
+  body.set("iColumns", String(LEADS_COLUMNS.length));
+  body.set("sColumns", ",".repeat(LEADS_COLUMNS.length - 1));
   body.set("iDisplayStart", String(start));
   body.set("iDisplayLength", String(PAGE_SIZE));
+  for (let i = 0; i < LEADS_COLUMNS.length; i++) {
+    body.set(`mDataProp_${i}`, LEADS_COLUMNS[i]);
+    body.set(`sSearch_${i}`, "");
+    body.set(`bRegex_${i}`, "false");
+    body.set(`bSearchable_${i}`, "true");
+    body.set(`bSortable_${i}`, i === LEADS_COLUMNS.length - 1 ? "false" : "true");
+  }
+  body.set("sSearch", "");
+  body.set("bRegex", "false");
+  body.set("iSortCol_0", String(DATE_ADDED_COL_INDEX));
+  body.set("sSortDir_0", "desc");
+  body.set("iSortingCols", "1");
   body.append("statuses[]", "Lead");
-  body.set("search[value]", "");
-  body.set("search[regex]", "false");
-  body.set("order[0][column]", "0");
-  body.set("order[0][dir]", "desc");
-  return postSessioned<LeadsDataResponse>("/leads/data", body, { referer: "/leads" });
+  body.set("salesperson", "");
+  return postSessioned<LeadsDataResponse>("/leads/data", body, { referer: "/leads/" });
 }
 
 async function loadAlreadySyncedIds(): Promise<Set<string>> {
@@ -222,10 +251,11 @@ export async function runLeadSync(opts: RunOptions = {}): Promise<LeadSyncResult
       const dateAdded = dateAddedOf(row);
       const dateAddedMs = dateAdded ? Date.parse(dateAdded) : 0;
 
-      // Pages come ordered desc — once we drop below the watermark, the rest
-      // of the response is older and we can stop early.
+      // Response is now sorted desc by date_added, but skip-not-stop on stale
+      // rows: defensive against future sort drift, and a no-op when the sort
+      // is honored (the page boundary stops us before we touch real history).
       if (watermarkBeforeMs && dateAddedMs && dateAddedMs <= watermarkBeforeMs) {
-        break outer;
+        continue;
       }
 
       if (opts.limit && processed >= opts.limit) break outer;
