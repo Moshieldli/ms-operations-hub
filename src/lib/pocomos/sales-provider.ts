@@ -13,7 +13,7 @@ export interface CancelledBreakdown {
   byYear: Record<string, number>;
 }
 
-export interface ServiceTypeCount {
+export interface ContractTypeCount {
   type: string;
   count: number;
 }
@@ -32,12 +32,13 @@ export interface SalesSummary {
   retainedSubtypes: { auto: number; seb: number; eb: number };
   cancelled: CancelledBreakdown;
   /**
-   * Active services grouped by contract service type, sorted desc by count.
-   * Covers the same services counted in totals.activeServices (customer is an
-   * Active Customer per the current-year-tag rule AND contract status=active).
-   * Blank service types fall into the "(no service type)" bucket.
+   * Active services grouped by granular contract type (contract.agreement.name,
+   * the Pocomos "Contract Type" pick-list), sorted desc by count. Covers the
+   * same services counted in totals.activeServices (customer is an Active
+   * Customer per the current-year-tag rule AND contract status=active). Blank
+   * contract types fall into the "(no contract type)" bucket.
    */
-  serviceTypeBreakdown: ServiceTypeCount[];
+  contractTypeBreakdown: ContractTypeCount[];
   debug: {
     untagged: number;
     uncategorized: number;
@@ -108,7 +109,7 @@ export function summarize(dataset: PocomosDataset): SalesSummary {
   // Headline (tag-gated) counts.
   let activeCustomers = 0;
   let activeServices = 0;
-  const serviceTypeCounts = new Map<string, number>();
+  const contractTypeCounts = new Map<string, number>();
   // Raw reconciliation counts (all active-status customers, no tag gate).
   let activeAllStatuses = 0;
   let activeServicesAllStatuses = 0;
@@ -137,8 +138,8 @@ export function summarize(dataset: PocomosDataset): SalesSummary {
         activeCustomers++;
         activeServices += activeContracts.length;
         for (const c of activeContracts) {
-          const t = c.serviceType?.trim() || "(no service type)";
-          serviceTypeCounts.set(t, (serviceTypeCounts.get(t) || 0) + 1);
+          const t = c.contractType?.trim() || "(no contract type)";
+          contractTypeCounts.set(t, (contractTypeCounts.get(t) || 0) + 1);
         }
       }
 
@@ -189,8 +190,8 @@ export function summarize(dataset: PocomosDataset): SalesSummary {
     if (Number.isFinite(ky) && ky < yearNum - 1) cancelled.earlier += v;
   }
 
-  const serviceTypeBreakdown: ServiceTypeCount[] = Array.from(
-    serviceTypeCounts.entries()
+  const contractTypeBreakdown: ContractTypeCount[] = Array.from(
+    contractTypeCounts.entries()
   )
     .map(([type, count]) => ({ type, count }))
     .sort((a, b) => b.count - a.count || a.type.localeCompare(b.type));
@@ -208,7 +209,7 @@ export function summarize(dataset: PocomosDataset): SalesSummary {
     buckets,
     retainedSubtypes: { auto, seb, eb },
     cancelled,
-    serviceTypeBreakdown,
+    contractTypeBreakdown,
     debug: {
       untagged,
       uncategorized,

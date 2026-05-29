@@ -48,7 +48,7 @@ export default async function TvSalesPage() {
 }
 
 function TvDashboard({ summary }: { summary: SalesSummary }) {
-  const { totals, buckets, retainedSubtypes, serviceTypeBreakdown } = summary;
+  const { totals, buckets, retainedSubtypes, contractTypeBreakdown } = summary;
 
   return (
     <div className="mt-8 flex flex-1 flex-col gap-8 lg:mt-12 lg:gap-12">
@@ -79,13 +79,13 @@ function TvDashboard({ summary }: { summary: SalesSummary }) {
         </div>
       </section>
 
-      {serviceTypeBreakdown.length > 0 ? (
+      {contractTypeBreakdown.length > 0 ? (
         <section className="flex flex-col">
           <div className="mb-3 text-sm uppercase tracking-[0.2em] text-muted-foreground lg:text-base">
-            Services by type
+            Contract type
           </div>
           <div className="grid grid-cols-2 gap-x-10 gap-y-2 lg:grid-cols-3 lg:text-xl">
-            {serviceTypeBreakdown.map((row) => (
+            {contractTypeBreakdown.map((row) => (
               <div
                 key={row.type}
                 className="flex items-baseline justify-between gap-4 border-b py-1"

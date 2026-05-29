@@ -11,7 +11,10 @@ export interface NormalizedContract {
   dateEnd?: string | null;
   dateCreated?: string | null;
   dateCancelled?: string | null;
+  /** Broad 11-category service type from pest_contract.service_type.name (has an "Other" catch-all). */
   serviceType?: string;
+  /** Granular contract type from contract.agreement.name (the Pocomos "Contract Type" pick-list). */
+  contractType?: string;
   serviceFrequency?: string;
   tags: string[];
 }

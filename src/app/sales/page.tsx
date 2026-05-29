@@ -180,7 +180,7 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
         </CardContent>
       </Card>
 
-      <ServicesByTypeCard summary={summary} />
+      <ContractTypeCard summary={summary} />
 
       <CancelledByYearCard summary={summary} />
 
@@ -189,24 +189,24 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
   );
 }
 
-function ServicesByTypeCard({ summary }: { summary: SalesSummary }) {
-  const { serviceTypeBreakdown, totals } = summary;
+function ContractTypeCard({ summary }: { summary: SalesSummary }) {
+  const { contractTypeBreakdown, totals } = summary;
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Services by type</CardTitle>
+        <CardTitle>Contract type</CardTitle>
         <CardDescription>
           Active services ({fmt(totals.activeServices)}) grouped by contract
-          service type.
+          type.
         </CardDescription>
       </CardHeader>
       <CardContent>
-        {serviceTypeBreakdown.length === 0 ? (
+        {contractTypeBreakdown.length === 0 ? (
           <p className="text-sm text-muted-foreground">No active services.</p>
         ) : (
           <ul className="divide-y text-sm">
-            {serviceTypeBreakdown.map((row) => (
+            {contractTypeBreakdown.map((row) => (
               <li
                 key={row.type}
                 className="flex items-baseline justify-between gap-4 py-2"

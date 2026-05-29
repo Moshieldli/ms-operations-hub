@@ -30,6 +30,16 @@ function pickServiceType(pc: PocomosContract["pest_contract"]): string | undefin
   return undefined;
 }
 
+/** Granular contract type — the Pocomos "Contract Type" pick-list, held in contract.agreement.name. */
+function pickContractType(contract: PocomosContract): string | undefined {
+  const a = (contract as Record<string, unknown>).agreement;
+  if (a && typeof a === "object") {
+    const name = (a as Record<string, unknown>).name;
+    if (name != null && String(name).trim()) return String(name);
+  }
+  return undefined;
+}
+
 function normalizeContract(
   contract: PocomosContract,
   tagsByPestId: Map<string | number, string[]>
@@ -46,6 +56,7 @@ function normalizeContract(
     dateCancelled:
       ((contract as Record<string, unknown>).date_cancelled as string) ?? null,
     serviceType: pickServiceType(pc),
+    contractType: pickContractType(contract),
     serviceFrequency:
       ((pc as Record<string, unknown> | undefined)?.service_frequency as
         | string
