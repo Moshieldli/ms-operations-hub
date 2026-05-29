@@ -180,10 +180,47 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
         </CardContent>
       </Card>
 
+      <ServicesByTypeCard summary={summary} />
+
       <CancelledByYearCard summary={summary} />
 
       <BucketRulesCard year={year} />
     </>
+  );
+}
+
+function ServicesByTypeCard({ summary }: { summary: SalesSummary }) {
+  const { serviceTypeBreakdown, totals } = summary;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Services by type</CardTitle>
+        <CardDescription>
+          Active services ({fmt(totals.activeServices)}) grouped by contract
+          service type.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {serviceTypeBreakdown.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No active services.</p>
+        ) : (
+          <ul className="divide-y text-sm">
+            {serviceTypeBreakdown.map((row) => (
+              <li
+                key={row.type}
+                className="flex items-baseline justify-between gap-4 py-2"
+              >
+                <span className="truncate">{row.type}</span>
+                <span className="shrink-0 font-semibold tabular-nums">
+                  {fmt(row.count)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

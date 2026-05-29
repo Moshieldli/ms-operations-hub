@@ -13,6 +13,11 @@ export interface CancelledBreakdown {
   byYear: Record<string, number>;
 }
 
+export interface ServiceTypeCount {
+  type: string;
+  count: number;
+}
+
 export interface SalesSummary {
   asOf: string;
   year: string;
@@ -26,6 +31,13 @@ export interface SalesSummary {
   buckets: Record<Bucket, number>;
   retainedSubtypes: { auto: number; seb: number; eb: number };
   cancelled: CancelledBreakdown;
+  /**
+   * Active services grouped by contract service type, sorted desc by count.
+   * Covers the same services counted in totals.activeServices (customer is an
+   * Active Customer per the current-year-tag rule AND contract status=active).
+   * Blank service types fall into the "(no service type)" bucket.
+   */
+  serviceTypeBreakdown: ServiceTypeCount[];
   debug: {
     untagged: number;
     uncategorized: number;
@@ -36,6 +48,15 @@ export interface SalesSummary {
     tagsFetched: number;
     tagsFailed: number;
     fetchDurationMs: number;
+    /**
+     * Raw reconciliation counts, NOT the headline numbers:
+     *  - activeAllStatuses: customers with status==="active" regardless of tags
+     *    (the pre-2026-tag-gate definition of Active Customers).
+     *  - activeServicesAllStatuses: active-status contracts across ALL
+     *    active-status customers (the pre-gate definition of Active Services).
+     */
+    activeAllStatuses: number;
+    activeServicesAllStatuses: number;
   };
 }
 
@@ -58,6 +79,18 @@ function parseYear(s: string | null | undefined): number | null {
   return Number.isFinite(y) ? y : null;
 }
 
+/**
+ * Active Customer gate: customer's unioned tags include at least one tag whose
+ * trimmed text starts with "{year} -" (e.g. "2026 - Auto", "2026 - New Sale").
+ * Drives both the Active Customers headline and the Active Services / service-
+ * type gate. AT_RISK customers (prior-year tags only) and untagged actives are
+ * excluded — they're active in Pocomos but not active for the current year.
+ */
+function hasCurrentYearTag(tags: string[], year: string): boolean {
+  const prefix = `${year} -`;
+  return tags.some((t) => String(t).trim().startsWith(prefix));
+}
+
 export function summarize(dataset: PocomosDataset): SalesSummary {
   const year = CURRENT_YEAR;
   const yearNum = parseInt(year, 10);
@@ -72,7 +105,13 @@ export function summarize(dataset: PocomosDataset): SalesSummary {
   let auto = 0;
   let seb = 0;
   let eb = 0;
+  // Headline (tag-gated) counts.
+  let activeCustomers = 0;
   let activeServices = 0;
+  const serviceTypeCounts = new Map<string, number>();
+  // Raw reconciliation counts (all active-status customers, no tag gate).
+  let activeAllStatuses = 0;
+  let activeServicesAllStatuses = 0;
   let untagged = 0;
   let uncategorized = 0;
   const untaggedSampleIds: string[] = [];
@@ -85,10 +124,24 @@ export function summarize(dataset: PocomosDataset): SalesSummary {
   for (const customer of dataset.customers) {
     const status = customer.status.toLowerCase();
     if (status === "active") {
-      // Active services = active-status contracts.
-      for (const c of customer.contracts) {
-        if (String(c.status || "").toLowerCase() === "active") activeServices++;
+      activeAllStatuses++;
+      const activeContracts = customer.contracts.filter(
+        (c) => String(c.status || "").toLowerCase() === "active"
+      );
+      activeServicesAllStatuses += activeContracts.length;
+
+      // Headline gate: only customers carrying a current-year tag count as
+      // Active Customers, and ALL their active contracts count as Active
+      // Services (gated at the customer level, not per contract).
+      if (hasCurrentYearTag(customer.tags, year)) {
+        activeCustomers++;
+        activeServices += activeContracts.length;
+        for (const c of activeContracts) {
+          const t = c.serviceType?.trim() || "(no service type)";
+          serviceTypeCounts.set(t, (serviceTypeCounts.get(t) || 0) + 1);
+        }
       }
+
       const tagSet = new Set(customer.tags);
       if (tagSet.size === 0) {
         untagged++;
@@ -136,12 +189,18 @@ export function summarize(dataset: PocomosDataset): SalesSummary {
     if (Number.isFinite(ky) && ky < yearNum - 1) cancelled.earlier += v;
   }
 
+  const serviceTypeBreakdown: ServiceTypeCount[] = Array.from(
+    serviceTypeCounts.entries()
+  )
+    .map(([type, count]) => ({ type, count }))
+    .sort((a, b) => b.count - a.count || a.type.localeCompare(b.type));
+
   return {
     asOf: dataset.asOf,
     year,
     source: { kind: "pocomos-api", office: pocomosOffice() },
     totals: {
-      activeCustomers: dataset.diagnostics.activeCount,
+      activeCustomers,
       activeServices,
       cancelledCustomers: dataset.diagnostics.inactiveCount,
       onHoldCustomers: dataset.diagnostics.onHoldCount,
@@ -149,6 +208,7 @@ export function summarize(dataset: PocomosDataset): SalesSummary {
     buckets,
     retainedSubtypes: { auto, seb, eb },
     cancelled,
+    serviceTypeBreakdown,
     debug: {
       untagged,
       uncategorized,
@@ -159,6 +219,8 @@ export function summarize(dataset: PocomosDataset): SalesSummary {
       tagsFetched: dataset.diagnostics.tagsFetched,
       tagsFailed: dataset.diagnostics.tagsFailed,
       fetchDurationMs: dataset.diagnostics.fetchDurationMs,
+      activeAllStatuses,
+      activeServicesAllStatuses,
     },
   };
 }

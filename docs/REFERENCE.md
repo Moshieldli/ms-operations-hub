@@ -1,6 +1,6 @@
 # MS Operations Hub — Master Reference
 
-**Last updated:** May 18, 2026 (rev 5 — synced doc with shipped reality per commit fe1f12d. Marked PhoneBurner sync (cron, age-based folder routing, two-custom-field write) as LIVE rather than planned; replaced the speculative §6 file tree with the files that actually shipped; updated §4 webhook field-name bullets against the real Call End payload; moved webhook field-name reverse-engineering and several integration-quirk items from §9 OPEN to RESOLVED. No factual changes to API auth, payload shapes, or routing decisions — rev 4 was already correct on those.)
+**Last updated:** May 28, 2026 (rev 6 — redefined the `/sales` headline metrics. Active Customers and Active Services are now tag-gated on a current-year tag (`CURRENT_YEAR` in categorize.ts, auto-advancing), not raw `status=Active` counts; added a Services-by-type breakdown (`summary.serviceTypeBreakdown`) rendered on `/sales` and `/tv/sales`; raw pre-gate counts preserved in `summary.debug.activeAllStatuses` / `activeServicesAllStatuses`. See §3.5 "Headline metrics". Buckets logic unchanged. rev 5 — synced doc with shipped reality per commit fe1f12d: marked PhoneBurner sync (cron, age-based folder routing, two-custom-field write) as LIVE rather than planned; replaced the speculative §6 file tree with the files that actually shipped; updated §4 webhook field-name bullets against the real Call End payload; moved webhook field-name reverse-engineering and several integration-quirk items from §9 OPEN to RESOLVED.)
 **Project:** MS Analytics — Mosquito Shield of Long Island (Progranic LLC)
 **Office ID:** 1512
 **Live URL:** https://ms-operations-hub.vercel.app
@@ -286,6 +286,18 @@ The probe at `scripts/probe-pocomos-web-login.ts` walks this end-to-end and was 
 - **AT_RISK** = active customer with no current-year tag
 - **CANCELLED** = status `Inactive`
 - **`2026 - Renewed` does NOT exist** — earlier code that looked for it was wrong, per Rivka.
+
+**Headline metrics — Active Customers & Active Services (redefined 2026):**
+
+The two big numbers on `/sales` (and `/tv/sales`) are **tag-gated**, not raw status counts. The gate is the current year, derived from `CURRENT_YEAR` in `categorize.ts` (`new Date().getFullYear()`), so it auto-advances each January with no code change.
+
+- **Active Customers** = customers with status `Active` **AND** at least one unioned tag whose trimmed text starts with `"{CURRENT_YEAR} -"` (e.g. `2026 - Auto`, `2026 - EB`, `2026 - New Sale`, `2026 - SEB`). This intentionally excludes AT_RISK actives (prior-year tags only) and untagged actives — they're `Active` in Pocomos but have no current-year commitment.
+- **Active Services** = for each customer that qualifies as an Active Customer above, every contract whose own `status === "active"`. The gate is applied at the **customer** level: a qualifying customer's active contracts ALL count, even if an individual contract carries no current-year tag.
+- **Services by type** (`summary.serviceTypeBreakdown`) = those same Active Services grouped by `NormalizedContract.serviceType` (from `pest_contract.service_type.name`), sorted descending by count. Blank service types fall into a `"(no service type)"` bucket. Rendered as a "Services by type" card on `/sales` and a compact grid on `/tv/sales`.
+- **Reconciliation counts** — the pre-gate raw numbers are preserved in `summary.debug.activeAllStatuses` (all status=`Active` customers) and `summary.debug.activeServicesAllStatuses` (active contracts across all active customers). They are NOT shown as headline figures; they exist so the tag-gated drop can be reconciled against a raw Pocomos status count.
+- **Snapshots** — `snapshots.active_count` / `services_count` store the tag-gated headline numbers going forward; the raw counts and the service-type breakdown ride along inside `raw_json` (whole `SalesSummary`), so no schema migration was needed.
+
+The buckets section (New / Returning / Retained / At-Risk / Cancelled) is unchanged by this redefinition — it still categorizes every active-status customer by year tags as described above.
 
 ### Pocomos rate limits & quirks
 

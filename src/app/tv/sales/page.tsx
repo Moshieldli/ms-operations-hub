@@ -48,7 +48,7 @@ export default async function TvSalesPage() {
 }
 
 function TvDashboard({ summary }: { summary: SalesSummary }) {
-  const { totals, buckets, retainedSubtypes } = summary;
+  const { totals, buckets, retainedSubtypes, serviceTypeBreakdown } = summary;
 
   return (
     <div className="mt-8 flex flex-1 flex-col gap-8 lg:mt-12 lg:gap-12">
@@ -78,6 +78,29 @@ function TvDashboard({ summary }: { summary: SalesSummary }) {
           />
         </div>
       </section>
+
+      {serviceTypeBreakdown.length > 0 ? (
+        <section className="flex flex-col">
+          <div className="mb-3 text-sm uppercase tracking-[0.2em] text-muted-foreground lg:text-base">
+            Services by type
+          </div>
+          <div className="grid grid-cols-2 gap-x-10 gap-y-2 lg:grid-cols-3 lg:text-xl">
+            {serviceTypeBreakdown.map((row) => (
+              <div
+                key={row.type}
+                className="flex items-baseline justify-between gap-4 border-b py-1"
+              >
+                <span className="truncate text-muted-foreground">
+                  {row.type}
+                </span>
+                <span className="shrink-0 font-semibold tabular-nums">
+                  {fmt(row.count)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }

@@ -32,6 +32,14 @@ function easternDateString(d = new Date()): string {
   return d.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
 }
 
+/**
+ * As of the 2026 redefinition, `active_count` / `services_count` store the
+ * tag-gated headline numbers (Active Customer = active status + a current-year
+ * tag; Active Services = that customer's active-status contracts). The raw
+ * all-status counts and the new service-type breakdown live inside `raw_json`
+ * (summary.debug.activeAllStatuses / activeServicesAllStatuses and
+ * summary.serviceTypeBreakdown) — so no schema migration is needed.
+ */
 export async function writeSnapshot(
   summary: SalesSummary,
   options: { date?: string } = {}
