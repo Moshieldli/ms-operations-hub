@@ -190,31 +190,37 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
 }
 
 function ContractTypeCard({ summary }: { summary: SalesSummary }) {
-  const { contractTypeBreakdown, totals } = summary;
+  const { contractTypeGroups, totals } = summary;
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Contract type</CardTitle>
+        <CardTitle>Service type</CardTitle>
         <CardDescription>
-          Active services ({fmt(totals.activeServices)}) grouped by contract
-          type.
+          Active services ({fmt(totals.activeServices)}) grouped into service
+          families.
         </CardDescription>
       </CardHeader>
       <CardContent>
-        {contractTypeBreakdown.length === 0 ? (
+        {contractTypeGroups.length === 0 ? (
           <p className="text-sm text-muted-foreground">No active services.</p>
         ) : (
           <ul className="divide-y text-sm">
-            {contractTypeBreakdown.map((row) => (
-              <li
-                key={row.type}
-                className="flex items-baseline justify-between gap-4 py-2"
-              >
-                <span className="truncate">{row.type}</span>
-                <span className="shrink-0 font-semibold tabular-nums">
-                  {fmt(row.count)}
-                </span>
+            {contractTypeGroups.map((g) => (
+              <li key={g.group} className="py-2">
+                <div className="flex items-baseline justify-between gap-4">
+                  <span className="font-medium">{g.group}</span>
+                  <span className="shrink-0 font-semibold tabular-nums">
+                    {fmt(g.count)}
+                  </span>
+                </div>
+                {g.members.length > 1 ? (
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {g.members
+                      .map((m) => `${m.type} ${fmt(m.count)}`)
+                      .join(" · ")}
+                  </div>
+                ) : null}
               </li>
             ))}
           </ul>

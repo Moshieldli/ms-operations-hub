@@ -26,6 +26,7 @@ export type {
   SalesSummary,
   CancelledBreakdown,
   ContractTypeCount,
+  ContractTypeGroup,
   FilterPredicate,
 } from "./sales-provider";
 export { getDataset, clearDatasetCache } from "./dataset";

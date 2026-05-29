@@ -18,6 +18,47 @@ export interface ContractTypeCount {
   count: number;
 }
 
+export interface ContractTypeGroup {
+  /** Service family, e.g. "Mosquito", "Tick", "Spotted Lanternfly". */
+  group: string;
+  /** Total active services across all members of this family. */
+  count: number;
+  /** The granular contract types rolled into this family, sorted desc by count. */
+  members: ContractTypeCount[];
+}
+
+/**
+ * Display order for the service families (per ops request): all Mosquito
+ * (including Event Spray), then Tick, Ant, Fly Trap, Spotted Lanternfly,
+ * Yellow Jacket. "Other" catches anything unclassified and sorts last.
+ */
+const CONTRACT_TYPE_GROUP_ORDER = [
+  "Mosquito",
+  "Tick",
+  "Ant",
+  "Fly Trap",
+  "Spotted Lanternfly",
+  "Yellow Jacket",
+  "Other",
+] as const;
+
+/**
+ * Roll a granular contract type (contract.agreement.name) up to its service
+ * family. Order matters: "lantern" is checked before "ant" because "lantern"
+ * contains the substring "ant"; "fly trap" is matched as a phrase so it doesn't
+ * collide with "Spotted Lanternfly". Event Spray rolls into Mosquito per ops.
+ */
+function contractTypeGroupOf(name: string): string {
+  const n = name.toLowerCase();
+  if (n.includes("lantern")) return "Spotted Lanternfly";
+  if (n.includes("mosquito") || n.includes("event spray")) return "Mosquito";
+  if (n.includes("tick")) return "Tick";
+  if (n.includes("fly trap")) return "Fly Trap";
+  if (n.includes("yellow jacket")) return "Yellow Jacket";
+  if (n.includes("ant")) return "Ant";
+  return "Other";
+}
+
 export interface SalesSummary {
   asOf: string;
   year: string;
@@ -32,13 +73,14 @@ export interface SalesSummary {
   retainedSubtypes: { auto: number; seb: number; eb: number };
   cancelled: CancelledBreakdown;
   /**
-   * Active services grouped by granular contract type (contract.agreement.name,
-   * the Pocomos "Contract Type" pick-list), sorted desc by count. Covers the
-   * same services counted in totals.activeServices (customer is an Active
-   * Customer per the current-year-tag rule AND contract status=active). Blank
-   * contract types fall into the "(no contract type)" bucket.
+   * Active services grouped into service families (Mosquito, Tick, Ant, Fly
+   * Trap, Spotted Lanternfly, Yellow Jacket, Other) in a fixed display order.
+   * Each family rolls up the granular contract types (contract.agreement.name)
+   * via contractTypeGroupOf(); `members` holds that granular detail (sorted
+   * desc). Covers the same services counted in totals.activeServices, so the
+   * group counts (and the members) sum to activeServices.
    */
-  contractTypeBreakdown: ContractTypeCount[];
+  contractTypeGroups: ContractTypeGroup[];
   debug: {
     untagged: number;
     uncategorized: number;
@@ -190,11 +232,29 @@ export function summarize(dataset: PocomosDataset): SalesSummary {
     if (Number.isFinite(ky) && ky < yearNum - 1) cancelled.earlier += v;
   }
 
-  const contractTypeBreakdown: ContractTypeCount[] = Array.from(
+  const granularContractTypes: ContractTypeCount[] = Array.from(
     contractTypeCounts.entries()
   )
     .map(([type, count]) => ({ type, count }))
     .sort((a, b) => b.count - a.count || a.type.localeCompare(b.type));
+
+  const membersByGroup = new Map<string, ContractTypeCount[]>();
+  for (const row of granularContractTypes) {
+    const g = contractTypeGroupOf(row.type);
+    const list = membersByGroup.get(g);
+    if (list) list.push(row);
+    else membersByGroup.set(g, [row]);
+  }
+  const contractTypeGroups: ContractTypeGroup[] = [];
+  for (const group of CONTRACT_TYPE_GROUP_ORDER) {
+    const members = membersByGroup.get(group);
+    if (!members || members.length === 0) continue;
+    contractTypeGroups.push({
+      group,
+      count: members.reduce((sum, m) => sum + m.count, 0),
+      members,
+    });
+  }
 
   return {
     asOf: dataset.asOf,
@@ -209,7 +269,7 @@ export function summarize(dataset: PocomosDataset): SalesSummary {
     buckets,
     retainedSubtypes: { auto, seb, eb },
     cancelled,
-    contractTypeBreakdown,
+    contractTypeGroups,
     debug: {
       untagged,
       uncategorized,
