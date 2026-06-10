@@ -265,6 +265,23 @@ Since the lead sync depends on Surface B, this flow has to work from a serverles
 
 The probe at `scripts/probe-pocomos-web-login.ts` walks this end-to-end and was the source of the above.
 
+### Surface B — `POST /customers/data` column map (bulk "Last Service" source)
+
+The `/customers/data` DataTables endpoint is the **bulk source of last-service date** for the `/service/overdue` report (the JWT contract object has no usable last-service date — confirmed, see §9). Same legacy DataTables 1.9 request body as `/leads/data` (`sEcho`, `iDisplayStart`, `iDisplayLength`, `iColumns`/`sColumns`, `mDataProp_N`). `iTotalRecords` ≈ 1,127; **~6 pages at 200/page covers the whole office.**
+
+Rows come back as **positional arrays** keyed `"0".."10"` (the server returns columns by index and ignores the `mDataProp` field names) **plus** appended named keys `id, is_parent, is_child, multiple_contracts, commercial_account`. Column map (read from the `/customers/` `<thead>` — note the **trailing slash**; `/customers` 301-redirects):
+
+| idx | header | idx | header |
+|---|---|---|---|
+| 0 | (select) | 6 | Status |
+| 1 | First Name | 7 | Sign up date |
+| 2 | Last Name | **8** | **Last Service** (MM/DD/YY) |
+| 3 | Phone | 9 | Next Service |
+| 4 | Email | 10 | (actions) |
+| 5 | Zip | | |
+
+**Column 8 "Last Service" is per-CUSTOMER and is the last service of ANY type** (Regular/Initial/Respray), not per-contract. It is authoritative for mosquito-only customers; for customers who also hold an active non-mosquito (add-on) contract it may reflect the add-on, so those are scraped per-page instead. `multiple_contracts` (0 vs >0) is a quick add-on flag. Canonical fetcher: `src/lib/service/customersData.ts`. Probes: `scripts/probe-bulk-spray-date.ts`, `probe-customers-headers.ts`, `probe-bulk-coverage.ts`.
+
 ### Tag values used in routing/categorization
 
 | Tag | Meaning | Used for |
@@ -554,6 +571,24 @@ The leading emoji + literal "PhoneBurner Call —" prefix is the loop guard for 
 
 ---
 
+### 5.5 `/service/overdue` — mosquito overdue-spray report (hybrid refresh)
+
+In-season tool flagging active mosquito customers who haven't been serviced recently. The page reads `mosquito_service_status` instantly (never scrapes on load); a budget-capped, READ-ONLY refresh job (cron `0 6 * * *` + a lock-guarded "Refresh now" `POST /api/service/overdue`) fills it.
+
+**Eligibility (tightened 2026-06-10).** A customer is eligible only if they are Active AND have a mosquito-family contract (`pest_contract.service_type` ∈ {Mosquito Control, Natural Mosquito Control, Mosquito Control - Weekly, Natural Mosquito Control - Weekly}) that is BOTH:
+- **active** — contract status active, not cancelled, and (for **non-auto-renewing** contracts only) `date_end` not passed. Auto-renewing contracts keep a *stale* original `date_end` (a 2026 customer can still show `date_end="2022-01-28"`), so `date_end` is ignored when `auto_renew` is set — use the `autoRenew` flag now carried on the normalized contract, not `date_end`, to judge liveness.
+- **carries a current-year tag** — a tag starting with `"${CURRENT_YEAR} -"` on that mosquito contract's OWN per-contract tags. This is the real zombie filter: an "Active in name only" account last sprayed 2021–2024 has no current-year tag and is dropped. A pinned "no spray yet" row therefore means a current-year signup awaiting their first service.
+
+**Clock rule.** Any completed mosquito service (any service Type) resets the 15-day clock — NOT Regular-only. Overdue = last mosquito service > 15 days ago, OR no service yet (pinned to top). `INCLUDE_RESPRAY` / `COUNT_ANY_SERVICE_TYPE` in `mosquito.ts` are the toggles to narrow back to Regular(+Respray)-only.
+
+**Hybrid source (the speed fix — ~1–2 min vs ~30 min).** The JWT contract object has no usable last-service date (§9), so:
+1. **Bulk** — `POST /customers/data` (~6 pages) → every customer's "Last Service" date (column 8). **Mosquito-only** eligible customers (no active non-mosquito contract, ~79%) trust this date directly — no scrape.
+2. **Scrape** — **add-on** eligible customers (~21%, also hold an active non-mosquito contract) get the existing per-page `GET /customer/{id}/service-history` scrape (Surface C, READ-ONLY, never switches the selected contract) so the date is mosquito-contract-specific. If the rendered table's contract isn't mosquito, the customer is recorded as `needs_check` rather than mutated.
+
+First live full refresh (2026-06-10): 1,093 eligible (861 mosquito-only via bulk + 232 add-ons scraped), 81 overdue (9 "no service yet"), 1,006 current, 6 needs-check, 0 failed, ~135s. Code: `src/lib/service/{mosquito,customersData,refresh,serviceHistory}.ts`, `src/components/overdue-view.tsx`, `src/app/service/**`, cron `src/app/api/cron/mosquito-status/route.ts`.
+
+---
+
 ## 6. File Structure (shipped)
 
 ```
@@ -587,7 +622,7 @@ src/
     └── phoneburner/page.tsx           ← status page
 ```
 
-The old plan listed `sync/state.ts` and `sync/leadRouter.ts`; neither ended up as its own file. State (watermarks) lives in `lib/db.ts` via `getSyncState`/`setSyncState`, and routing is inline in `leadSync.ts`. The `pocomos/` directory has additional files outside the PhoneBurner integration story (`customers.ts`, `tags.ts`, `contracts.ts`, `pool.ts`, `contract-tags.ts`, `dataset.ts`, `sales-provider.ts`, `index.ts`) that drive `/sales` and the daily snapshot — they're not listed because they're not part of the PhoneBurner flow this document covers.
+The old plan listed `sync/state.ts` and `sync/leadRouter.ts`; neither ended up as its own file. State (watermarks) lives in `lib/db.ts` via `getSyncState`/`setSyncState`, and routing is inline in `leadSync.ts`. The `pocomos/` directory has additional files outside the PhoneBurner integration story (`customers.ts`, `tags.ts`, `contracts.ts`, `pool.ts`, `contract-tags.ts`, `dataset.ts`, `sales-provider.ts`, `index.ts`) that drive `/sales` and the daily snapshot — they're not listed because they're not part of the PhoneBurner flow this document covers. Likewise `lib/service/` (`mosquito.ts`, `customersData.ts`, `serviceHistory.ts`, `refresh.ts`) + `app/service/**` + `app/api/cron/mosquito-status/route.ts` drive the `/service/overdue` report — see §5.5.
 
 ---
 
@@ -602,6 +637,21 @@ Columns: `id, snapshot_date, active_count, services_count, new_count, returning_
 
 **`customers`** — enriched non-active customers (Inactive + On-Hold), 2,674 rows as of 5/14.
 Populated by the resumable `enrichInactiveCustomers({ budgetMs, maxCustomers })` job that skips IDs already at `depth='full'` via a `refreshed_at` watermark.
+
+**`mosquito_service_status`** — one row per eligible mosquito customer, backing `/service/overdue`. Filled by the hybrid refresh job (see §5.5); the page reads this table instantly and never scrapes on load.
+```sql
+CREATE TABLE mosquito_service_status (
+  pocomos_id TEXT PRIMARY KEY,
+  full_name TEXT,
+  mosquito_contract_type TEXT,
+  selected_contract_label TEXT,      -- only set on needs_check rows (scrape path)
+  last_regular_spray DATE,           -- last mosquito service (any type); NULL = no service yet
+  days_since INTEGER,                -- NULL = no service yet (pinned to top of overdue)
+  status TEXT NOT NULL,              -- 'overdue' | 'current' | 'needs_check'
+  reason TEXT,                       -- 'overdue' | 'current' | 'no_service_yet' | 'mosquito_not_selected'
+  last_checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
 
 ### Tables to add for PhoneBurner
 
@@ -702,6 +752,8 @@ Status as of May 18, 2026 — after the rev 5 shipping pass.
 8. **Watermark advance on every evaluated lead — LIVE.** `leadSync.ts` advances `phoneburner_last_sync_at` for every lead it RESOLVES (added, `skipped_dup`, or `skipped_nophone`); only `errors` skip the advance, so the lead retries next tick. Earlier behavior of advancing only on successful adds left the watermark frozen whenever a page deduped entirely, causing the cron to re-fetch page 1 forever.
 
 9. **Pocomos `/leads/data` is DataTables 1.9, not 1.10+ — RESOLVED (2026-05-18).** `POST /leads/data` uses legacy DataTables 1.9 form-data parameters (`iSortCol_0`, `sSortDir_0`, `mDataProp_N`, `iDisplayStart`, `iDisplayLength`, `sEcho`). Modern DataTables 1.10+ params (`order[0][column]`, `start`, `length`, `columns[N][...]`) are silently ignored and produce an unsorted default-order response. Symptom we hit: the watermark sat at 2024-12-17 for months because the response wasn't actually sorted desc by `date_added`, so the watermark short-circuit broke on whichever stale row appeared first and skipped all newer leads. Always send the legacy format; the canonical body lives in `leadSync.ts::fetchLeadsPage`. Note that the **response** shape was already legacy 1.9 (`aaData` / `iTotalRecords` per §3.5 Surface B) — it's just that the **request** shape was modern and silently mismatched.
+
+10. **No per-contract last-service date on the JWT contract object — RESOLVED (2026-06-10).** `GET /jwt/pronexis/{office}/customer/{id}/contracts` carries `date_start`/`date_end`/`renewal_date`, `invoices[].date_due` (billing schedule, not service completion), and `pest_contract.initial_job` (the INITIAL job only, with `date_completed`), but **no recurring/Regular completed-service date** for active mosquito contracts (`number_of_jobs = 0`, `initial_job = null`, and a `pest_contract.initial_job.last_regular_service` field that is always null in samples). So the contract object cannot supply last-mosquito-spray date — the `/service/overdue` report uses the `/customers/data` "Last Service" column instead (see §3.5 Surface B column map + §5.5). Probe: `scripts/probe-bulk-spray-date.ts`.
 
 ### Still open
 

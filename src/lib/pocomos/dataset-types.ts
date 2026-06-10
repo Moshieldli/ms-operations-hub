@@ -16,6 +16,13 @@ export interface NormalizedContract {
   /** Granular contract type from contract.agreement.name (the Pocomos "Contract Type" pick-list). */
   contractType?: string;
   serviceFrequency?: string;
+  /**
+   * True if the contract auto-renews (contract.auto_renew or agreement.auto_renew).
+   * Important for liveness checks: auto-renewing contracts keep a STALE original
+   * `dateEnd` (e.g. a 2026 customer can still show date_end="2022-01-28"), so
+   * `dateEnd` must NOT be used to mark them ended.
+   */
+  autoRenew?: boolean;
   tags: string[];
 }
 

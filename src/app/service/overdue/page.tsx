@@ -54,7 +54,7 @@ function Header() {
           Overdue Sprays
         </h1>
         <p className="mt-1 text-sm text-muted-foreground sm:text-base">
-          Active mosquito customers with no Regular spray in 15+ days.
+          Active mosquito customers with no mosquito service in 15+ days.
         </p>
       </div>
       <Link

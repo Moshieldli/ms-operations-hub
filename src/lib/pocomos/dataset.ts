@@ -30,6 +30,22 @@ function pickServiceType(pc: PocomosContract["pest_contract"]): string | undefin
   return undefined;
 }
 
+/**
+ * Whether the contract auto-renews. Auto-renewing contracts keep a stale
+ * original `date_end`, so this flag (not date_end) is what callers should use
+ * to decide a contract is still live. Checks the contract-level `auto_renew`
+ * and falls back to the agreement template's `auto_renew`.
+ */
+function pickAutoRenew(contract: PocomosContract): boolean {
+  const top = (contract as Record<string, unknown>).auto_renew;
+  if (top === true) return true;
+  const a = (contract as Record<string, unknown>).agreement;
+  if (a && typeof a === "object" && (a as Record<string, unknown>).auto_renew === true) {
+    return true;
+  }
+  return false;
+}
+
 /** Granular contract type — the Pocomos "Contract Type" pick-list, held in contract.agreement.name. */
 function pickContractType(contract: PocomosContract): string | undefined {
   const a = (contract as Record<string, unknown>).agreement;
@@ -63,6 +79,7 @@ function normalizeContract(
         | undefined) ?? (contract as Record<string, unknown>).service_frequency as
         | string
         | undefined,
+    autoRenew: pickAutoRenew(contract),
     tags: pestContractId != null ? tagsByPestId.get(pestContractId) ?? [] : [],
   };
 }

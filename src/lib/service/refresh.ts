@@ -1,41 +1,66 @@
 /**
- * Scrape job + DB layer for the mosquito overdue-spray report.
+ * Refresh job + DB layer for the mosquito overdue-spray report.
  *
- * READ-ONLY against Pocomos: GETs /customer/{id}/service-history for each
- * eligible customer, parses the rendered table, and NEVER switches/POSTs. If a
- * customer's rendered contract isn't mosquito (their selected contract is
- * something else), they are recorded as 'needs_check' instead of being mutated.
+ * HYBRID source (rebuilt 2026-06-10 — was: scrape all ~1,100 service-history
+ * pages, ~30 min). The JWT contract object has NO usable last-service date
+ * (confirmed by probe), so:
  *
- * Performance: the page does NOT scrape on load — it reads the
- * `mosquito_service_status` table. This job (run by cron and the "Refresh now"
- * button) fills that table. It is budget-capped and resumable: customers are
- * processed oldest-checked-first (never-checked first), so repeated runs cover
- * the whole eligible set without blowing the Vercel function budget. Concurrency
- * is held low (5, the Pocomos cap) with a gentle per-request jitter.
+ *   1. BULK — POST /customers/data (web back-door, ~6 pages) gives every
+ *      customer's "Last Service" date (column 8, any service type). For
+ *      mosquito-ONLY eligible customers (no active non-mosquito contract, ~79%)
+ *      that date IS their mosquito service date → no scrape.
+ *   2. SCRAPE — add-on eligible customers (~21%, also hold an active
+ *      non-mosquito contract) get the existing per-page service-history scrape
+ *      so the date is mosquito-contract-specific, not the add-on's.
+ *
+ * A full refresh now finishes in ~1 min instead of ~30.
+ *
+ * READ-ONLY against Pocomos: GET service-history pages, POST only the
+ * DataTables read endpoint. NEVER switches the selected contract / mutates a
+ * record. If a scraped customer's rendered contract isn't mosquito, they are
+ * recorded as 'needs_check' instead of being mutated.
+ *
+ * The page never scrapes on load — it reads `mosquito_service_status`, which
+ * this job (cron + "Refresh now") fills. Eligibility is tightened in
+ * mosquito.ts: active customer + active mosquito contract carrying a
+ * current-year tag (drops zombie "active-in-name-only" accounts).
  */
 import { initSchema, sql, getSyncState, setSyncState } from "@/lib/db";
 import { getDataset, fetchPooled } from "@/lib/pocomos";
 import { getSessionedHtml } from "@/lib/pocomos/webSession";
 import { parseServiceHistory, looksLikeLoginPage } from "./serviceHistory";
+import { fetchAllCustomersLastService } from "./customersData";
 import {
   selectEligible,
   computeMosquitoStatus,
+  statusFromLastServiceDate,
   renderedTableIsMosquito,
   type EligibleCustomer,
 } from "./mosquito";
 
 const RUN_META_KEY = "mosquito_service_refresh";
 const SCRAPE_CONCURRENCY = 5; // Pocomos hard cap
-const PER_REQUEST_PAUSE_MS = 200; // gentle on the web UI
+const PER_REQUEST_PAUSE_MS = 150; // gentle on the web UI
+const BULK_UPSERT_CHUNK = 500;
 
 export interface RefreshMeta {
   startedAt: string;
   finishedAt: string;
+  /** Total eligible (active customer + active mosquito contract + current-year tag). */
   eligible: number;
+  /** Mosquito-only eligible, resolved from the bulk /customers/data date. */
+  mosquitoOnly: number;
+  /** Add-on eligible (need a targeted scrape). */
+  addOn: number;
+  /** Pages pulled from /customers/data. */
+  bulkPages: number;
+  /** Add-on customers actually scraped this run. */
   scraped: number;
   overdue: number;
   current: number;
   needsCheck: number;
+  /** Subset of overdue with no service date at all (pinned "no spray yet"). */
+  noServiceYet: number;
   failed: number;
   reachedEndOfQueue: boolean;
   durationMs: number;
@@ -44,7 +69,7 @@ export interface RefreshMeta {
 export interface RefreshOptions {
   /** Stop scraping once this many ms have elapsed (incl. dataset build). */
   budgetMs?: number;
-  /** Cap on customers scraped this invocation. */
+  /** Cap on add-on customers scraped this invocation. */
   maxCustomers?: number;
   /** Force a fresh Pocomos dataset build rather than the 10-min cache. */
   forceDataset?: boolean;
@@ -65,6 +90,7 @@ interface UpsertRow {
   reason: string;
 }
 
+/** Single-row upsert (used by the scrape path). */
 async function upsert(row: UpsertRow): Promise<void> {
   await sql`
     INSERT INTO mosquito_service_status (
@@ -86,36 +112,60 @@ async function upsert(row: UpsertRow): Promise<void> {
   `;
 }
 
-/**
- * Order the eligible set so the freshest run covers the staleest customers
- * first: never-checked customers (not in the table) lead, then by oldest
- * `last_checked_at`. Also drops rows for customers no longer eligible.
- */
-async function orderByStaleness(
-  eligible: EligibleCustomer[]
-): Promise<EligibleCustomer[]> {
-  const rows = (await sql`
-    SELECT pocomos_id, last_checked_at FROM mosquito_service_status
-  `) as Array<{ pocomos_id: string; last_checked_at: string }>;
-  const checkedAt = new Map(rows.map((r) => [r.pocomos_id, Date.parse(r.last_checked_at)]));
+/** Multi-row upsert via UNNEST (used by the bulk path) — one statement per chunk. */
+async function bulkUpsert(rows: UpsertRow[]): Promise<void> {
+  for (let i = 0; i < rows.length; i += BULK_UPSERT_CHUNK) {
+    const chunk = rows.slice(i, i + BULK_UPSERT_CHUNK);
+    const ids = chunk.map((r) => r.id);
+    const names = chunk.map((r) => r.fullName);
+    const types = chunk.map((r) => r.mosquitoContractType);
+    const labels = chunk.map((r) => r.selectedContractLabel);
+    const sprays = chunk.map((r) => r.lastRegularSpray);
+    const days = chunk.map((r) => r.daysSince);
+    const statuses = chunk.map((r) => r.status);
+    const reasons = chunk.map((r) => r.reason);
+    await sql`
+      INSERT INTO mosquito_service_status (
+        pocomos_id, full_name, mosquito_contract_type, selected_contract_label,
+        last_regular_spray, days_since, status, reason, last_checked_at
+      )
+      SELECT pocomos_id, full_name, mosquito_contract_type, selected_contract_label,
+             last_regular_spray, days_since, status, reason, NOW()
+      FROM UNNEST(
+        ${ids}::text[], ${names}::text[], ${types}::text[], ${labels}::text[],
+        ${sprays}::date[], ${days}::int[], ${statuses}::text[], ${reasons}::text[]
+      ) AS t(pocomos_id, full_name, mosquito_contract_type, selected_contract_label,
+             last_regular_spray, days_since, status, reason)
+      ON CONFLICT (pocomos_id) DO UPDATE SET
+        full_name = EXCLUDED.full_name,
+        mosquito_contract_type = EXCLUDED.mosquito_contract_type,
+        selected_contract_label = EXCLUDED.selected_contract_label,
+        last_regular_spray = EXCLUDED.last_regular_spray,
+        days_since = EXCLUDED.days_since,
+        status = EXCLUDED.status,
+        reason = EXCLUDED.reason,
+        last_checked_at = NOW()
+    `;
+  }
+}
 
-  // Prune customers that fell out of eligibility (cancelled, etc.).
-  const eligibleIds = new Set(eligible.map((e) => e.id));
-  const stale = rows.filter((r) => !eligibleIds.has(r.pocomos_id)).map((r) => r.pocomos_id);
+/** Drop rows for customers no longer eligible (cancelled, lost current-year tag, etc.). */
+async function pruneStale(eligibleIds: Set<string>): Promise<number> {
+  const rows = (await sql`
+    SELECT pocomos_id FROM mosquito_service_status
+  `) as Array<{ pocomos_id: string }>;
+  const stale = rows
+    .map((r) => String(r.pocomos_id))
+    .filter((id) => !eligibleIds.has(id));
   if (stale.length) {
     await sql`DELETE FROM mosquito_service_status WHERE pocomos_id = ANY(${stale})`;
   }
-
-  return [...eligible].sort((a, b) => {
-    const ta = checkedAt.has(a.id) ? (checkedAt.get(a.id) as number) : -1;
-    const tb = checkedAt.has(b.id) ? (checkedAt.get(b.id) as number) : -1;
-    return ta - tb; // never-checked (-1) first, then oldest-checked
-  });
+  return stale.length;
 }
 
 /**
- * Scrape eligible customers and upsert their mosquito status. Budget-capped and
- * resumable; safe to call repeatedly.
+ * Refresh the whole eligible set: bulk for mosquito-only, targeted scrape for
+ * add-on. Budget-capped on the scrape phase; the bulk phase is cheap (~6 POSTs).
  */
 export async function refreshMosquitoStatus(
   options: RefreshOptions = {}
@@ -124,23 +174,54 @@ export async function refreshMosquitoStatus(
   const startedAt = new Date().toISOString();
   const budgetMs = options.budgetMs ?? 250_000;
   const maxCustomers = options.maxCustomers ?? 5000;
+  const now = new Date();
   await initSchema();
 
   const ds = await getDataset({ force: options.forceDataset ?? false });
-  const eligibleAll = selectEligible(ds.customers);
-  const ordered = await orderByStaleness(eligibleAll);
-  const work = ordered.slice(0, maxCustomers);
+  const eligible = selectEligible(ds.customers);
+  const eligibleIds = new Set(eligible.map((e) => e.id));
+  await pruneStale(eligibleIds);
 
-  let scraped = 0;
+  const mosquitoOnly = eligible.filter((e) => !e.hasAddOn);
+  const addOn = eligible.filter((e) => e.hasAddOn);
+
   let overdue = 0;
   let current = 0;
   let needsCheck = 0;
+  let noServiceYet = 0;
   let failed = 0;
+
+  // ---- BULK phase: mosquito-only via /customers/data "Last Service" ----
+  const bulk = await fetchAllCustomersLastService();
+  const bulkRows: UpsertRow[] = mosquitoOnly.map((e) => {
+    const rec = bulk.byId.get(e.id);
+    const st = statusFromLastServiceDate(rec?.lastService ?? null, now);
+    if (st.status === "overdue") {
+      overdue++;
+      if (st.daysSince == null) noServiceYet++;
+    } else {
+      current++;
+    }
+    return {
+      id: e.id,
+      fullName: e.fullName,
+      mosquitoContractType: e.mosquitoContractType,
+      // Not a needs_check row; bulk path has no selected-contract label.
+      selectedContractLabel: null,
+      lastRegularSpray: st.lastRegularSpray,
+      daysSince: st.daysSince,
+      status: st.status,
+      reason: st.reason,
+    };
+  });
+  await bulkUpsert(bulkRows);
+
+  // ---- SCRAPE phase: add-on customers, targeted per-page (READ-ONLY GET) ----
+  const work = addOn.slice(0, maxCustomers);
+  let scraped = 0;
   let budgetHit = false;
 
-  const fetchOne = async (e: EligibleCustomer): Promise<void> => {
-    // Out of time: no-op (counts as success so it isn't a "failure"). The
-    // customer keeps its old/absent last_checked_at and leads the next run.
+  const scrapeOne = async (e: EligibleCustomer): Promise<void> => {
     if (Date.now() - t0 > budgetMs) {
       budgetHit = true;
       return;
@@ -169,9 +250,13 @@ export async function refreshMosquitoStatus(
       return;
     }
 
-    const st = computeMosquitoStatus(parsed.rows);
-    if (st.status === "overdue") overdue++;
-    else current++;
+    const st = computeMosquitoStatus(parsed.rows, now);
+    if (st.status === "overdue") {
+      overdue++;
+      if (st.daysSince == null) noServiceYet++;
+    } else {
+      current++;
+    }
     await upsert({
       id: e.id,
       fullName: e.fullName,
@@ -185,7 +270,7 @@ export async function refreshMosquitoStatus(
     scraped++;
   };
 
-  const result = await fetchPooled(work, fetchOne, {
+  const result = await fetchPooled(work, scrapeOne, {
     concurrency: SCRAPE_CONCURRENCY,
   });
   failed = result.failures.length;
@@ -193,14 +278,17 @@ export async function refreshMosquitoStatus(
   const meta: RefreshMeta = {
     startedAt,
     finishedAt: new Date().toISOString(),
-    eligible: eligibleAll.length,
+    eligible: eligible.length,
+    mosquitoOnly: mosquitoOnly.length,
+    addOn: addOn.length,
+    bulkPages: bulk.pages,
     scraped,
     overdue,
     current,
     needsCheck,
+    noServiceYet,
     failed,
-    // We covered the whole queue if we didn't trim for the cap and didn't bail on budget.
-    reachedEndOfQueue: !budgetHit && work.length === ordered.length,
+    reachedEndOfQueue: !budgetHit && work.length === addOn.length,
     durationMs: Date.now() - t0,
   };
   await setSyncState(RUN_META_KEY, meta);

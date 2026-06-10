@@ -26,7 +26,7 @@ const reports: ServiceReport[] = [
     href: "/service/overdue",
     title: "Overdue Sprays",
     description:
-      "Active mosquito customers with no Regular spray in 15+ days.",
+      "Active mosquito customers with no mosquito service in 15+ days.",
     status: "live",
   },
   {

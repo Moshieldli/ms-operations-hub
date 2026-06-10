@@ -1,19 +1,33 @@
 /**
  * Mosquito service-status domain logic for the /service/overdue report.
  *
- * "Overdue spray" = an Active customer with an active mosquito contract who has
- * not had a Regular mosquito spray in over 15 days (or has had none yet this
- * season). The history itself is scraped from the Pocomos web service-history
- * page (see serviceHistory.ts); this module decides eligibility and computes
- * the overdue status from parsed rows.
+ * "Overdue spray" = a customer with an ELIGIBLE mosquito contract who has not
+ * had a mosquito service in over 15 days (or has had none yet this season).
  *
- * READ-ONLY: callers never POST / switch the selected contract. If a customer's
- * selected contract isn't mosquito, they go to a "needs manual check" list.
+ * Eligibility (tightened 2026-06-10 to drop zombie "active-in-name-only"
+ * accounts): the customer is Active AND has a mosquito-family contract that is
+ *   (a) active — status active, not cancelled, and (for non-renewing contracts)
+ *       date_end not passed; auto-renewing contracts keep a stale date_end so
+ *       date_end is ignored for them, AND
+ *   (b) carries a current-year tag — a tag starting with "${CURRENT_YEAR} -" on
+ *       that mosquito contract's OWN per-contract tags.
+ * The current-year tag is the real zombie filter: a customer last sprayed in
+ * 2021–2024 whose contract still reads "Active" has no 2026 tag and is dropped.
+ *
+ * CLOCK RULE: any completed mosquito service (any service Type) resets the
+ * 15-day clock — NOT Regular-only. This makes the per-customer "Last Service"
+ * date from /customers/data authoritative for mosquito-only customers (no
+ * scrape needed). INCLUDE_RESPRAY / COUNT_ANY_SERVICE_TYPE below are the
+ * toggles if we ever want to narrow back to Regular(+Respray)-only.
+ *
+ * READ-ONLY: callers never POST / switch the selected contract. If a scraped
+ * customer's selected contract isn't mosquito, they go to "needs manual check".
  */
+import { CURRENT_YEAR } from "@/lib/pocomos";
 import type { NormalizedContract, NormalizedCustomer } from "@/lib/pocomos";
 import type { ServiceRow } from "./serviceHistory";
 
-/** A Regular mosquito service older than this (days) marks the customer overdue. */
+/** A mosquito service older than this (days) marks the customer overdue. */
 export const OVERDUE_THRESHOLD_DAYS = 15;
 
 /**
@@ -30,11 +44,15 @@ export const MOSQUITO_SERVICE_TYPES = new Set(
 );
 
 /**
- * RESPRAY TOGGLE — the service Types that count as a "spray" which resets the
- * 15-day clock. Today only "Regular" counts (Initial = first/setup visit,
- * Respray = redo of a missed/complained service). Flip INCLUDE_RESPRAY to true
- * if the team later decides a Respray should also reset the clock.
+ * CLOCK-RULE toggles.
+ *  - COUNT_ANY_SERVICE_TYPE (default true): any completed mosquito service
+ *    resets the 15-day clock. This is what keeps the bulk /customers/data
+ *    "Last Service" date (which is any-type) authoritative for mosquito-only
+ *    customers.
+ *  - If COUNT_ANY_SERVICE_TYPE is flipped to false, the clock falls back to the
+ *    RESETTING_TYPES set: "Regular" only, plus "Respray" when INCLUDE_RESPRAY.
  */
+export const COUNT_ANY_SERVICE_TYPE = true;
 export const INCLUDE_RESPRAY = false;
 const RESETTING_TYPES = new Set(
   INCLUDE_RESPRAY ? ["regular", "respray"] : ["regular"]
@@ -44,28 +62,76 @@ function norm(s: unknown): string {
   return String(s || "").trim().toLowerCase();
 }
 
+/** Start-of-today (local midnight) in epoch ms. */
+function startOfToday(now: Date): number {
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+}
+
+/** Parse a Pocomos DB date ("YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS") → local Date. */
+function parseDbDate(raw: string | null | undefined): Date | null {
+  if (!raw) return null;
+  const m = String(raw).match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10));
+}
+
 export function isMosquitoServiceType(serviceType: unknown): boolean {
   return MOSQUITO_SERVICE_TYPES.has(norm(serviceType));
 }
 
-export function isActiveContract(c: NormalizedContract): boolean {
-  return norm(c.status) === "active";
+/**
+ * Is this contract currently live? Status active, not cancelled, and — for
+ * NON-renewing contracts only — its date_end hasn't passed. Auto-renewing
+ * contracts keep a stale original date_end, so date_end is ignored for them.
+ */
+export function isContractActive(c: NormalizedContract, now: Date = new Date()): boolean {
+  if (norm(c.status) !== "active") return false;
+  const cancelled = c.dateCancelled && norm(c.dateCancelled) !== "null";
+  if (cancelled) return false;
+  if (!c.autoRenew && c.dateEnd) {
+    const end = parseDbDate(c.dateEnd);
+    if (end && end.getTime() < startOfToday(now)) return false;
+  }
+  return true;
 }
 
-/** The customer's active mosquito contract, if any (first match). */
-export function activeMosquitoContract(
+/** Does this contract carry a current-year tag ("${CURRENT_YEAR} - ...")? */
+export function hasCurrentYearTag(c: NormalizedContract): boolean {
+  const prefix = `${CURRENT_YEAR} -`;
+  return c.tags.some((t) => t.trim().startsWith(prefix));
+}
+
+/**
+ * The customer's ELIGIBLE mosquito contract (active + mosquito type + current-
+ * year tag), if any. First match wins.
+ */
+export function eligibleMosquitoContract(
   customer: NormalizedCustomer
 ): NormalizedContract | null {
   for (const c of customer.contracts) {
-    if (isActiveContract(c) && isMosquitoServiceType(c.serviceType)) return c;
+    if (
+      isContractActive(c) &&
+      isMosquitoServiceType(c.serviceType) &&
+      hasCurrentYearTag(c)
+    ) {
+      return c;
+    }
   }
   return null;
 }
 
-/** Active customer with at least one active mosquito contract. */
+/** True if the customer also holds an active NON-mosquito contract (add-on). */
+export function hasActiveNonMosquitoContract(customer: NormalizedCustomer): boolean {
+  return customer.contracts.some(
+    (c) => isContractActive(c) && !isMosquitoServiceType(c.serviceType)
+  );
+}
+
+/** Active customer with at least one eligible mosquito contract. */
 export function isEligible(customer: NormalizedCustomer): boolean {
   return (
-    norm(customer.status) === "active" && activeMosquitoContract(customer) != null
+    norm(customer.status) === "active" &&
+    eligibleMosquitoContract(customer) != null
   );
 }
 
@@ -74,6 +140,13 @@ export interface EligibleCustomer {
   id: string;
   fullName: string;
   mosquitoContractType: string;
+  /**
+   * True when the customer ALSO has an active non-mosquito contract. For these
+   * the bulk /customers/data "Last Service" date may reflect the add-on, so
+   * they need a targeted service-history scrape. Mosquito-only customers
+   * (false) can trust the bulk date directly.
+   */
+  hasAddOn: boolean;
 }
 
 export function selectEligible(
@@ -81,12 +154,14 @@ export function selectEligible(
 ): EligibleCustomer[] {
   const out: EligibleCustomer[] = [];
   for (const c of customers) {
-    const contract = activeMosquitoContract(c);
-    if (norm(c.status) !== "active" || !contract) continue;
+    if (norm(c.status) !== "active") continue;
+    const contract = eligibleMosquitoContract(c);
+    if (!contract) continue;
     out.push({
       id: String(c.id),
       fullName: c.fullName,
       mosquitoContractType: contract.serviceType || "Mosquito Control",
+      hasAddOn: hasActiveNonMosquitoContract(c),
     });
   }
   return out;
@@ -110,17 +185,16 @@ export type MosquitoStatus = "overdue" | "current" | "needs_check";
 
 export interface MosquitoStatusResult {
   status: MosquitoStatus;
-  /** Why — machine-readable: 'overdue' | 'no_regular_spray_yet' | 'current'
+  /** Why — machine-readable: 'overdue' | 'no_service_yet' | 'current'
    *  | 'mosquito_not_selected' | 'scrape_failed' | 'no_history'. */
   reason: string;
-  /** ISO date (YYYY-MM-DD) of the most recent Regular Complete spray, or null. */
+  /** ISO date (YYYY-MM-DD) of the most recent qualifying mosquito service, or null. */
   lastRegularSpray: string | null;
-  /** Whole days since lastRegularSpray, or null when there's no spray yet. */
+  /** Whole days since lastRegularSpray, or null when there's no service yet. */
   daysSince: number | null;
 }
 
 function toIsoDate(d: Date): string {
-  // Local-midnight date → YYYY-MM-DD without TZ shifting.
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
@@ -133,39 +207,15 @@ function daysBetween(from: Date, to: Date): number {
   return Math.floor((b.getTime() - a.getTime()) / 86_400_000);
 }
 
-/**
- * Compute overdue status from the parsed completed-services rows.
- *
- * Keeps only Status="Complete" AND Type in the resetting set (Regular today;
- * Respray too if INCLUDE_RESPRAY). last_regular_spray = max(date) of those.
- * OVERDUE if days_since > 15, OR there are zero resetting sprays ("no regular
- * spray yet").
- */
-export function computeMosquitoStatus(
-  rows: ServiceRow[],
-  now: Date = new Date()
-): MosquitoStatusResult {
-  const sprays = rows.filter(
-    (r) =>
-      norm(r.status) === "complete" &&
-      RESETTING_TYPES.has(norm(r.type)) &&
-      r.parsedDate != null
-  );
-
-  if (sprays.length === 0) {
+/** Overdue if days_since > threshold, OR no service date at all (pinned). */
+function statusFor(latest: Date | null, now: Date): MosquitoStatusResult {
+  if (!latest) {
     return {
       status: "overdue",
-      reason: "no_regular_spray_yet",
+      reason: "no_service_yet",
       lastRegularSpray: null,
       daysSince: null,
     };
-  }
-
-  let latest = sprays[0].parsedDate as Date;
-  for (const s of sprays) {
-    if ((s.parsedDate as Date).getTime() > latest.getTime()) {
-      latest = s.parsedDate as Date;
-    }
   }
   const daysSince = daysBetween(latest, now);
   const overdue = daysSince > OVERDUE_THRESHOLD_DAYS;
@@ -175,4 +225,45 @@ export function computeMosquitoStatus(
     lastRegularSpray: toIsoDate(latest),
     daysSince,
   };
+}
+
+/**
+ * BULK path: compute status straight from the per-customer "Last Service" date
+ * pulled from /customers/data column 8. Valid for mosquito-only customers,
+ * where any service is a mosquito service.
+ */
+export function statusFromLastServiceDate(
+  lastService: Date | null,
+  now: Date = new Date()
+): MosquitoStatusResult {
+  return statusFor(lastService, now);
+}
+
+/**
+ * SCRAPE path: compute status from the parsed completed-services rows of a
+ * customer's service-history page.
+ *
+ * Keeps Status="Complete" rows; by default (COUNT_ANY_SERVICE_TYPE) every
+ * completed service counts as resetting the clock, else only RESETTING_TYPES
+ * (Regular, +Respray if INCLUDE_RESPRAY). last_regular_spray = max(date).
+ */
+export function computeMosquitoStatus(
+  rows: ServiceRow[],
+  now: Date = new Date()
+): MosquitoStatusResult {
+  const sprays = rows.filter((r) => {
+    if (norm(r.status) !== "complete" || r.parsedDate == null) return false;
+    if (COUNT_ANY_SERVICE_TYPE) return true;
+    return RESETTING_TYPES.has(norm(r.type));
+  });
+
+  if (sprays.length === 0) return statusFor(null, now);
+
+  let latest = sprays[0].parsedDate as Date;
+  for (const s of sprays) {
+    if ((s.parsedDate as Date).getTime() > latest.getTime()) {
+      latest = s.parsedDate as Date;
+    }
+  }
+  return statusFor(latest, now);
 }

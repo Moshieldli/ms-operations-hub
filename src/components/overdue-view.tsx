@@ -69,7 +69,8 @@ export function OverdueView({ initial }: { initial: OverdueReport }) {
               {meta ? (
                 <span className="opacity-70">
                   {" "}
-                  · {fmt(meta.scraped)}/{fmt(meta.eligible)} scraped
+                  · {fmt(meta.eligible)} eligible · {fmt(meta.mosquitoOnly)} via
+                  bulk · {fmt(meta.scraped)}/{fmt(meta.addOn)} add-ons scraped
                   {meta.failed ? ` · ${meta.failed} failed` : ""}
                   {!meta.reachedEndOfQueue
                     ? " · partial run (more pending — run again)"
@@ -110,10 +111,11 @@ export function OverdueView({ initial }: { initial: OverdueReport }) {
       {/* Overdue table */}
       <Card>
         <CardHeader>
-          <CardTitle>Overdue — no Regular spray in 15+ days</CardTitle>
+          <CardTitle>Overdue — no mosquito service in 15+ days</CardTitle>
           <CardDescription>
-            Sorted by days since last Regular spray (longest first). &ldquo;No
-            spray yet&rdquo; accounts are pinned to the top.
+            Sorted by days since last mosquito service (longest first). &ldquo;No
+            spray yet&rdquo; accounts (a 2026 signup awaiting their first
+            service) are pinned to the top.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -194,7 +196,7 @@ function RowTable({
             <th className="py-2 pr-4 font-medium">Contract</th>
             {kind === "overdue" ? (
               <>
-                <th className="py-2 pr-4 font-medium">Last Regular spray</th>
+                <th className="py-2 pr-4 font-medium">Last mosquito service</th>
                 <th className="py-2 pr-4 text-right font-medium">Days since</th>
               </>
             ) : (
