@@ -20,6 +20,13 @@ const CURRENT_YEAR = String(new Date().getFullYear());
  * Note: "{year} - Renewed" was removed. That tag doesn't exist in Pocomos;
  * the previous categorize logic checked for it and would have always missed.
  */
+// TODO (DEFERRED — do not implement yet; spec pending): Season reset.
+// After Sept 30, AT_RISK customers (shown on /sales as "Current Cancelled" —
+// treated last year, not treated this year yet) should move into a new
+// "Lapsed" state, and that transition must be reconciled with the Jan 1
+// CURRENT_YEAR rollover (when `year` auto-advances and last year's customers
+// would otherwise re-enter AT_RISK). Leave AT_RISK logic exactly as-is until
+// the spec lands.
 export function bucketFor(tags: Set<string>, year: string): Bucket | null {
   const hasNew = tags.has(`${year} - New Sale`);
   const hasAuto = tags.has(`${year} - Auto`);

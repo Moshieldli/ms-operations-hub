@@ -183,15 +183,26 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {/*
+            DISPLAY-ONLY relabels — internal bucket keys + categorize.ts logic
+            are unchanged; only the user-facing labels differ. The word
+            "Returning" intentionally moves from RETAINED's label to RETURNING's
+            new "New – Lapsed", so map by key carefully:
+              NEW       → "New"
+              RETURNING → "New – Lapsed"
+              RETAINED  → "Returning"
+              AT_RISK   → "Current Cancelled"
+              CANCELLED → "Cancelled"
+          */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-5">
             <BucketCell label="New" value={buckets.NEW} />
-            <BucketCell label="Returning" value={buckets.RETURNING} />
+            <BucketCell label="New – Lapsed" value={buckets.RETURNING} />
             <BucketCell
-              label="Retained"
+              label="Returning"
               value={buckets.RETAINED}
               hint={retainedHint}
             />
-            <BucketCell label="At Risk" value={buckets.AT_RISK} />
+            <BucketCell label="Current Cancelled" value={buckets.AT_RISK} />
             <BucketCell
               label="Cancelled"
               value={buckets.CANCELLED}
@@ -205,7 +216,7 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
 
       <CancelledByYearCard summary={summary} />
 
-      <BucketRulesCard year={year} />
+      <BucketRulesCard />
     </>
   );
 }
@@ -298,27 +309,36 @@ function CancelledByYearCard({ summary }: { summary: SalesSummary }) {
   );
 }
 
-function BucketRulesCard({ year }: { year: string }) {
+function BucketRulesCard() {
+  // DISPLAY-ONLY: labels + criteria text are user-facing. Internal bucket keys
+  // and categorize.ts logic are unchanged — each entry below still maps 1:1 to
+  // the same internal bucket it always did (NEW, RETURNING, RETAINED, AT_RISK,
+  // CANCELLED, in that order).
   const rules: Array<{ label: string; rule: string }> = [
     {
-      label: "NEW",
-      rule: `Has "${year} - New Sale" tag AND no prior YYYY tag — brand-new customer this year.`,
+      // internal NEW
+      label: "New",
+      rule: "Brand-new this year, no prior-year history.",
     },
     {
-      label: "RETURNING",
-      rule: `Has "${year} - New Sale" tag AND at least one prior YYYY tag — came back after a gap.`,
+      // internal RETURNING
+      label: "New – Lapsed",
+      rule: "Was a customer before, skipped one or more full seasons, signed up new again this year.",
     },
     {
-      label: "RETAINED",
-      rule: `Has "${year} - Auto / SEB / EB / Prepaid / Committed" — service continued from prior year.`,
+      // internal RETAINED
+      label: "Returning",
+      rule: "Service continued from last year into this year (auto-renew / early rebook).",
     },
     {
-      label: "AT RISK",
-      rule: `Has a prior YYYY tag but NO ${year} tag — last year's customer not yet renewed.`,
+      // internal AT_RISK
+      label: "Current Cancelled",
+      rule: "Treated last year, NOT treated this year yet.",
     },
     {
-      label: "CANCELLED",
-      rule: "Pocomos customer status = Inactive. Year breakdown uses each customer's last service date.",
+      // internal CANCELLED
+      label: "Cancelled",
+      rule: "Marked Inactive in Pocomos.",
     },
   ];
   return (

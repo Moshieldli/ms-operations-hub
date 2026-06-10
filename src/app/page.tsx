@@ -22,6 +22,11 @@ const sections = [
     title: "Combined",
     description: "Cross-channel view across sales and calling.",
   },
+  {
+    href: "/service",
+    title: "Service",
+    description: "Field-service reports — overdue sprays and more.",
+  },
 ];
 
 export default function Home() {

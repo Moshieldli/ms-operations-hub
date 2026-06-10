@@ -65,16 +65,22 @@ function TvDashboard({ summary }: { summary: SalesSummary }) {
         <div className="mb-4 text-sm uppercase tracking-[0.2em] text-muted-foreground lg:text-base">
           Buckets
         </div>
+        {/*
+          DISPLAY-ONLY relabels (match /sales). Internal bucket keys + logic
+          unchanged; "Returning" moves from RETAINED to RETURNING's new label:
+            NEW→"New", RETURNING→"New – Lapsed", RETAINED→"Returning",
+            AT_RISK→"Current Cancelled", CANCELLED→"Cancelled".
+        */}
         <div className="grid flex-1 grid-cols-2 gap-4 lg:grid-cols-5 lg:gap-6">
           <BigBucket label="New" value={buckets.NEW} accent="emerald" />
-          <BigBucket label="Returning" value={buckets.RETURNING} accent="sky" />
+          <BigBucket label="New – Lapsed" value={buckets.RETURNING} accent="sky" />
           <BigBucket
-            label="Retained"
+            label="Returning"
             value={buckets.RETAINED}
             accent="violet"
             hint={`Auto ${retainedSubtypes.auto} · SEB ${retainedSubtypes.seb} · EB ${retainedSubtypes.eb}`}
           />
-          <BigBucket label="At Risk" value={buckets.AT_RISK} accent="amber" />
+          <BigBucket label="Current Cancelled" value={buckets.AT_RISK} accent="amber" />
           <BigBucket label="Cancelled" value={buckets.CANCELLED} accent="rose" />
         </div>
       </section>

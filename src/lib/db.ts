@@ -97,6 +97,27 @@ export async function initSchema(): Promise<void> {
     )
   `;
 
+  // Mosquito service-status report (/service/overdue). One row per eligible
+  // Active customer with an active mosquito contract. Populated by the scrape
+  // job (lib/service/refresh.ts) — the page reads this table instantly, it
+  // never scrapes on load. `status`: 'overdue' | 'current' | 'needs_check'.
+  await c`
+    CREATE TABLE IF NOT EXISTS mosquito_service_status (
+      pocomos_id TEXT PRIMARY KEY,
+      full_name TEXT,
+      mosquito_contract_type TEXT,
+      selected_contract_label TEXT,
+      last_regular_spray DATE,
+      days_since INTEGER,
+      status TEXT NOT NULL,
+      reason TEXT,
+      last_checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await c`CREATE INDEX IF NOT EXISTS mosquito_service_status_status_idx ON mosquito_service_status(status)`;
+  await c`CREATE INDEX IF NOT EXISTS mosquito_service_status_days_since_idx ON mosquito_service_status(days_since DESC)`;
+  await c`CREATE INDEX IF NOT EXISTS mosquito_service_status_checked_idx ON mosquito_service_status(last_checked_at)`;
+
   await c`
     CREATE TABLE IF NOT EXISTS phoneburner_contacts (
       pocomos_id TEXT PRIMARY KEY,
