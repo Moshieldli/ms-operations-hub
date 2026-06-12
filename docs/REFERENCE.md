@@ -280,7 +280,30 @@ Rows come back as **positional arrays** keyed `"0".."10"` (the server returns co
 | 4 | Email | 10 | (actions) |
 | 5 | Zip | | |
 
-**Column 8 "Last Service" is per-CUSTOMER and is the last service of ANY type** (Regular/Initial/Respray), not per-contract. It is authoritative for mosquito-only customers; for customers who also hold an active non-mosquito (add-on) contract it may reflect the add-on, so those are scraped per-page instead. `multiple_contracts` (0 vs >0) is a quick add-on flag. Canonical fetcher: `src/lib/service/customersData.ts`. Probes: `scripts/probe-bulk-spray-date.ts`, `probe-customers-headers.ts`, `probe-bulk-coverage.ts`.
+**Column 8 "Last Service" is per-CUSTOMER and is the last service of ANY type** (Regular/Initial/Respray), not per-contract. It is authoritative for mosquito-only customers; for customers who also hold an active non-mosquito (add-on) contract it may reflect the add-on, so those are scraped per-page instead. `multiple_contracts` (0 vs >0) is a quick add-on flag. **Column 7 "Sign up date"** (MM/DD/YY) is also pulled by the fetcher — it drives the sign-up column shown on every overdue row and the "brand-new signup" exclusion (see §5.5). Canonical fetcher: `src/lib/service/customersData.ts`. Probes: `scripts/probe-bulk-spray-date.ts`, `probe-customers-headers.ts`, `probe-bulk-coverage.ts`, `probe-balance-signup.ts`.
+
+> **This grid has NO "Balance" column.** Confirmed live 2026-06-12 (`scripts/probe-balance-signup.ts`): this office's `/customers/data` view is configured with exactly 11 columns (0–10, as above); requesting columns 11+ returns empty cells, and the DataTables `aoColumns` def has 11 entries. Open balance for `/service/overdue` therefore comes from the **Unpaid Invoices report**, not this grid — see §3.6. (Bonus: the grid also lacks a "Last Regular Service Date" column; only "Last Service" / any-type is available here. A regular-only date would require the per-page service-history scrape.)
+
+### Surface B — `POST /finance/unpaid-data` (bulk open-balance source)
+
+The **Unpaid Invoices** report is the bulk source of **open balance** for `/service/overdue` (Balance is not a column in this office's `/customers/data` grid — see above). It is a Symfony *search form*, not a JSON DataTables grid:
+
+1. `GET /finance/unpaid` and scrape the CSRF token from `<input name="unpaid_search_terms[_token]" value="…">`.
+2. `POST /finance/unpaid-data` (form-urlencoded, `X-Requested-With: XMLHttpRequest`, referer `/finance/unpaid`) with:
+   - `unpaid_search_terms[_token]` = the scraped token
+   - `unpaid_search_terms[branches][]` = office id (`1512`)
+   - `unpaid_search_terms[includeMiscInvoices]` = `1` (the season prepay installments are "Misc. Invoice"s)
+   - `unpaid_search_terms[lessThan30|thirtyTo60|sixtyTo90|moreThan90]` = `1` (all four aging buckets)
+   - `unpaid_search_terms[status]` = `Unpaid` ← **required**; without it the server 500s / returns an empty shell
+   - `unpaid_search_terms[reminderSearchTermsType][searchTermsType][dates][dateStart|dateEnd]` = a **wide** MM/DD/YYYY window (we use 3 years back → next year-end)
+
+**Gotchas (all confirmed live 2026-06-12):**
+- An **empty** POST body returns a report, but it silently clamps the Due date to the **last 30 days** and drops older past-due invoices. You must pass the token + wide dates to get the true full set.
+- A **partial** body (some fields, no token) is CSRF-rejected → 302/empty.
+- Do **not** set `acctOnFile=1` — it filters to accounts with a card on file and under-counts.
+- The response is an **HTML report** (`#main-table`) with **one row per invoice**, not per customer. Each row carries a `/customer/{id}/…` link and a per-invoice balance in `<span class="balance">N.NN</span>`. A customer's open balance = the **sum** of their invoice balances.
+
+A search POST only READS — it never mutates a record. Canonical fetcher: `src/lib/service/openBalance.ts`. Probe: `scripts/probe-unpaid-form.ts`.
 
 ### Tag values used in routing/categorization
 
@@ -581,11 +604,20 @@ In-season tool flagging active mosquito customers who haven't been serviced rece
 
 **Clock rule.** Any completed mosquito service (any service Type) resets the 15-day clock — NOT Regular-only. Overdue = last mosquito service > 15 days ago, OR no service yet (pinned to top). `INCLUDE_RESPRAY` / `COUNT_ANY_SERVICE_TYPE` in `mosquito.ts` are the toggles to narrow back to Regular(+Respray)-only.
 
-**Hybrid source (the speed fix — ~1–2 min vs ~30 min).** The JWT contract object has no usable last-service date (§9), so:
-1. **Bulk** — `POST /customers/data` (~6 pages) → every customer's "Last Service" date (column 8). **Mosquito-only** eligible customers (no active non-mosquito contract, ~79%) trust this date directly — no scrape.
-2. **Scrape** — **add-on** eligible customers (~21%, also hold an active non-mosquito contract) get the existing per-page `GET /customer/{id}/service-history` scrape (Surface C, READ-ONLY, never switches the selected contract) so the date is mosquito-contract-specific. If the rendered table's contract isn't mosquito, the customer is recorded as `needs_check` rather than mutated.
+**Bucket precedence (added 2026-06-12).** Each eligible customer is placed in exactly one bucket, evaluated in this order (`preServiceBucket()` in `mosquito.ts` handles 1–2 before any service-date logic):
+1. **open balance > 0 → `paused_balance`** — spray is intentionally paused on unpaid accounts, so these are kept out of overdue and listed in their own "Service paused — open balance" section (balance + sign-up date shown, highest balance first). Balance comes from the Unpaid Invoices report (§3.6, `openBalance.ts`). This rule wins even over the new-signup exclusion. An add-on customer caught here never needs a scrape.
+2. **signed up < `NEW_SIGNUP_GRACE_DAYS` (3) ago → `excluded_new`** — brand-new signups we simply haven't serviced yet; excluded from overdue (counted only). They reappear naturally once a spray is due.
+3. **no mosquito service yet → `overdue`** (reason `no_service_yet`, pinned to the top of the overdue list).
+4. **last mosquito service > 15 days → `overdue`**.
+5. **else → `current`**.
 
-First live full refresh (2026-06-10): 1,093 eligible (861 mosquito-only via bulk + 232 add-ons scraped), 81 overdue (9 "no service yet"), 1,006 current, 6 needs-check, 0 failed, ~135s. Code: `src/lib/service/{mosquito,customersData,refresh,serviceHistory}.ts`, `src/components/overdue-view.tsx`, `src/app/service/**`, cron `src/app/api/cron/mosquito-status/route.ts`.
+Every row (overdue / paused / needs-check) shows the customer's **sign-up date** (column 7 of `/customers/data`).
+
+**Hybrid source (the speed fix — ~1–2 min vs ~30 min).** The JWT contract object has no usable last-service date (§9), so:
+1. **Bulk** — `POST /customers/data` (~6 pages) → every customer's "Last Service" date (column 8) **and sign-up date (column 7)**, plus `POST /finance/unpaid-data` (one report, §3.6) → every customer's open balance. Precedence rules 1–2 and **mosquito-only** eligible customers (no active non-mosquito contract, ~79%) are all resolved here — no scrape.
+2. **Scrape** — **add-on** eligible customers (~21%) with no balance and not brand-new get the per-page `GET /customer/{id}/service-history` scrape (Surface C, READ-ONLY, never switches the selected contract) so the date is mosquito-contract-specific. If the rendered table's contract isn't mosquito, the customer is recorded as `needs_check` rather than mutated.
+
+First live full refresh with balances + sign-up + new buckets (2026-06-12): **1,088 eligible · 68 overdue (1 "no service yet") · 29 paused-open-balance · 984 current · 2 excluded-new · 5 needs-check · 0 failed, ~140s** (85 customers owe $29,538.34 across all statuses; 29 of them are eligible mosquito accounts). Prior baseline (2026-06-10, before this change): 1,093 eligible / 81 overdue / 1,006 current / 6 needs-check. Code: `src/lib/service/{mosquito,customersData,openBalance,refresh,serviceHistory}.ts`, `src/components/overdue-view.tsx`, `src/app/service/**`, cron `src/app/api/cron/mosquito-status/route.ts`.
 
 ---
 
@@ -622,7 +654,7 @@ src/
     └── phoneburner/page.tsx           ← status page
 ```
 
-The old plan listed `sync/state.ts` and `sync/leadRouter.ts`; neither ended up as its own file. State (watermarks) lives in `lib/db.ts` via `getSyncState`/`setSyncState`, and routing is inline in `leadSync.ts`. The `pocomos/` directory has additional files outside the PhoneBurner integration story (`customers.ts`, `tags.ts`, `contracts.ts`, `pool.ts`, `contract-tags.ts`, `dataset.ts`, `sales-provider.ts`, `index.ts`) that drive `/sales` and the daily snapshot — they're not listed because they're not part of the PhoneBurner flow this document covers. Likewise `lib/service/` (`mosquito.ts`, `customersData.ts`, `serviceHistory.ts`, `refresh.ts`) + `app/service/**` + `app/api/cron/mosquito-status/route.ts` drive the `/service/overdue` report — see §5.5.
+The old plan listed `sync/state.ts` and `sync/leadRouter.ts`; neither ended up as its own file. State (watermarks) lives in `lib/db.ts` via `getSyncState`/`setSyncState`, and routing is inline in `leadSync.ts`. The `pocomos/` directory has additional files outside the PhoneBurner integration story (`customers.ts`, `tags.ts`, `contracts.ts`, `pool.ts`, `contract-tags.ts`, `dataset.ts`, `sales-provider.ts`, `index.ts`) that drive `/sales` and the daily snapshot — they're not listed because they're not part of the PhoneBurner flow this document covers. Likewise `lib/service/` (`mosquito.ts`, `customersData.ts`, `openBalance.ts`, `serviceHistory.ts`, `refresh.ts`) + `app/service/**` + `app/api/cron/mosquito-status/route.ts` drive the `/service/overdue` report — see §5.5.
 
 ---
 
@@ -647,11 +679,14 @@ CREATE TABLE mosquito_service_status (
   selected_contract_label TEXT,      -- only set on needs_check rows (scrape path)
   last_regular_spray DATE,           -- last mosquito service (any type); NULL = no service yet
   days_since INTEGER,                -- NULL = no service yet (pinned to top of overdue)
-  status TEXT NOT NULL,              -- 'overdue' | 'current' | 'needs_check'
-  reason TEXT,                       -- 'overdue' | 'current' | 'no_service_yet' | 'mosquito_not_selected'
+  status TEXT NOT NULL,              -- 'overdue' | 'current' | 'needs_check' | 'paused_balance' | 'excluded_new'
+  reason TEXT,                       -- 'overdue' | 'current' | 'no_service_yet' | 'mosquito_not_selected' | 'open_balance' | 'new_signup'
+  sign_up_date DATE,                 -- /customers/data col 7 (added 2026-06-12); shown on every row
+  open_balance NUMERIC(10,2) NOT NULL DEFAULT 0,  -- Unpaid Invoices report (§3.6); >0 → paused_balance bucket
   last_checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
+The `sign_up_date` and `open_balance` columns were added 2026-06-12; `initSchema()` includes them in the `CREATE` and also runs `ALTER TABLE … ADD COLUMN IF NOT EXISTS` for environments where the table predates them.
 
 ### Tables to add for PhoneBurner
 

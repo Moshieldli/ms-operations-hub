@@ -31,6 +31,15 @@ import type { ServiceRow } from "./serviceHistory";
 export const OVERDUE_THRESHOLD_DAYS = 15;
 
 /**
+ * A customer who signed up within this many days is excluded from overdue —
+ * we simply haven't had a chance to service them yet. They reappear once a
+ * spray is actually due (signup age >= this). NOTE: this is overridden by an
+ * open balance (precedence rule 1): a brand-new signup who already owes money
+ * still surfaces in the paused section.
+ */
+export const NEW_SIGNUP_GRACE_DAYS = 3;
+
+/**
  * The pest_contract.service_type values that count as a mosquito contract.
  * Kept as a Set for O(1) membership; matching is case-insensitive + trimmed.
  */
@@ -181,17 +190,59 @@ export function renderedTableIsMosquito(
   return /mosquito/i.test(label);
 }
 
-export type MosquitoStatus = "overdue" | "current" | "needs_check";
+export type MosquitoStatus =
+  | "overdue"
+  | "current"
+  | "needs_check"
+  | "paused_balance"
+  | "excluded_new";
 
 export interface MosquitoStatusResult {
   status: MosquitoStatus;
   /** Why — machine-readable: 'overdue' | 'no_service_yet' | 'current'
-   *  | 'mosquito_not_selected' | 'scrape_failed' | 'no_history'. */
+   *  | 'mosquito_not_selected' | 'scrape_failed' | 'no_history'
+   *  | 'open_balance' | 'new_signup'. */
   reason: string;
   /** ISO date (YYYY-MM-DD) of the most recent qualifying mosquito service, or null. */
   lastRegularSpray: string | null;
   /** Whole days since lastRegularSpray, or null when there's no service yet. */
   daysSince: number | null;
+}
+
+/**
+ * Bucket-precedence rules that take effect BEFORE any service-date logic.
+ * Applied in this order (per the report spec):
+ *   1. open balance > 0           → "paused_balance" (spray intentionally paused
+ *                                    on unpaid accounts; goes to its own section)
+ *   2. signed up < grace days ago → "excluded_new" (not serviced yet)
+ * Returns null when neither applies and the caller should fall through to the
+ * service-date status (no-service-yet pin / overdue / current).
+ */
+export function preServiceBucket(
+  openBalance: number,
+  signUp: Date | null,
+  now: Date = new Date()
+): MosquitoStatusResult | null {
+  if (openBalance > 0) {
+    return {
+      status: "paused_balance",
+      reason: "open_balance",
+      lastRegularSpray: null,
+      daysSince: null,
+    };
+  }
+  if (signUp) {
+    const age = daysBetween(signUp, now);
+    if (age >= 0 && age < NEW_SIGNUP_GRACE_DAYS) {
+      return {
+        status: "excluded_new",
+        reason: "new_signup",
+        lastRegularSpray: null,
+        daysSince: null,
+      };
+    }
+  }
+  return null;
 }
 
 function toIsoDate(d: Date): string {

@@ -18,7 +18,8 @@ import { postSessioned } from "@/lib/pocomos/webSession";
 
 const PAGE_SIZE = 200;
 const COLS = 11; // 0..10 per the /customers/ table header
-const LAST_SERVICE_COL = "8";
+const SIGN_UP_COL = "7"; // "Sign up date" — confirmed live 2026-06-12
+const LAST_SERVICE_COL = "8"; // "Last Service" (any service type)
 
 export interface CustomerLastService {
   id: string;
@@ -26,6 +27,10 @@ export interface CustomerLastService {
   lastService: Date | null;
   /** Raw cell text as shown, e.g. "06/09/26". */
   lastServiceRaw: string;
+  /** Parsed "Sign up date" (column 7) or null when blank. */
+  signUp: Date | null;
+  /** Raw "Sign up date" cell text, e.g. "01/28/21". */
+  signUpRaw: string;
   /** multiple_contracts flag from the row (0 = single contract). */
   multipleContracts: number;
   /** Status cell (column 6), e.g. "Active". */
@@ -103,10 +108,13 @@ export async function fetchAllCustomersLastService(
       const id = String(r.id ?? "");
       if (!id) continue;
       const raw = String(r[LAST_SERVICE_COL] ?? "").trim();
+      const signUpRaw = String(r[SIGN_UP_COL] ?? "").trim();
       byId.set(id, {
         id,
         lastService: parseShortUsDate(raw),
         lastServiceRaw: raw,
+        signUp: parseShortUsDate(signUpRaw),
+        signUpRaw,
         multipleContracts: Number(r.multiple_contracts ?? 0),
         status: String(r["6"] ?? ""),
       });

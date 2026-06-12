@@ -30,10 +30,12 @@ import { getDataset, fetchPooled } from "@/lib/pocomos";
 import { getSessionedHtml } from "@/lib/pocomos/webSession";
 import { parseServiceHistory, looksLikeLoginPage } from "./serviceHistory";
 import { fetchAllCustomersLastService } from "./customersData";
+import { fetchOpenBalances } from "./openBalance";
 import {
   selectEligible,
   computeMosquitoStatus,
   statusFromLastServiceDate,
+  preServiceBucket,
   renderedTableIsMosquito,
   type EligibleCustomer,
 } from "./mosquito";
@@ -59,9 +61,17 @@ export interface RefreshMeta {
   overdue: number;
   current: number;
   needsCheck: number;
+  /** Eligible customers with an open balance > 0 (spray intentionally paused). */
+  pausedBalance: number;
+  /** Eligible customers excluded as brand-new signups (< grace days). */
+  excludedNew: number;
   /** Subset of overdue with no service date at all (pinned "no spray yet"). */
   noServiceYet: number;
   failed: number;
+  /** Customers found in the unpaid-invoices report (telemetry). */
+  balanceCustomers: number;
+  /** Sum of all open balances across eligible customers (telemetry). */
+  openBalanceTotal: number;
   reachedEndOfQueue: boolean;
   durationMs: number;
 }
@@ -79,6 +89,14 @@ function sleep(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
 }
 
+/** Local-midnight Date → "YYYY-MM-DD". */
+function toIso(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 interface UpsertRow {
   id: string;
   fullName: string;
@@ -88,6 +106,8 @@ interface UpsertRow {
   daysSince: number | null;
   status: string;
   reason: string;
+  signUpDate: string | null;
+  openBalance: number;
 }
 
 /** Single-row upsert (used by the scrape path). */
@@ -95,10 +115,12 @@ async function upsert(row: UpsertRow): Promise<void> {
   await sql`
     INSERT INTO mosquito_service_status (
       pocomos_id, full_name, mosquito_contract_type, selected_contract_label,
-      last_regular_spray, days_since, status, reason, last_checked_at
+      last_regular_spray, days_since, status, reason, sign_up_date, open_balance,
+      last_checked_at
     ) VALUES (
       ${row.id}, ${row.fullName}, ${row.mosquitoContractType}, ${row.selectedContractLabel},
-      ${row.lastRegularSpray}, ${row.daysSince}, ${row.status}, ${row.reason}, NOW()
+      ${row.lastRegularSpray}, ${row.daysSince}, ${row.status}, ${row.reason},
+      ${row.signUpDate}, ${row.openBalance}, NOW()
     )
     ON CONFLICT (pocomos_id) DO UPDATE SET
       full_name = EXCLUDED.full_name,
@@ -108,6 +130,8 @@ async function upsert(row: UpsertRow): Promise<void> {
       days_since = EXCLUDED.days_since,
       status = EXCLUDED.status,
       reason = EXCLUDED.reason,
+      sign_up_date = EXCLUDED.sign_up_date,
+      open_balance = EXCLUDED.open_balance,
       last_checked_at = NOW()
   `;
 }
@@ -124,18 +148,22 @@ async function bulkUpsert(rows: UpsertRow[]): Promise<void> {
     const days = chunk.map((r) => r.daysSince);
     const statuses = chunk.map((r) => r.status);
     const reasons = chunk.map((r) => r.reason);
+    const signUps = chunk.map((r) => r.signUpDate);
+    const balances = chunk.map((r) => r.openBalance);
     await sql`
       INSERT INTO mosquito_service_status (
         pocomos_id, full_name, mosquito_contract_type, selected_contract_label,
-        last_regular_spray, days_since, status, reason, last_checked_at
+        last_regular_spray, days_since, status, reason, sign_up_date, open_balance,
+        last_checked_at
       )
       SELECT pocomos_id, full_name, mosquito_contract_type, selected_contract_label,
-             last_regular_spray, days_since, status, reason, NOW()
+             last_regular_spray, days_since, status, reason, sign_up_date, open_balance, NOW()
       FROM UNNEST(
         ${ids}::text[], ${names}::text[], ${types}::text[], ${labels}::text[],
-        ${sprays}::date[], ${days}::int[], ${statuses}::text[], ${reasons}::text[]
+        ${sprays}::date[], ${days}::int[], ${statuses}::text[], ${reasons}::text[],
+        ${signUps}::date[], ${balances}::numeric[]
       ) AS t(pocomos_id, full_name, mosquito_contract_type, selected_contract_label,
-             last_regular_spray, days_since, status, reason)
+             last_regular_spray, days_since, status, reason, sign_up_date, open_balance)
       ON CONFLICT (pocomos_id) DO UPDATE SET
         full_name = EXCLUDED.full_name,
         mosquito_contract_type = EXCLUDED.mosquito_contract_type,
@@ -144,6 +172,8 @@ async function bulkUpsert(rows: UpsertRow[]): Promise<void> {
         days_since = EXCLUDED.days_since,
         status = EXCLUDED.status,
         reason = EXCLUDED.reason,
+        sign_up_date = EXCLUDED.sign_up_date,
+        open_balance = EXCLUDED.open_balance,
         last_checked_at = NOW()
     `;
   }
@@ -189,35 +219,86 @@ export async function refreshMosquitoStatus(
   let current = 0;
   let needsCheck = 0;
   let noServiceYet = 0;
+  let pausedBalance = 0;
+  let excludedNew = 0;
   let failed = 0;
 
-  // ---- BULK phase: mosquito-only via /customers/data "Last Service" ----
+  // ---- Bulk sources (both cheap, READ-ONLY): "Last Service" + sign-up date
+  //      from /customers/data, and open balances from the Unpaid Invoices
+  //      report. ----
   const bulk = await fetchAllCustomersLastService();
-  const bulkRows: UpsertRow[] = mosquitoOnly.map((e) => {
-    const rec = bulk.byId.get(e.id);
-    const st = statusFromLastServiceDate(rec?.lastService ?? null, now);
+  const balances = await fetchOpenBalances(now);
+
+  const signUpFor = (id: string): string | null => {
+    const d = bulk.byId.get(id)?.signUp ?? null;
+    return d ? toIso(d) : null;
+  };
+  const balanceFor = (id: string): number => balances.byId.get(id)?.balance ?? 0;
+
+  // ---- BULK phase: everything resolvable without a scrape. That's
+  //      mosquito-only customers (their "Last Service" IS their mosquito date)
+  //      PLUS any eligible customer the precedence rules settle up front
+  //      (open balance > 0 → paused; brand-new signup → excluded), regardless
+  //      of add-on status. Add-on customers caught by precedence never need a
+  //      scrape. ----
+  const bulkRows: UpsertRow[] = [];
+  const toScrape: EligibleCustomer[] = [];
+
+  for (const e of eligible) {
+    const signUpDate = signUpFor(e.id);
+    const openBalance = balanceFor(e.id);
+    const pre = preServiceBucket(openBalance, bulk.byId.get(e.id)?.signUp ?? null, now);
+
+    if (pre) {
+      if (pre.status === "paused_balance") pausedBalance++;
+      else excludedNew++;
+      bulkRows.push({
+        id: e.id,
+        fullName: e.fullName,
+        mosquitoContractType: e.mosquitoContractType,
+        selectedContractLabel: null,
+        lastRegularSpray: pre.lastRegularSpray,
+        daysSince: pre.daysSince,
+        status: pre.status,
+        reason: pre.reason,
+        signUpDate,
+        openBalance,
+      });
+      continue;
+    }
+
+    if (e.hasAddOn) {
+      // Needs the targeted service-history scrape to get a mosquito-specific date.
+      toScrape.push(e);
+      continue;
+    }
+
+    // Mosquito-only: bulk "Last Service" date is authoritative.
+    const st = statusFromLastServiceDate(bulk.byId.get(e.id)?.lastService ?? null, now);
     if (st.status === "overdue") {
       overdue++;
       if (st.daysSince == null) noServiceYet++;
     } else {
       current++;
     }
-    return {
+    bulkRows.push({
       id: e.id,
       fullName: e.fullName,
       mosquitoContractType: e.mosquitoContractType,
-      // Not a needs_check row; bulk path has no selected-contract label.
       selectedContractLabel: null,
       lastRegularSpray: st.lastRegularSpray,
       daysSince: st.daysSince,
       status: st.status,
       reason: st.reason,
-    };
-  });
+      signUpDate,
+      openBalance,
+    });
+  }
   await bulkUpsert(bulkRows);
 
-  // ---- SCRAPE phase: add-on customers, targeted per-page (READ-ONLY GET) ----
-  const work = addOn.slice(0, maxCustomers);
+  // ---- SCRAPE phase: add-on customers with no balance / not brand-new,
+  //      targeted per-page (READ-ONLY GET). ----
+  const work = toScrape.slice(0, maxCustomers);
   let scraped = 0;
   let budgetHit = false;
 
@@ -232,6 +313,7 @@ export async function refreshMosquitoStatus(
       throw new Error("login page returned (session)");
     }
     const parsed = parseServiceHistory(html);
+    const signUpDate = signUpFor(e.id);
 
     if (!renderedTableIsMosquito(parsed.tableContractLabel, parsed.selectedContractLabel)) {
       // Selected contract isn't mosquito — DO NOT switch. Flag for manual check.
@@ -245,6 +327,8 @@ export async function refreshMosquitoStatus(
         daysSince: null,
         status: "needs_check",
         reason: "mosquito_not_selected",
+        signUpDate,
+        openBalance: 0,
       });
       scraped++;
       return;
@@ -266,6 +350,8 @@ export async function refreshMosquitoStatus(
       daysSince: st.daysSince,
       status: st.status,
       reason: st.reason,
+      signUpDate,
+      openBalance: 0,
     });
     scraped++;
   };
@@ -286,9 +372,13 @@ export async function refreshMosquitoStatus(
     overdue,
     current,
     needsCheck,
+    pausedBalance,
+    excludedNew,
     noServiceYet,
     failed,
-    reachedEndOfQueue: !budgetHit && work.length === addOn.length,
+    balanceCustomers: balances.byId.size,
+    openBalanceTotal: balances.totalBalance,
+    reachedEndOfQueue: !budgetHit && work.length === toScrape.length,
     durationMs: Date.now() - t0,
   };
   await setSyncState(RUN_META_KEY, meta);
@@ -306,13 +396,24 @@ export interface MosquitoStatusRow {
   days_since: number | null;
   status: string;
   reason: string | null;
+  sign_up_date: string | null;
+  open_balance: number;
   last_checked_at: string;
 }
 
 export interface OverdueReport {
   overdue: MosquitoStatusRow[];
+  /** Eligible customers with an open balance > 0 (spray paused), balance DESC. */
+  pausedBalance: MosquitoStatusRow[];
   needsCheck: MosquitoStatusRow[];
-  counts: { overdue: number; current: number; needsCheck: number; total: number };
+  counts: {
+    overdue: number;
+    current: number;
+    needsCheck: number;
+    pausedBalance: number;
+    excludedNew: number;
+    total: number;
+  };
   meta: RefreshMeta | null;
   /** Most recent last_checked_at across all rows (ISO), or null if empty. */
   lastRefreshedAt: string | null;
@@ -334,6 +435,8 @@ function normalizeRow(r: Record<string, unknown>): MosquitoStatusRow {
     days_since: r.days_since == null ? null : Number(r.days_since),
     status: String(r.status),
     reason: (r.reason as string) ?? null,
+    sign_up_date: toDateStr(r.sign_up_date),
+    open_balance: r.open_balance == null ? 0 : Number(r.open_balance),
     last_checked_at:
       r.last_checked_at instanceof Date
         ? (r.last_checked_at as Date).toISOString()
@@ -364,7 +467,11 @@ export async function getOverdueReport(): Promise<OverdueReport> {
   const needsCheck = all
     .filter((r) => r.status === "needs_check")
     .sort((a, b) => (a.full_name || "").localeCompare(b.full_name || ""));
+  const pausedBalance = all
+    .filter((r) => r.status === "paused_balance")
+    .sort((a, b) => b.open_balance - a.open_balance);
   const currentCount = all.filter((r) => r.status === "current").length;
+  const excludedNewCount = all.filter((r) => r.status === "excluded_new").length;
 
   let lastRefreshedAt: string | null = null;
   for (const r of all) {
@@ -377,11 +484,14 @@ export async function getOverdueReport(): Promise<OverdueReport> {
 
   return {
     overdue,
+    pausedBalance,
     needsCheck,
     counts: {
       overdue: overdue.length,
       current: currentCount,
       needsCheck: needsCheck.length,
+      pausedBalance: pausedBalance.length,
+      excludedNew: excludedNewCount,
       total: all.length,
     },
     meta,

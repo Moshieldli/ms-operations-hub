@@ -18,6 +18,20 @@ function fmt(n: number) {
   return n.toLocaleString("en-US");
 }
 
+function money(n: number) {
+  return n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
+/** "2026-06-09" → "06/09/26" (matches the Pocomos UI short date). */
+function shortDate(iso: string | null): string {
+  if (!iso) return "—";
+  const m = iso.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return iso;
+  return `${m[2]}/${m[3]}/${m[1].slice(2)}`;
+}
+
+type RowKind = "overdue" | "needsCheck" | "paused";
+
 export function OverdueView({ initial }: { initial: OverdueReport }) {
   const [report, setReport] = useState<OverdueReport>(initial);
   const [refreshing, setRefreshing] = useState(false);
@@ -70,7 +84,12 @@ export function OverdueView({ initial }: { initial: OverdueReport }) {
                 <span className="opacity-70">
                   {" "}
                   · {fmt(meta.eligible)} eligible · {fmt(meta.mosquitoOnly)} via
-                  bulk · {fmt(meta.scraped)}/{fmt(meta.addOn)} add-ons scraped
+                  bulk · {fmt(meta.scraped)} add-ons scraped
+                  {meta.pausedBalance
+                    ? ` · ${fmt(meta.pausedBalance)} paused (${money(
+                        meta.openBalanceTotal
+                      )} owed)`
+                    : ""}
                   {meta.failed ? ` · ${meta.failed} failed` : ""}
                   {!meta.reachedEndOfQueue
                     ? " · partial run (more pending — run again)"
@@ -97,13 +116,18 @@ export function OverdueView({ initial }: { initial: OverdueReport }) {
       <p className="text-xs text-muted-foreground">
         In-season tool. During mosquito season this flags accounts that have
         slipped past their weekly cadence. Off-season (no one is being sprayed),
-        everyone reads as overdue — that&rsquo;s expected.
+        everyone reads as overdue — that&rsquo;s expected. Accounts with an open
+        balance are listed separately (spray is intentionally paused), and
+        signups from the last {""}
+        3 days are held back until a spray is actually due.
       </p>
 
       {/* Stat row */}
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 lg:grid-cols-6">
         <Stat label="Overdue" value={fmt(counts.overdue)} accent />
+        <Stat label="Paused (balance)" value={fmt(counts.pausedBalance)} amber />
         <Stat label="Current" value={fmt(counts.current)} />
+        <Stat label="Excluded (new)" value={fmt(counts.excludedNew)} />
         <Stat label="Needs manual check" value={fmt(counts.needsCheck)} />
         <Stat label="Eligible (mosquito)" value={fmt(counts.total)} />
       </div>
@@ -115,7 +139,8 @@ export function OverdueView({ initial }: { initial: OverdueReport }) {
           <CardDescription>
             Sorted by days since last mosquito service (longest first). &ldquo;No
             spray yet&rdquo; accounts (a 2026 signup awaiting their first
-            service) are pinned to the top.
+            service) are pinned to the top. Accounts with an open balance are not
+            here — see the paused section below.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -125,6 +150,27 @@ export function OverdueView({ initial }: { initial: OverdueReport }) {
             </p>
           ) : (
             <RowTable rows={report.overdue} kind="overdue" />
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Service paused — open balance */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Service paused — open balance</CardTitle>
+          <CardDescription>
+            Eligible mosquito accounts carrying an open balance. We intentionally
+            pause spray on unpaid accounts, so these are kept out of the overdue
+            list. Highest balance first.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {report.pausedBalance.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No eligible accounts with an open balance.
+            </p>
+          ) : (
+            <RowTable rows={report.pausedBalance} kind="paused" />
           )}
         </CardContent>
       </Card>
@@ -159,10 +205,12 @@ function Stat({
   label,
   value,
   accent,
+  amber,
 }: {
   label: string;
   value: string;
   accent?: boolean;
+  amber?: boolean;
 }) {
   return (
     <div className="rounded-md border p-3 sm:p-4">
@@ -171,7 +219,11 @@ function Stat({
       </div>
       <div
         className={`mt-1 text-xl font-semibold tabular-nums sm:text-2xl ${
-          accent ? "text-rose-600 dark:text-rose-400" : ""
+          accent
+            ? "text-rose-600 dark:text-rose-400"
+            : amber
+            ? "text-amber-600 dark:text-amber-400"
+            : ""
         }`}
       >
         {value}
@@ -180,13 +232,7 @@ function Stat({
   );
 }
 
-function RowTable({
-  rows,
-  kind,
-}: {
-  rows: MosquitoStatusRow[];
-  kind: "overdue" | "needsCheck";
-}) {
+function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowKind }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -199,9 +245,12 @@ function RowTable({
                 <th className="py-2 pr-4 font-medium">Last mosquito service</th>
                 <th className="py-2 pr-4 text-right font-medium">Days since</th>
               </>
+            ) : kind === "paused" ? (
+              <th className="py-2 pr-4 text-right font-medium">Balance</th>
             ) : (
               <th className="py-2 pr-4 font-medium">Selected contract</th>
             )}
+            <th className="py-2 pr-4 font-medium">Sign-up</th>
             <th className="py-2 pl-4 text-right font-medium">Pocomos</th>
           </tr>
         </thead>
@@ -215,7 +264,9 @@ function RowTable({
               {kind === "overdue" ? (
                 <>
                   <td className="py-2 pr-4 tabular-nums">
-                    {r.last_regular_spray ?? (
+                    {r.last_regular_spray ? (
+                      shortDate(r.last_regular_spray)
+                    ) : (
                       <span className="text-rose-600 dark:text-rose-400">
                         no spray yet
                       </span>
@@ -225,14 +276,23 @@ function RowTable({
                     {r.days_since == null ? "—" : fmt(r.days_since)}
                   </td>
                 </>
+              ) : kind === "paused" ? (
+                <td className="py-2 pr-4 text-right font-semibold tabular-nums text-amber-700 dark:text-amber-400">
+                  {money(r.open_balance)}
+                </td>
               ) : (
                 <td className="py-2 pr-4 text-muted-foreground">
                   {r.selected_contract_label || "—"}
                 </td>
               )}
+              <td className="py-2 pr-4 tabular-nums text-muted-foreground">
+                {shortDate(r.sign_up_date)}
+              </td>
               <td className="py-2 pl-4 text-right">
                 <a
-                  href={`${POCOMOS_BASE}/customer/${r.pocomos_id}/service-history`}
+                  href={`${POCOMOS_BASE}/customer/${r.pocomos_id}/${
+                    kind === "paused" ? "service-information" : "service-history"
+                  }`}
                   target="_blank"
                   rel="noreferrer"
                   className="text-primary underline-offset-4 hover:underline"

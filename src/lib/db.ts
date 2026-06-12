@@ -111,12 +111,18 @@ export async function initSchema(): Promise<void> {
       days_since INTEGER,
       status TEXT NOT NULL,
       reason TEXT,
+      sign_up_date DATE,
+      open_balance NUMERIC(10,2) NOT NULL DEFAULT 0,
       last_checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
   await c`CREATE INDEX IF NOT EXISTS mosquito_service_status_status_idx ON mosquito_service_status(status)`;
   await c`CREATE INDEX IF NOT EXISTS mosquito_service_status_days_since_idx ON mosquito_service_status(days_since DESC)`;
   await c`CREATE INDEX IF NOT EXISTS mosquito_service_status_checked_idx ON mosquito_service_status(last_checked_at)`;
+  // Added 2026-06-12 (sign-up date + open-balance / paused-account buckets).
+  // Cover environments where the table predates these columns.
+  await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS sign_up_date DATE`;
+  await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS open_balance NUMERIC(10,2) NOT NULL DEFAULT 0`;
 
   await c`
     CREATE TABLE IF NOT EXISTS phoneburner_contacts (
