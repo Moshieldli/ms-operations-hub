@@ -37,6 +37,7 @@ import {
   statusFromLastServiceDate,
   preServiceBucket,
   renderedTableIsMosquito,
+  parseDbDate,
   type EligibleCustomer,
 } from "./mosquito";
 
@@ -108,6 +109,10 @@ interface UpsertRow {
   reason: string;
   signUpDate: string | null;
   openBalance: number;
+  /** Next scheduled service (any type) from /customers/data col 9, ISO or null. */
+  nextServiceDate: string | null;
+  /** Weekly-cadence marker for the display-only "Weekly" pill. */
+  isWeekly: boolean;
 }
 
 /** Single-row upsert (used by the scrape path). */
@@ -116,11 +121,11 @@ async function upsert(row: UpsertRow): Promise<void> {
     INSERT INTO mosquito_service_status (
       pocomos_id, full_name, mosquito_contract_type, selected_contract_label,
       last_regular_spray, days_since, status, reason, sign_up_date, open_balance,
-      last_checked_at
+      next_service_date, is_weekly, last_checked_at
     ) VALUES (
       ${row.id}, ${row.fullName}, ${row.mosquitoContractType}, ${row.selectedContractLabel},
       ${row.lastRegularSpray}, ${row.daysSince}, ${row.status}, ${row.reason},
-      ${row.signUpDate}, ${row.openBalance}, NOW()
+      ${row.signUpDate}, ${row.openBalance}, ${row.nextServiceDate}, ${row.isWeekly}, NOW()
     )
     ON CONFLICT (pocomos_id) DO UPDATE SET
       full_name = EXCLUDED.full_name,
@@ -132,6 +137,8 @@ async function upsert(row: UpsertRow): Promise<void> {
       reason = EXCLUDED.reason,
       sign_up_date = EXCLUDED.sign_up_date,
       open_balance = EXCLUDED.open_balance,
+      next_service_date = EXCLUDED.next_service_date,
+      is_weekly = EXCLUDED.is_weekly,
       last_checked_at = NOW()
   `;
 }
@@ -150,20 +157,24 @@ async function bulkUpsert(rows: UpsertRow[]): Promise<void> {
     const reasons = chunk.map((r) => r.reason);
     const signUps = chunk.map((r) => r.signUpDate);
     const balances = chunk.map((r) => r.openBalance);
+    const nexts = chunk.map((r) => r.nextServiceDate);
+    const weeklies = chunk.map((r) => r.isWeekly);
     await sql`
       INSERT INTO mosquito_service_status (
         pocomos_id, full_name, mosquito_contract_type, selected_contract_label,
         last_regular_spray, days_since, status, reason, sign_up_date, open_balance,
-        last_checked_at
+        next_service_date, is_weekly, last_checked_at
       )
       SELECT pocomos_id, full_name, mosquito_contract_type, selected_contract_label,
-             last_regular_spray, days_since, status, reason, sign_up_date, open_balance, NOW()
+             last_regular_spray, days_since, status, reason, sign_up_date, open_balance,
+             next_service_date, is_weekly, NOW()
       FROM UNNEST(
         ${ids}::text[], ${names}::text[], ${types}::text[], ${labels}::text[],
         ${sprays}::date[], ${days}::int[], ${statuses}::text[], ${reasons}::text[],
-        ${signUps}::date[], ${balances}::numeric[]
+        ${signUps}::date[], ${balances}::numeric[], ${nexts}::date[], ${weeklies}::boolean[]
       ) AS t(pocomos_id, full_name, mosquito_contract_type, selected_contract_label,
-             last_regular_spray, days_since, status, reason, sign_up_date, open_balance)
+             last_regular_spray, days_since, status, reason, sign_up_date, open_balance,
+             next_service_date, is_weekly)
       ON CONFLICT (pocomos_id) DO UPDATE SET
         full_name = EXCLUDED.full_name,
         mosquito_contract_type = EXCLUDED.mosquito_contract_type,
@@ -174,6 +185,8 @@ async function bulkUpsert(rows: UpsertRow[]): Promise<void> {
         reason = EXCLUDED.reason,
         sign_up_date = EXCLUDED.sign_up_date,
         open_balance = EXCLUDED.open_balance,
+        next_service_date = EXCLUDED.next_service_date,
+        is_weekly = EXCLUDED.is_weekly,
         last_checked_at = NOW()
     `;
   }
@@ -229,11 +242,17 @@ export async function refreshMosquitoStatus(
   const bulk = await fetchAllCustomersLastService();
   const balances = await fetchOpenBalances(now);
 
-  const signUpFor = (id: string): string | null => {
-    const d = bulk.byId.get(id)?.signUp ?? null;
+  // Sign-up now comes from the ELIGIBLE mosquito contract's top-level
+  // `date_start` (carried on EligibleCustomer.signUpDate) — the active contract
+  // that passed eligibility — NOT grid col 7 (the customer's stale ORIGINAL
+  // signup) and NEVER date_end (stale on auto-renew contracts). This is what
+  // Pocomos's Edit screen shows as "Date Signed Up".
+  const balanceFor = (id: string): number => balances.byId.get(id)?.balance ?? 0;
+  /** Next scheduled service (any type) from /customers/data col 9, ISO or null. */
+  const nextServiceFor = (id: string): string | null => {
+    const d = bulk.byId.get(id)?.nextService ?? null;
     return d ? toIso(d) : null;
   };
-  const balanceFor = (id: string): number => balances.byId.get(id)?.balance ?? 0;
 
   // ---- BULK phase: everything resolvable without a scrape. That's
   //      mosquito-only customers (their "Last Service" IS their mosquito date)
@@ -245,9 +264,11 @@ export async function refreshMosquitoStatus(
   const toScrape: EligibleCustomer[] = [];
 
   for (const e of eligible) {
-    const signUpDate = signUpFor(e.id);
+    const signUpDate = e.signUpDate; // active mosquito contract's date_start (ISO)
+    const signUp = parseDbDate(signUpDate); // for the new-signup grace check
     const openBalance = balanceFor(e.id);
-    const pre = preServiceBucket(openBalance, bulk.byId.get(e.id)?.signUp ?? null, now);
+    const nextServiceDate = nextServiceFor(e.id);
+    const pre = preServiceBucket(openBalance, signUp, now);
 
     if (pre) {
       if (pre.status === "paused_balance") pausedBalance++;
@@ -263,6 +284,8 @@ export async function refreshMosquitoStatus(
         reason: pre.reason,
         signUpDate,
         openBalance,
+        nextServiceDate,
+        isWeekly: e.isWeekly,
       });
       continue;
     }
@@ -292,6 +315,8 @@ export async function refreshMosquitoStatus(
       reason: st.reason,
       signUpDate,
       openBalance,
+      nextServiceDate,
+      isWeekly: e.isWeekly,
     });
   }
   await bulkUpsert(bulkRows);
@@ -313,7 +338,8 @@ export async function refreshMosquitoStatus(
       throw new Error("login page returned (session)");
     }
     const parsed = parseServiceHistory(html);
-    const signUpDate = signUpFor(e.id);
+    const signUpDate = e.signUpDate; // active mosquito contract's date_start (ISO)
+    const nextServiceDate = nextServiceFor(e.id);
 
     if (!renderedTableIsMosquito(parsed.tableContractLabel, parsed.selectedContractLabel)) {
       // Selected contract isn't mosquito — DO NOT switch. Flag for manual check.
@@ -329,6 +355,8 @@ export async function refreshMosquitoStatus(
         reason: "mosquito_not_selected",
         signUpDate,
         openBalance: 0,
+        nextServiceDate,
+        isWeekly: e.isWeekly,
       });
       scraped++;
       return;
@@ -352,6 +380,8 @@ export async function refreshMosquitoStatus(
       reason: st.reason,
       signUpDate,
       openBalance: 0,
+      nextServiceDate,
+      isWeekly: e.isWeekly,
     });
     scraped++;
   };
@@ -398,6 +428,8 @@ export interface MosquitoStatusRow {
   reason: string | null;
   sign_up_date: string | null;
   open_balance: number;
+  next_service_date: string | null;
+  is_weekly: boolean;
   last_checked_at: string;
 }
 
@@ -437,6 +469,8 @@ function normalizeRow(r: Record<string, unknown>): MosquitoStatusRow {
     reason: (r.reason as string) ?? null,
     sign_up_date: toDateStr(r.sign_up_date),
     open_balance: r.open_balance == null ? 0 : Number(r.open_balance),
+    next_service_date: toDateStr(r.next_service_date),
+    is_weekly: r.is_weekly === true,
     last_checked_at:
       r.last_checked_at instanceof Date
         ? (r.last_checked_at as Date).toISOString()

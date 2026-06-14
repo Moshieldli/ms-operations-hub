@@ -113,6 +113,8 @@ export async function initSchema(): Promise<void> {
       reason TEXT,
       sign_up_date DATE,
       open_balance NUMERIC(10,2) NOT NULL DEFAULT 0,
+      next_service_date DATE,
+      is_weekly BOOLEAN NOT NULL DEFAULT FALSE,
       last_checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
@@ -123,6 +125,9 @@ export async function initSchema(): Promise<void> {
   // Cover environments where the table predates these columns.
   await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS sign_up_date DATE`;
   await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS open_balance NUMERIC(10,2) NOT NULL DEFAULT 0`;
+  // Added 2026-06-14 (next-scheduled-service column + weekly-cadence pill).
+  await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS next_service_date DATE`;
+  await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS is_weekly BOOLEAN NOT NULL DEFAULT FALSE`;
 
   await c`
     CREATE TABLE IF NOT EXISTS phoneburner_contacts (

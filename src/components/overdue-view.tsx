@@ -250,6 +250,7 @@ function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowKind }) 
             ) : (
               <th className="py-2 pr-4 font-medium">Selected contract</th>
             )}
+            <th className="py-2 pr-4 font-medium">Next scheduled</th>
             <th className="py-2 pr-4 font-medium">Sign-up</th>
             <th className="py-2 pl-4 text-right font-medium">Pocomos</th>
           </tr>
@@ -257,7 +258,16 @@ function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowKind }) 
         <tbody>
           {rows.map((r) => (
             <tr key={r.pocomos_id} className="border-b last:border-0">
-              <td className="py-2 pr-4 font-medium">{r.full_name || r.pocomos_id}</td>
+              <td className="py-2 pr-4 font-medium">
+                <span className="inline-flex items-center gap-1.5">
+                  {r.full_name || r.pocomos_id}
+                  {r.is_weekly ? (
+                    <span className="rounded-full border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-700 dark:border-sky-900/50 dark:bg-sky-950/40 dark:text-sky-300">
+                      Weekly
+                    </span>
+                  ) : null}
+                </span>
+              </td>
               <td className="py-2 pr-4 text-muted-foreground">
                 {r.mosquito_contract_type || "—"}
               </td>
@@ -285,6 +295,9 @@ function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowKind }) 
                   {r.selected_contract_label || "—"}
                 </td>
               )}
+              <td className="py-2 pr-4 tabular-nums text-muted-foreground">
+                {shortDate(r.next_service_date)}
+              </td>
               <td className="py-2 pr-4 tabular-nums text-muted-foreground">
                 {shortDate(r.sign_up_date)}
               </td>

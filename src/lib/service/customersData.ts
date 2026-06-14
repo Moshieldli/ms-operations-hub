@@ -20,6 +20,7 @@ const PAGE_SIZE = 200;
 const COLS = 11; // 0..10 per the /customers/ table header
 const SIGN_UP_COL = "7"; // "Sign up date" — confirmed live 2026-06-12
 const LAST_SERVICE_COL = "8"; // "Last Service" (any service type)
+const NEXT_SERVICE_COL = "9"; // "Next Service" (next scheduled, any service type)
 
 export interface CustomerLastService {
   id: string;
@@ -31,6 +32,10 @@ export interface CustomerLastService {
   signUp: Date | null;
   /** Raw "Sign up date" cell text, e.g. "01/28/21". */
   signUpRaw: string;
+  /** Parsed "Next Service" (column 9) — next scheduled service, any type — or null. */
+  nextService: Date | null;
+  /** Raw "Next Service" cell text, e.g. "06/15/26". */
+  nextServiceRaw: string;
   /** multiple_contracts flag from the row (0 = single contract). */
   multipleContracts: number;
   /** Status cell (column 6), e.g. "Active". */
@@ -109,12 +114,15 @@ export async function fetchAllCustomersLastService(
       if (!id) continue;
       const raw = String(r[LAST_SERVICE_COL] ?? "").trim();
       const signUpRaw = String(r[SIGN_UP_COL] ?? "").trim();
+      const nextServiceRaw = String(r[NEXT_SERVICE_COL] ?? "").trim();
       byId.set(id, {
         id,
         lastService: parseShortUsDate(raw),
         lastServiceRaw: raw,
         signUp: parseShortUsDate(signUpRaw),
         signUpRaw,
+        nextService: parseShortUsDate(nextServiceRaw),
+        nextServiceRaw,
         multipleContracts: Number(r.multiple_contracts ?? 0),
         status: String(r["6"] ?? ""),
       });

@@ -611,10 +611,16 @@ In-season tool flagging active mosquito customers who haven't been serviced rece
 4. **last mosquito service > 15 days → `overdue`**.
 5. **else → `current`**.
 
-Every row (overdue / paused / needs-check) shows the customer's **sign-up date** (column 7 of `/customers/data`).
+**Sign-up date source (corrected 2026-06-14).** Sign-up is sourced from the **eligible mosquito contract's top-level `date_start`** (the SAME active contract that passed eligibility), carried on `EligibleCustomer.signUpDate` from the JWT `/customer/{id}/contracts` data the dataset already fetches. This is what Pocomos's Edit / Service Information screen labels "Date Signed Up". It replaces `/customers/data` column 7 (`profile.date_signed_up`), which is the customer's *original first* signup and is **stale for re-signed customers** — e.g. Ashley Maiorano's col 7 reads 2022-05-27 but her active contract started 2026-06-09; Avram Isakov's reads 2025-05-16 but his active mosquito contract started 2026-06-10. **Never `date_end`** (stale on auto-renew contracts — Ashley's reads 2023). This same `date_start` now drives the **new-signup grace exclusion** (rule 2), so a customer who *re-signs* within the last 3 days is correctly held back as brand-new instead of showing a years-old date and a huge "days since". Confirmed by `scripts/probe-signup-discrepancy.ts`.
+
+**Next scheduled (added 2026-06-14).** Every row also shows the customer's **next scheduled service** date, sourced from `/customers/data` column 9 ("Next Service") — already in the bulk row pulled for last-service (col 8), so no extra calls. Customer-level / any-type (same approximate-for-add-ons caveat as last-service).
+
+**Weekly pill (added 2026-06-14, display-only).** Rows for a weekly-cadence mosquito customer show a small inline "Weekly" pill next to the name. Detected via `isWeeklyContract()` from the mosquito contract's `service_frequency` and/or `service_type` name containing "Weekly" (bi-weekly excluded — it also contains the substring "weekly"). **Does NOT change the overdue threshold** — the flat 15-day line still applies to everyone; this is purely a visual marker.
+
+Every row (overdue / paused / needs-check) shows the customer's **sign-up date** (active mosquito contract `date_start`), **next scheduled service** (col 9), and a **Weekly** pill when applicable.
 
 **Hybrid source (the speed fix — ~1–2 min vs ~30 min).** The JWT contract object has no usable last-service date (§9), so:
-1. **Bulk** — `POST /customers/data` (~6 pages) → every customer's "Last Service" date (column 8) **and sign-up date (column 7)**, plus `POST /finance/unpaid-data` (one report, §3.6) → every customer's open balance. Precedence rules 1–2 and **mosquito-only** eligible customers (no active non-mosquito contract, ~79%) are all resolved here — no scrape.
+1. **Bulk** — `POST /customers/data` (~6 pages) → every customer's "Last Service" date (column 8) **and next-scheduled date (column 9)**, plus `POST /finance/unpaid-data` (one report, §3.6) → every customer's open balance. Sign-up comes from the eligible mosquito contract's `date_start` (JWT, not the grid — see the sign-up note above), so col 7 is no longer read for sign-up. Precedence rules 1–2 and **mosquito-only** eligible customers (no active non-mosquito contract, ~79%) are all resolved here — no scrape.
 2. **Scrape** — **add-on** eligible customers (~21%) with no balance and not brand-new get the per-page `GET /customer/{id}/service-history` scrape (Surface C, READ-ONLY, never switches the selected contract) so the date is mosquito-contract-specific. If the rendered table's contract isn't mosquito, the customer is recorded as `needs_check` rather than mutated.
 
 First live full refresh with balances + sign-up + new buckets (2026-06-12): **1,088 eligible · 68 overdue (1 "no service yet") · 29 paused-open-balance · 984 current · 2 excluded-new · 5 needs-check · 0 failed, ~140s** (85 customers owe $29,538.34 across all statuses; 29 of them are eligible mosquito accounts). Prior baseline (2026-06-10, before this change): 1,093 eligible / 81 overdue / 1,006 current / 6 needs-check. Code: `src/lib/service/{mosquito,customersData,openBalance,refresh,serviceHistory}.ts`, `src/components/overdue-view.tsx`, `src/app/service/**`, cron `src/app/api/cron/mosquito-status/route.ts`.
@@ -681,12 +687,14 @@ CREATE TABLE mosquito_service_status (
   days_since INTEGER,                -- NULL = no service yet (pinned to top of overdue)
   status TEXT NOT NULL,              -- 'overdue' | 'current' | 'needs_check' | 'paused_balance' | 'excluded_new'
   reason TEXT,                       -- 'overdue' | 'current' | 'no_service_yet' | 'mosquito_not_selected' | 'open_balance' | 'new_signup'
-  sign_up_date DATE,                 -- /customers/data col 7 (added 2026-06-12); shown on every row
+  sign_up_date DATE,                 -- active mosquito contract date_start (re-sourced 2026-06-14; was /customers/data col 7); shown on every row
   open_balance NUMERIC(10,2) NOT NULL DEFAULT 0,  -- Unpaid Invoices report (§3.6); >0 → paused_balance bucket
+  next_service_date DATE,            -- /customers/data col 9 "Next Service" (added 2026-06-14); shown on every row
+  is_weekly BOOLEAN NOT NULL DEFAULT FALSE,  -- weekly-cadence marker for the display-only "Weekly" pill (added 2026-06-14)
   last_checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
-The `sign_up_date` and `open_balance` columns were added 2026-06-12; `initSchema()` includes them in the `CREATE` and also runs `ALTER TABLE … ADD COLUMN IF NOT EXISTS` for environments where the table predates them.
+The `sign_up_date` and `open_balance` columns were added 2026-06-12; `next_service_date` and `is_weekly` were added 2026-06-14. `initSchema()` includes all of them in the `CREATE` and also runs `ALTER TABLE … ADD COLUMN IF NOT EXISTS` for environments where the table predates them. (As of 2026-06-14 `sign_up_date` is populated from the active mosquito contract's `date_start`, not grid col 7 — see §5.5.)
 
 ### Tables to add for PhoneBurner
 

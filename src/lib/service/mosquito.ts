@@ -77,7 +77,7 @@ function startOfToday(now: Date): number {
 }
 
 /** Parse a Pocomos DB date ("YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS") → local Date. */
-function parseDbDate(raw: string | null | undefined): Date | null {
+export function parseDbDate(raw: string | null | undefined): Date | null {
   if (!raw) return null;
   const m = String(raw).match(/(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return null;
@@ -86,6 +86,17 @@ function parseDbDate(raw: string | null | undefined): Date | null {
 
 export function isMosquitoServiceType(serviceType: unknown): boolean {
   return MOSQUITO_SERVICE_TYPES.has(norm(serviceType));
+}
+
+/**
+ * Weekly-cadence detection for the display-only "Weekly" pill. True when the
+ * contract's service_frequency OR service_type name says "Weekly" — but NOT
+ * "Bi-weekly" (which also contains the substring "weekly"). Bi-weekly → false.
+ * Purely cosmetic: does NOT affect the flat 15-day overdue threshold.
+ */
+export function isWeeklyContract(c: NormalizedContract): boolean {
+  const weekly = (s: string) => /weekly/.test(s) && !/bi-?weekly/.test(s);
+  return weekly(norm(c.serviceFrequency)) || weekly(norm(c.serviceType));
 }
 
 /**
@@ -156,6 +167,18 @@ export interface EligibleCustomer {
    * (false) can trust the bulk date directly.
    */
   hasAddOn: boolean;
+  /**
+   * Sign-up date sourced from the eligible mosquito contract's top-level
+   * `date_start` (the ACTIVE contract that passed eligibility), as ISO
+   * "YYYY-MM-DD" or null. This is what Pocomos's Edit screen calls "Date Signed
+   * Up". Replaces the stale customer-level original-signup date (grid col 7),
+   * which was wrong for re-signed customers. NEVER date_end (stale on
+   * auto-renew contracts). Drives both the displayed sign-up and the
+   * new-signup grace exclusion.
+   */
+  signUpDate: string | null;
+  /** Weekly-cadence marker for the display-only "Weekly" pill. */
+  isWeekly: boolean;
 }
 
 export function selectEligible(
@@ -166,11 +189,14 @@ export function selectEligible(
     if (norm(c.status) !== "active") continue;
     const contract = eligibleMosquitoContract(c);
     if (!contract) continue;
+    const start = parseDbDate(contract.dateStart);
     out.push({
       id: String(c.id),
       fullName: c.fullName,
       mosquitoContractType: contract.serviceType || "Mosquito Control",
       hasAddOn: hasActiveNonMosquitoContract(c),
+      signUpDate: start ? toIsoDate(start) : null,
+      isWeekly: isWeeklyContract(contract),
     });
   }
   return out;
