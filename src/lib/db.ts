@@ -129,6 +129,20 @@ export async function initSchema(): Promise<void> {
   await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS next_service_date DATE`;
   await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS is_weekly BOOLEAN NOT NULL DEFAULT FALSE`;
 
+  // Leads close-rate report cache (/leads). Singleton row (id=1) holding the
+  // latest computed report for the default period, so the tab paints fast.
+  // Custom date ranges are computed live and not cached. Mirrors the
+  // snapshot/refresh pattern used elsewhere.
+  await c`
+    CREATE TABLE IF NOT EXISTS leads_close_rate (
+      id INTEGER PRIMARY KEY,
+      period_start DATE NOT NULL,
+      period_end DATE NOT NULL,
+      report JSONB NOT NULL,
+      computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
   await c`
     CREATE TABLE IF NOT EXISTS phoneburner_contacts (
       pocomos_id TEXT PRIMARY KEY,

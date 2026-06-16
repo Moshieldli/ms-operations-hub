@@ -10,8 +10,12 @@ import {
 } from "@/components/ui/card";
 import { RefreshedAt } from "@/components/refreshed-at";
 import { useLiveSales, type SalesMeta } from "@/components/use-live-sales";
+import { useSalesTaxonomy } from "@/components/use-sales-taxonomy";
 import type { SalesSummary } from "@/lib/sales-data";
+import type { SalesTaxonomy } from "@/lib/sales-taxonomy";
 import { cn } from "@/lib/utils";
+
+const POCOMOS_BASE = "https://mypocomos.net";
 
 function fmt(n: number) {
   return n.toLocaleString("en-US");
@@ -36,6 +40,7 @@ export function SalesView({
   meta: SalesMeta;
 }) {
   const { summary, live, refreshing, liveAsOf } = useLiveSales(initial, meta);
+  const { taxonomy, loading: taxLoading } = useSalesTaxonomy();
 
   return (
     <div className="space-y-8">
@@ -62,7 +67,11 @@ export function SalesView({
         </div>
       </div>
 
-      <SalesDashboard summary={summary} />
+      <SalesDashboard
+        summary={summary}
+        taxonomy={taxonomy}
+        taxLoading={taxLoading}
+      />
     </div>
   );
 }
@@ -100,11 +109,11 @@ function LiveStatus({
 }
 
 /**
- * Self-describing stat tile. `def` is the inline criteria/definition text shown
- * in every square (replaces the old separate "How are buckets calculated?"
- * card). `hint` carries an optional numeric sub-breakdown (e.g. RETAINED
- * subtypes). `size="hero"` makes the headline KPIs dominate; `tone` applies the
- * shared status palette (used sparingly — most tiles stay neutral).
+ * Self-describing stat tile. `def` is the inline criteria text shown in every
+ * square. `hint` carries an optional numeric sub-breakdown. `size="hero"` makes
+ * the headline KPIs dominate; `tone` applies the shared status palette (used
+ * sparingly — most tiles stay neutral). `value` accepts a string so async
+ * (taxonomy) tiles can render a "…" placeholder before they load.
  */
 function Tile({
   label,
@@ -115,7 +124,7 @@ function Tile({
   tone = "neutral",
 }: {
   label: string;
-  value: number;
+  value: number | string;
   def?: string;
   hint?: string;
   size?: "default" | "hero";
@@ -133,7 +142,7 @@ function Tile({
           TONE[tone]
         )}
       >
-        {fmt(value)}
+        {typeof value === "number" ? fmt(value) : value}
       </div>
       {hint ? (
         <div className="mt-1.5 text-xs text-muted-foreground">{hint}</div>
@@ -147,43 +156,35 @@ function Tile({
   );
 }
 
-function SalesDashboard({ summary }: { summary: SalesSummary }) {
-  const { totals, buckets, retainedSubtypes, cancelled, debug, year } = summary;
+function SalesDashboard({
+  summary,
+  taxonomy,
+  taxLoading,
+}: {
+  summary: SalesSummary;
+  taxonomy: SalesTaxonomy | null;
+  taxLoading: boolean;
+}) {
+  const { totals, buckets, retainedSubtypes, debug, year } = summary;
   const retainedHint = `Auto ${retainedSubtypes.auto} · SEB ${retainedSubtypes.seb} · EB ${retainedSubtypes.eb} · Renewed ${retainedSubtypes.renewed}`;
-  const onHoldHint = totals.onHoldCustomers
-    ? `${fmt(totals.onHoldCustomers)} on hold`
-    : undefined;
-  const fetchSeconds = (debug.fetchDurationMs / 1000).toFixed(1);
-  const tagsHint =
-    debug.tagsFailed > 0
-      ? `${fmt(debug.tagsFetched)} fetched · ${debug.tagsFailed} failed`
-      : `${fmt(debug.tagsFetched)} tags fetched in ${fetchSeconds}s`;
-  const yearNum = parseInt(year, 10);
-  const prevYear = yearNum - 1;
-  const cancelledHint = `${fmt(cancelled.thisYear)} in ${year} · ${fmt(cancelled.lastYear)} in ${prevYear} · ${fmt(cancelled.earlier)} earlier`;
+  const prevYear = parseInt(year, 10) - 1;
 
-  // Reconciliation: the three current-year-tagged buckets should sum to Active
-  // Customers; AT_RISK ("Not Renewed") sits outside that gate. Δ = the edge
-  // cases (untagged actives, uncategorized, and AT_RISK members lacking a
-  // current-year tag). Computed live so it always ties out to the buckets shown.
-  const taggedActive = buckets.NEW + buckets.RETURNING + buckets.RETAINED;
-  const notRenewed = buckets.AT_RISK;
-  const reconSum = taggedActive + notRenewed;
-  const reconDelta = Math.abs(reconSum - totals.activeCustomers);
+  // Reconciliation (synchronous, from summary): Active Customers is the tag-gated
+  // count (= NEW + RETURNING + RETAINED); the remaining active-status customers
+  // are off-bucket (the Not-Renewed-active + Issues that the taxonomy details).
+  const taggedActive = totals.activeCustomers;
+  const offBucket = Math.max(0, debug.activeAllStatuses - totals.activeCustomers);
+
+  const taxNum = (n: number | undefined) =>
+    taxonomy ? fmt(n ?? 0) : taxLoading ? "…" : "—";
 
   return (
     <>
       {/*
-        DISPLAY-ONLY relabels — internal bucket keys + categorize.ts logic are
-        unchanged; only user-facing labels differ. Map by internal key:
-          NEW       → "New"
-          RETURNING → "New – Season Skipped"
-          RETAINED  → "Returning"
-          AT_RISK   → "Not Renewed"      (was "Current Cancelled")
-          CANCELLED → "Cancelled – All Time"
-        Every tile self-describes via `def` (replaces the old rules card).
-        Visual hierarchy: the two headline KPIs dominate (hero), the bucket
-        breakdown is the secondary grid, and the all-time/untagged totals recede.
+        DISPLAY-ONLY relabels — internal bucket keys + categorize.ts logic
+        unchanged. NEW→"New", RETURNING→"New – Season Skipped", RETAINED→
+        "Returning". The Not-Renewed / Cancelled / Issues groups below are
+        year-relative and come from /api/sales/taxonomy.
       */}
 
       {/* Headline KPIs — dominate */}
@@ -202,9 +203,9 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
         />
       </div>
 
-      {/* Bucket breakdown + reconciliation */}
+      {/* Current-season buckets + reconciliation */}
       <div className="space-y-2">
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
           <Tile
             label="New"
             value={buckets.NEW}
@@ -221,43 +222,49 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
             hint={retainedHint}
             def="Service continued from last year into this year (auto-renew / early rebook / renewed)."
           />
-          <Tile
-            label="Not Renewed"
-            value={buckets.AT_RISK}
-            tone="attention"
-            def="Treated in a prior year but no current-year tag yet — not renewed for this season."
-          />
         </div>
         <p className="text-xs text-muted-foreground">
-          {fmt(taggedActive)} tagged + {fmt(notRenewed)} not renewed ={" "}
-          {fmt(reconSum)} vs {fmt(totals.activeCustomers)} active (Δ
-          {fmt(reconDelta)} edge cases)
+          {fmt(taggedActive)} tagged active + {fmt(offBucket)} off-bucket
+          (not-renewed / issues) = {fmt(debug.activeAllStatuses)} active customers
         </p>
       </div>
 
-      {/* All-time / untagged — recede */}
-      <div className="grid grid-cols-2 gap-3 sm:gap-4">
+      {/* Year-relative cancelled taxonomy */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
         <Tile
-          label="Cancelled – All Time"
-          value={totals.cancelledCustomers}
-          hint={onHoldHint ? `${cancelledHint} · ${onHoldHint}` : cancelledHint}
-          def="Marked Inactive in Pocomos (all years)."
+          label="Not Renewed"
+          value={taxNum(taxonomy?.notRenewed)}
+          tone="attention"
+          hint={
+            taxonomy
+              ? `${fmt(taxonomy.notRenewedActive)} still marked active · ${fmt(
+                  taxonomy.notRenewedInactive
+                )} inactive`
+              : undefined
+          }
+          def={`Had a ${prevYear} tag, no ${year} tag — last season's customers who haven't renewed yet.`}
         />
         <Tile
-          label="Untagged"
-          value={debug.untagged}
+          label="Cancelled – All Time"
+          value={taxNum(taxonomy?.cancelledAllTime)}
           hint={
-            debug.uncategorized
-              ? `${debug.uncategorized} uncategorized`
-              : tagsHint
+            taxonomy
+              ? `${fmt(taxonomy.cancelled.thisYear)} in ${year} · ${fmt(
+                  taxonomy.cancelled.lastYear
+                )} in ${prevYear} · ${fmt(taxonomy.cancelled.earlier)} earlier${
+                  taxonomy.cancelled.unknown
+                    ? ` · ${fmt(taxonomy.cancelled.unknown)} undated`
+                    : ""
+                }`
+              : undefined
           }
-          def="Active in Pocomos but carrying no year tags at all."
+          def="Marked Inactive in Pocomos in an earlier season (excludes the Not-Renewed group, by last service year)."
         />
       </div>
 
-      <ContractTypeCard summary={summary} />
+      <IssuesCard taxonomy={taxonomy} loading={taxLoading} year={year} prevYear={prevYear} />
 
-      <CancelledByYearCard summary={summary} />
+      <ContractTypeCard summary={summary} />
     </>
   );
 }
@@ -303,50 +310,81 @@ function ContractTypeCard({ summary }: { summary: SalesSummary }) {
   );
 }
 
-function CancelledByYearCard({ summary }: { summary: SalesSummary }) {
-  const { cancelled, year } = summary;
-  const yearNum = parseInt(year, 10);
-  const olderYears = Object.entries(cancelled.byYear)
-    .filter(([y]) => {
-      const n = parseInt(y, 10);
-      return Number.isFinite(n) && n < yearNum - 1;
-    })
-    .sort((a, b) => parseInt(b[0], 10) - parseInt(a[0], 10));
-
+function IssuesCard({
+  taxonomy,
+  loading,
+  year,
+  prevYear,
+}: {
+  taxonomy: SalesTaxonomy | null;
+  loading: boolean;
+  year: string;
+  prevYear: number;
+}) {
+  const issues = taxonomy?.issues ?? [];
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Cancellations by year</CardTitle>
+        <CardTitle>
+          Customers with issues
+          {taxonomy ? (
+            <span className="ml-2 text-sm font-normal text-muted-foreground tabular-nums">
+              {fmt(taxonomy.issuesCount)}
+            </span>
+          ) : null}
+        </CardTitle>
         <CardDescription>
-          Derived from each Inactive customer&rsquo;s last service date.
+          Active in Pocomos but carrying no {year} tag and no {prevYear} tag — odd
+          edge cases that don&rsquo;t fit any bucket and need eyeballing.
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
-          <Tile label={`${year}`} value={cancelled.thisYear} />
-          <Tile label={`${yearNum - 1}`} value={cancelled.lastYear} />
-          <Tile
-            label="Earlier"
-            value={cancelled.earlier}
-            hint={
-              olderYears.length
-                ? olderYears
-                    .slice(0, 4)
-                    .map(([y, n]) => `${y}: ${n.toLocaleString("en-US")}`)
-                    .join(" · ")
-                : undefined
-            }
-          />
-        </div>
-        {cancelled.unknown > 0 ? (
-          <p className="mt-3 text-xs text-muted-foreground">
-            {fmt(cancelled.unknown)} cancelled customer
-            {cancelled.unknown === 1 ? "" : "s"} have no last-service date and
-            are excluded from the year breakdown.
+        {!taxonomy ? (
+          <p className="text-sm text-muted-foreground">
+            {loading ? "Loading…" : "Couldn’t load the issues list."}
           </p>
-        ) : null}
+        ) : issues.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            None — every active customer fits a bucket. 🎉
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="py-2 pr-4 font-medium">Customer</th>
+                  <th className="py-2 pr-4 font-medium">ID</th>
+                  <th className="py-2 pr-4 font-medium">Tags</th>
+                  <th className="py-2 pl-4 text-right font-medium">Pocomos</th>
+                </tr>
+              </thead>
+              <tbody>
+                {issues.map((c) => (
+                  <tr key={c.id} className="border-b last:border-0 align-top">
+                    <td className="py-2 pr-4 font-medium">{c.name || c.id}</td>
+                    <td className="py-2 pr-4 tabular-nums text-muted-foreground">
+                      {c.id}
+                    </td>
+                    <td className="py-2 pr-4 text-xs text-muted-foreground">
+                      {c.tags.length ? c.tags.join(" · ") : "(no tags)"}
+                    </td>
+                    <td className="py-2 pl-4 text-right">
+                      <a
+                        href={`${POCOMOS_BASE}/customer/${c.id}/service-information`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary underline-offset-4 hover:underline"
+                      >
+                        Profile
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
 }
-

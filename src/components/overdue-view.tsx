@@ -346,7 +346,7 @@ function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowKind }) 
                     kind === "needsCheck" ? "service-history" : "service-information"
                   }`}
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                   className="text-primary underline-offset-4 hover:underline"
                 >
                   {kind === "needsCheck" ? "History" : "Profile"}

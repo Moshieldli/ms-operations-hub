@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/sales", label: "Sales" },
+  { href: "/leads", label: "Leads" },
   { href: "/calling", label: "Calling" },
   { href: "/combined", label: "Combined" },
   { href: "/service", label: "Service" },

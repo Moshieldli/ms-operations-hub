@@ -335,6 +335,14 @@ A search POST only READS — it never mutates a record. Canonical fetcher: `src/
 - A **reconciliation line** under Row 1 computes live: `<New+Skipped+Returning> tagged + <NotRenewed> not renewed = <sum> vs <Active> active (Δ<n> edge cases)`.
 - `/tv/sales` carries the same relabels + the Renewed subtype, but stays a glanceable grid (no inline definitions / reconciliation line — a deliberate choice for the TV view).
 
+**Year-relative cancelled taxonomy + "Customers with issues" (2026-06-16).** "Not Renewed", "Cancelled – All Time", and the issues roster are now computed **year-relative** from `CURRENT_YEAR` and `PRIOR_YEAR` (= `CURRENT_YEAR - 1`) — never hardcoded — in `src/lib/sales-taxonomy.ts` (`getSalesTaxonomy()`), surfaced via `GET /api/sales/taxonomy` and fetched client-side by `sales-view.tsx`/`tv-sales-view.tsx` (decoupled from the snapshot paint via `useSalesTaxonomy`). This REPLACES the old "Not Renewed = AT_RISK (active, prior-year tag, no current-year)" display.
+- **Not Renewed** = customers of ANY status with a `{PRIOR_YEAR} -` tag but NO `{CURRENT_YEAR} -` tag — last season's customers who haven't signed up this season (mostly Inactive). Its own card; description: *"Had a {prior} tag, no {year} tag — last season's customers who haven't renewed yet."* Sub-hint splits still-active vs inactive.
+- **Cancelled – All Time** = currently-Inactive customers NOT in the Not-Renewed group. Headline = live Inactive total (`dataset.diagnostics.inactiveCount`) minus the Not-Renewed inactive carve-out; relative year sub-breakdown (this year / last year / earlier / undated) by last-service date, with `undated` absorbing not-yet-enriched rows so it sums to the headline.
+- **Customers with issues** = currently-Active customers with NO `{CURRENT_YEAR} -` tag AND NO `{PRIOR_YEAR} -` tag — the edge cases that fit no bucket. Rendered as a table (name, id, full tag list, **Profile** link → `service-information`, opens in a new tab). Replaces the old "Untagged" tile.
+- **Data sources:** active per-customer tags from the live `getDataset()` (10-min cached); non-active tags from the enriched `customers` Neon table (overnight enrichment). A customer that re-activated is counted on the active side only (dedup by id).
+- The reconciliation line is now `{tagged active} tagged active + {off-bucket} off-bucket (not-renewed / issues) = {activeAllStatuses} active customers` (synchronous, from `summary.debug.activeAllStatuses`).
+- **New-tab links:** the issues "Profile" link and the `/service/overdue` "Profile"/"History" links open with `target="_blank" rel="noopener noreferrer"`.
+
 **Headline metrics — Active Customers & Active Services (redefined 2026):**
 
 The two big numbers on `/sales` (and `/tv/sales`) are **tag-gated**, not raw status counts. The gate is the current year, derived from `CURRENT_YEAR` in `categorize.ts` (`new Date().getFullYear()`), so it auto-advances each January with no code change.
@@ -634,6 +642,22 @@ Every row (overdue / paused / needs-check) shows the customer's **sign-up date**
 2. **Scrape** — **add-on** eligible customers (~21%) with no balance and not brand-new get the per-page `GET /customer/{id}/service-history` scrape (Surface C, READ-ONLY, never switches the selected contract) so the date is mosquito-contract-specific. If the rendered table's contract isn't mosquito, the customer is recorded as `needs_check` rather than mutated.
 
 First live full refresh with balances + sign-up + new buckets (2026-06-12): **1,088 eligible · 68 overdue (1 "no service yet") · 29 paused-open-balance · 984 current · 2 excluded-new · 5 needs-check · 0 failed, ~140s** (85 customers owe $29,538.34 across all statuses; 29 of them are eligible mosquito accounts). Prior baseline (2026-06-10, before this change): 1,093 eligible / 81 overdue / 1,006 current / 6 needs-check. Code: `src/lib/service/{mosquito,customersData,openBalance,refresh,serviceHistory}.ts`, `src/components/overdue-view.tsx`, `src/app/service/**`, cron `src/app/api/cron/mosquito-status/route.ts`.
+
+### 5.6 `/leads` — lead close-rate tab (2026-06-16)
+
+Top-level **Leads** tab (nav order: Sales · Leads · Calling · Combined · Service). Landing is a raw close-rate summary.
+
+**Metric (v1 — raw only):** `Raw close rate = (leads created in the period whose status is now "Customer") ÷ (all leads created in the period, any status) × 100`, bounded by `date_added`. On-screen description: *"Raw close rate — share of leads created in this period that became customers. Does not yet exclude unreachable or wrong-number leads."* Default period = Jan 1 of the current year → today, with a date-range control.
+
+**Source:** the `/leads/data` web back-door (legacy DataTables 1.9 body, same session mechanism as `leadSync.ts`) **with the `statuses[]=Lead` filter DROPPED** so every status is returned. Code: `src/lib/leads/closeRate.ts` (`fetchAllLeads`, `computeReport`, `computeCloseRate`, `refreshCloseRate`), `GET/POST /api/leads/close-rate`, `src/app/leads/page.tsx`, `src/components/leads-view.tsx`.
+
+**Layout:** team headline (raw close rate + total leads + conversions), a sortable per-rep table (one row per salesperson: leads / conversions / close rate, with a TOTAL row), and an **Unattributed** bucket. Attribution: a lead is Unattributed when `salesperson` is blank or in the `NON_CSR` set (`api user`, `pronexis`, `system`, `admin`, …) — kept out of rep denominators rather than distorting them.
+
+**Storage:** singleton Neon table `leads_close_rate` (id=1) caches the latest default-period report so the tab paints fast; `POST /api/leads/close-rate` recomputes + caches (manual "Refresh now"; cron optional later). Custom date ranges are computed live (`GET ?start&end`) and not cached.
+
+**Real-lead hook:** `isRealLead(row)` in `closeRate.ts` is a v1 no-op (returns true) applied to the denominator — the clearly-commented place where a future "real close rate" will exclude unreachable / wrong-company leads (e.g. `reason_name` in {Can't Reach, Competitor}). NOT implemented yet.
+
+**KNOWN DATA GAP (verified 2026-06-16):** this office's `/leads/data` returns **no "Customer"-status rows** even with the filter dropped — only `Lead` / `Not Interested` / `Monitor` (3,026 all-time; 248 YTD). Converted leads leave the leads module (almost certainly the `mstli.apiuser` saved-view scoping → [[pocomos-leads-data-gotchas]]). So conversions currently compute as **0** and the raw close rate reads **0%**; `report.conversionSourceMissing` drives an on-screen banner. Lead counts + per-rep + unattributed are accurate now (YTD: Rena Shlomo 155, Rivka Leyton 93, unattributed 0). The conversion logic keys on `status === "Customer"` exactly as specified, so the metric lights up the moment those rows are exposed (or a customer-side conversion source is wired in — the recommended follow-up).
 
 ---
 

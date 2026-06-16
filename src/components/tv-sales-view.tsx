@@ -2,7 +2,9 @@
 
 import { RefreshedAt } from "@/components/refreshed-at";
 import { useLiveSales, type SalesMeta } from "@/components/use-live-sales";
+import { useSalesTaxonomy } from "@/components/use-sales-taxonomy";
 import type { SalesSummary } from "@/lib/sales-data";
+import type { SalesTaxonomy } from "@/lib/sales-taxonomy";
 
 const fmt = (n: number) => n.toLocaleString("en-US");
 
@@ -14,6 +16,7 @@ export function TvSalesView({
   meta: SalesMeta;
 }) {
   const { summary, live, refreshing, liveAsOf } = useLiveSales(initial, meta);
+  const { taxonomy } = useSalesTaxonomy();
 
   return (
     <div className="flex min-h-screen w-full flex-col bg-background p-6 lg:p-10">
@@ -46,12 +49,18 @@ export function TvSalesView({
         </div>
       </header>
 
-      <TvDashboard summary={summary} />
+      <TvDashboard summary={summary} taxonomy={taxonomy} />
     </div>
   );
 }
 
-function TvDashboard({ summary }: { summary: SalesSummary }) {
+function TvDashboard({
+  summary,
+  taxonomy,
+}: {
+  summary: SalesSummary;
+  taxonomy: SalesTaxonomy | null;
+}) {
   const { totals, buckets, retainedSubtypes, contractTypeGroups } = summary;
 
   return (
@@ -81,8 +90,15 @@ function TvDashboard({ summary }: { summary: SalesSummary }) {
             value={buckets.RETAINED}
             hint={`Auto ${retainedSubtypes.auto} · SEB ${retainedSubtypes.seb} · EB ${retainedSubtypes.eb} · Renewed ${retainedSubtypes.renewed}`}
           />
-          <BigBucket label="Not Renewed" value={buckets.AT_RISK} tone="attention" />
-          <BigBucket label="Cancelled – All Time" value={buckets.CANCELLED} />
+          <BigBucket
+            label="Not Renewed"
+            value={taxonomy ? taxonomy.notRenewed : "…"}
+            tone="attention"
+          />
+          <BigBucket
+            label="Cancelled – All Time"
+            value={taxonomy ? taxonomy.cancelledAllTime : "…"}
+          />
         </div>
       </section>
 
@@ -137,7 +153,7 @@ function BigBucket({
   tone = "neutral",
 }: {
   label: string;
-  value: number;
+  value: number | string;
   hint?: string;
   tone?: keyof typeof TV_TONE;
 }) {
@@ -149,7 +165,7 @@ function BigBucket({
       <div
         className={`mt-2 flex-1 text-4xl font-semibold tabular-nums lg:text-6xl ${TV_TONE[tone]}`}
       >
-        {fmt(value)}
+        {typeof value === "number" ? fmt(value) : value}
       </div>
       {hint ? (
         <div className="mt-2 text-xs text-muted-foreground lg:text-sm">
