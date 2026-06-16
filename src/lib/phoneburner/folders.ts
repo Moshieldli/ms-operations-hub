@@ -25,8 +25,16 @@ export const FOLDERS = {
 
 export type FolderId = (typeof FOLDERS)[keyof typeof FOLDERS];
 
-/** All folders that conversionCleanup should walk to look for status changes. */
-export const OUTBOUND_FOLDERS: FolderId[] = [
+/**
+ * POLICED_FOLDERS — the dial / cancelled buckets the conversion sweep WALKS.
+ * Each run, every contact in these folders is reconciled against the live
+ * active-customer roster; matches are moved OUT to DESTINATION_FOLDER. This is
+ * the sweep's ONLY input, so any folder NOT listed here is structurally exempt.
+ *
+ *   Fresh 66223880, General 66223881, Competitor 66223882, Financial 66223883,
+ *   and the five Cancelled buckets 66223884–66223888.
+ */
+export const POLICED_FOLDERS: FolderId[] = [
   FOLDERS.LEADS_FRESH,
   FOLDERS.LEADS_GENERAL,
   FOLDERS.LEADS_COMPETITOR,
@@ -36,4 +44,25 @@ export const OUTBOUND_FOLDERS: FolderId[] = [
   FOLDERS.CANCELLED_RESULTS,
   FOLDERS.CANCELLED_NO_REACH,
   FOLDERS.CANCELLED_PERSONAL,
+];
+
+/** Where the sweep moves matched active customers. */
+export const DESTINATION_FOLDER: FolderId = FOLDERS.ACTIVE_CUSTOMER;
+
+/**
+ * EXEMPT_FOLDERS — folders the sweep must NEVER touch.
+ *
+ * Today this is just Active Customer (the destination): a contact already
+ * there is, by definition, done. Exemption is STRUCTURAL — the sweep only ever
+ * reads POLICED_FOLDERS, so anything not policed is already ignored. This
+ * constant exists so the intent is explicit and greppable.
+ *
+ * FUTURE: a planned active-customer CALLING project will own its own folders
+ * (e.g. a "Renewal calls" or "Save calls" queue). Those folders will hold
+ * active customers ON PURPOSE — add each new one HERE so this sweep keeps
+ * leaving them alone. Do NOT add them to POLICED_FOLDERS.
+ */
+export const EXEMPT_FOLDERS: FolderId[] = [
+  FOLDERS.ACTIVE_CUSTOMER,
+  // <-- future active-customer-calling project folders go here
 ];

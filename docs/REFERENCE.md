@@ -511,30 +511,31 @@ This endpoint runs **two phases in sequence**: lead sync, then conversion cleanu
 11. On success: insert `phoneburner_contacts` row with `last_notes_refresh_at = NOW()`.
 12. Update `sync_state.phoneburner_last_sync_at` to `max(date_added)` of the leads actually processed.
 
-**Phase B — conversionCleanup (Pocomos → PhoneBurner, status changes on existing contacts)**
+**Phase B — notesRefresh (Pocomos → PhoneBurner, lazy notes refresh only)**
 
-1. Query `phoneburner_contacts` for rows in folders `66223880`, `66223881`, `66223882`, `66223883`, `66223884`, `66223885`, `66223886`, `66223887`, `66223888` (leads + cancelled).
-2. For each, look up the current Pocomos status:
-   - **Lead → Customer (active):** `PUT /contacts/{pb_id}` to set `category_id = 66233602` (Active Customer); update `phoneburner_contacts.folder_id`, `last_updated_at`; write a Pocomos note `Moved out of PhoneBurner outbound — now Active`.
-   - **Cancelled → Active:** same as above.
-   - **No conversion AND `last_notes_refresh_at > 24h ago`:** pull current Pocomos notes (skip `source='pb'`), re-format using the same 10-most-recent rule, `PUT /contacts/{pb_id}` to update the `notes` field, set `last_notes_refresh_at = NOW()`.
-3. Returns `{ moved, refreshed_notes, checked, errors, duration_ms }`.
+> **CHANGED 2026-06-16.** The folder-MOVE responsibility (active customers → Active Customer folder) was removed from this `*/15` route and rebuilt as the hourly roster-reconciliation **conversion sweep** — see §5.5b. The old `conversionCleanup` (which tried to DETECT conversions by re-reading each tracked lead's Pocomos status) is gone: it never evaluated the thousands of bulk-imported CSV contacts, and it assumed a converted lead flips to status "Customer" — which it does NOT (conversion spawns a NEW customer record and leaves the lead frozen at "Lead"). What remains in the `*/15` route is purely the notes refresh.
+
+1. Select tracked `phoneburner_contacts` rows still in a policed folder whose `last_notes_refresh_at` is NULL or >24h old (oldest-first, capped at `NOTES_REFRESH_LIMIT`, default 40).
+2. For each, pull current Pocomos notes (skip `source='pb'`), re-format using the same 10-most-recent rule, `PUT /contacts/{pb_id}` to update the `notes` field, set `last_notes_refresh_at = NOW()`.
+3. Returns `{ refreshed_notes, checked, errors, duration_ms }`. READ-ONLY against Pocomos; the only write is the PB `notes` field. Lib: `src/lib/sync/notesRefresh.ts`.
 
 **Combined result returned by the route:**
 ```jsonc
 {
   "leadSync": { "added": N, "skipped_dup": N, "skipped_nophone": N, "errors": [], "duration_ms": N },
-  "conversionCleanup": { "moved": N, "refreshed_notes": N, "checked": N, "errors": [], "duration_ms": N }
+  "notesRefresh": { "refreshed_notes": N, "checked": N, "errors": [], "duration_ms": N }
 }
 ```
 
-**Cron config in `vercel.json`** (LIVE since 2026-05-15):
+**Cron config in `vercel.json`** (snapshot + sync LIVE since 2026-05-15; conversion-sweep added 2026-06-16):
 ```json
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "crons": [
     { "path": "/api/cron/snapshot", "schedule": "0 5 * * *" },
-    { "path": "/api/phoneburner/sync-leads", "schedule": "*/15 * * * *" }
+    { "path": "/api/phoneburner/sync-leads", "schedule": "*/15 * * * *" },
+    { "path": "/api/cron/conversion-sweep", "schedule": "0 * * * *" },
+    { "path": "/api/cron/mosquito-status", "schedule": "0 6 * * *" }
   ]
 }
 ```
@@ -576,7 +577,7 @@ Notes flow both directions, with strict prefix-based dedup so they never echo ba
 
 **Pocomos → PhoneBurner (read into the contact `notes` field):**
 - Pulled **once at contact creation** during `leadSync`.
-- Refreshed **lazily** during `conversionCleanup`, but only when `last_notes_refresh_at > 24 hours ago` for that contact. The 24h floor exists to keep the cleanup pass cheap — most leads don't add 50 notes a day, and PhoneBurner's `notes` field doesn't render in real time anyway.
+- Refreshed **lazily** by `notesRefresh` (the `*/15` route's Phase B — `src/lib/sync/notesRefresh.ts`), but only when `last_notes_refresh_at > 24 hours ago` for that contact. The 24h floor exists to keep the pass cheap — most leads don't add 50 notes a day, and PhoneBurner's `notes` field doesn't render in real time anyway.
 - **Loop guard:** when reading from Pocomos, **skip any note whose `summary` starts with `📞 PhoneBurner Call —`** — those originated from PhoneBurner via the webhook and re-pushing them would feed the loop.
 
 **PhoneBurner → Pocomos (real-time, via the webhook):**
@@ -643,6 +644,41 @@ Every row (overdue / paused / needs-check) shows the customer's **sign-up date**
 
 First live full refresh with balances + sign-up + new buckets (2026-06-12): **1,088 eligible · 68 overdue (1 "no service yet") · 29 paused-open-balance · 984 current · 2 excluded-new · 5 needs-check · 0 failed, ~140s** (85 customers owe $29,538.34 across all statuses; 29 of them are eligible mosquito accounts). Prior baseline (2026-06-10, before this change): 1,093 eligible / 81 overdue / 1,006 current / 6 needs-check. Code: `src/lib/service/{mosquito,customersData,openBalance,refresh,serviceHistory}.ts`, `src/components/overdue-view.tsx`, `src/app/service/**`, cron `src/app/api/cron/mosquito-status/route.ts`.
 
+### 5.5b `/api/cron/conversion-sweep` — PhoneBurner active-customer sweep (hourly, roster-reconciliation, 2026-06-16)
+
+Keeps active customers OUT of the outbound dial/cancelled queues. Replaces the old `conversionCleanup` (§5.1 Phase B), which was structurally broken (see below).
+
+**Why the old model failed (confirmed in live data).**
+1. **It only iterated the `phoneburner_contacts` Neon table.** The ~thousands of bulk-imported (5/14 CSV) PhoneBurner contacts were never in that table, so they were *never evaluated*.
+2. **It assumed a converted lead flips to status `Customer`.** It does NOT. In Pocomos, converting a lead **creates a brand-new customer record** and leaves the original lead frozen at status `Lead`, with **no id link back**. Example: Igor Lipkin is active customer (external id 198709, Pocomos internal id 1217555, tag `2026 - Renewed`) yet sat in TWO dial folders — a Cancelled–Personal contact storing `198709` and a General contact storing the frozen lead id `5505704`.
+
+**The new model — reconcile against the active roster, don't detect conversions.** Each run asks, per contact, "**is this contact a current active customer right now?**" and sweeps matches out. No conversion detection, no per-contact Pocomos status calls.
+
+**Step 1 — build the active roster (one bulk pull, cached for the run).** Source = `getDataset()` (`src/lib/pocomos/dataset.ts`) — the dashboard's canonical active-customer builder, the same source behind the `/sales` "Active Customers" headline. **Active = the SAME definition the Sales dashboard uses: status `Active` AND ≥1 tag starting with `"${CURRENT_YEAR} -"`** (New Sale / Auto / SEB / EB / Renewed / …). Two in-memory indexes:
+- `byCustomerId`: Set of normalized **internal** Pocomos customer ids.
+- `byPhone`: Map normalized-10-digit-phone → `{ customerId (internal), lastName }`.
+
+> **Probe finding (2026-06-16, `scripts/probe-roster-reconcile.ts` / `probe-pb-folders.ts` / `probe-extnum-tags.ts`).** Neither bulk Pocomos source exposes the user-facing **external** customer number (198709-style) or per-customer tags: `/customers/data` and the JWT customer-list **both key on the internal id (1217555-style)** and carry no Tags column; `find-customer-by-office` returns nothing in bulk. PhoneBurner's stored "Customer ID" custom field, however, holds **external customer numbers or frozen lead ids** — so a direct id match against the internal-id roster fires **0 times in practice** (verified across all 4,276 policed contacts). The **phone bridge is the actual workhorse**; the internal-id path is kept as a correct, cheap identity check (and future-proofing). The external number is intentionally NOT resolved per-contact — that would be thousands of Pocomos calls and violates the one-bulk-pull rule.
+
+**Step 2 — sweep the policed folders (walk LIVE PhoneBurner folders, NOT the Neon table).** For each contact in the policed folders (`listContactsInFolder`, page_size 500), read its "Customer ID" custom field + phone, then:
+- **(a)** stored Customer ID ∈ `byCustomerId` → MATCH (direct, by id).
+- **(b)** else normalized phone ∈ `byPhone` AND the contact's **last name matches** that customer's last name (case-insensitive) → MATCH (phone bridge — for orphaned leads + external-number CSV contacts like both of Igor's).
+- **(c)** phone matches but last name differs → **DO NOT move**; logged as `conversionSweep.name_mismatch_review` (covers spouses/relatives, "Current Resident", placeholder numbers, etc.).
+- **(d)** no match → leave in place.
+
+On MATCH: `PUT /contacts/{id}` with `category_id = 66233602` (Active Customer), and upsert a `phoneburner_contacts` row (`pocomos_id` = resolved active **internal** customer id, `pocomos_type='customer'`, `folder_id=66233602`, `last_updated_at=NOW()`); a stale row carrying the same `pb_contact_id` (e.g. the frozen-lead row) is re-pointed at the destination too. **The Neon table is now a cache, not the gate.** A person split across two contacts (like Igor) matches on both and both are moved — correct.
+
+**Read/write phasing (idempotency + correctness).** The sweep enumerates ALL policed folders first (read phase), THEN performs the moves (write phase). Moving a contact mid-walk shrinks the folder and slides the `page_size` pagination offsets, which would skip later contacts in the same pass; phasing avoids that so one run is complete. Re-running moves nobody once everyone's in Active Customer (they leave the policed folders). Respects PhoneBurner limits (200ms between calls, ≤5 concurrent, exponential backoff on 429 — all in `phoneburner/client.ts`).
+
+**Folders (`src/lib/phoneburner/folders.ts`).**
+- **`POLICED_FOLDERS`** (the sweep's ONLY input — walked + swept): Fresh `66223880`, General `66223881`, Competitor `66223882`, Financial `66223883`, Cancelled buckets `66223884`–`66223888`.
+- **`DESTINATION_FOLDER`**: Active Customer `66233602`.
+- **`EXEMPT_FOLDERS`** (NEVER touched): Active Customer `66233602`. Exemption is **structural** — the sweep only reads `POLICED_FOLDERS`, so anything not policed is already ignored. **RULE: a future active-customer CALLING project will own folders that hold active customers on purpose — add each such folder to `EXEMPT_FOLDERS` (and NEVER to `POLICED_FOLDERS`) so this sweep keeps leaving them alone.**
+
+**Cadence.** Own hourly cron `{ "path": "/api/cron/conversion-sweep", "schedule": "0 * * * *" }`. Decoupled from the lead-push sync, which stays `*/15` (now lead-push + lazy notes refresh only — §5.1). `dryRun` flag (`?dryRun=1` on the route) counts without moving.
+
+**First live run (2026-06-16, `scripts/run-conversion-sweep.ts`).** Dry: 4,276 scanned · 0 by-id · 49 by-phone · 13 name-mismatch-skipped · 49 would-move · roster 1,104 active. Both Igor contacts (lead `5505704` in General, customer `198709` in Cancelled–Personal) confirmed in the would-move set (kind=phone, resolved=1217555). Live: **49 moved, 0 errors**; both Igor contacts verified in folder `66233602`. Idempotent re-run: **0 would-move** (only the 13 name-mismatches remain, correctly skipped). Code: `src/lib/sync/conversionSweep.ts`, `src/app/api/cron/conversion-sweep/route.ts`.
+
 ### 5.6 `/leads` — lead close-rate tab (2026-06-16)
 
 Top-level **Leads** tab (nav order: Sales · Leads · Calling · Combined · Service). Landing is a raw close-rate summary.
@@ -703,17 +739,19 @@ src/
 │   │   └── interactionTypes.ts        ← probes accepted `interactionType` values for customer note/create
 │   ├── phoneburner/
 │   │   ├── client.ts                  ← createContact, listContactsInFolder, normalizePhone
-│   │   └── folders.ts                 ← FOLDERS constant (LEADS_FRESH, LEADS_GENERAL, ACTIVE_CUSTOMER, …)
+│   │   └── folders.ts                 ← FOLDERS + POLICED_FOLDERS / DESTINATION_FOLDER / EXEMPT_FOLDERS (§5.5b)
 │   └── sync/
 │       ├── leadSync.ts                ← Phase A: Pocomos → PhoneBurner, age-based folder routing, watermark advance
-│       ├── conversionCleanup.ts       ← Phase B: status-change folder moves + lazy notes refresh
+│       ├── notesRefresh.ts            ← */15 Phase B: lazy 24h PB notes refresh for tracked contacts (§5.1)
+│       ├── conversionSweep.ts         ← hourly roster-reconciliation active-customer sweep (§5.5b)
 │       └── webhookProcessor.ts        ← PB webhook payload parser (status, recording_url_public, agent, contact.notes)
 └── app/
     ├── api/
-    │   ├── cron/snapshot/route.ts     ← daily 05:00 ET snapshot
-    │   ├── snapshots/route.ts         ← snapshot read endpoint
+    │   ├── cron/snapshot/route.ts          ← daily 05:00 ET snapshot
+    │   ├── cron/conversion-sweep/route.ts  ← hourly active-customer sweep (§5.5b)
+    │   ├── snapshots/route.ts              ← snapshot read endpoint
     │   └── phoneburner/
-    │       ├── sync-leads/route.ts    ← runs Phase A + Phase B in sequence
+    │       ├── sync-leads/route.ts    ← every 15 min: leadSync (Phase A) + notesRefresh (Phase B)
     │       └── webhook/route.ts       ← `api_calldone` receiver, writes Pocomos note via waitUntil
     └── phoneburner/page.tsx           ← status page
 ```
@@ -899,9 +937,9 @@ Status as of May 18, 2026 — after the rev 5 shipping pass.
    - Scrape `/lead/{id}/lead-information` HTML for the tag chips.
    - **TODO when a working source lands:** route `L - Competitor` → `66223882`, `L - Financial` → `66223883`, skip `NT - No Marketing` and `L - DNC`.
 
-2. **`conversionCleanup` batching performance.** The cleanup pass walks every row of `phoneburner_contacts` in lead/cancelled folders on every cron tick. Fine today; expected to bite around ~3k tracked rows. Plan: batch by `last_updated_at` ascending and cap rows-per-tick.
+2. **`notesRefresh` throughput.** The `*/15` Phase B refreshes at most `NOTES_REFRESH_LIMIT` (default 40) tracked contacts per tick, oldest-first. With a few hundred tracked lead rows that cycles every contact through inside a day; raise the cap if the tracked set grows materially. (The old `conversionCleanup`, which walked every tracked row every tick, is gone — see §5.5b.)
 
-3. **Real-time Pocomos → PhoneBurner notes refresh.** PB-side notes are refreshed lazily by `conversionCleanup` only when `last_notes_refresh_at > 24h ago`. A CSR opening a contact within that window sees stale notes. Real-time refresh would require either a Pocomos→hub webhook (Pocomos has no outbound webhooks — §12) or an on-demand "refresh now" link from the dialer.
+3. **Real-time Pocomos → PhoneBurner notes refresh.** PB-side notes are refreshed lazily by `notesRefresh` only when `last_notes_refresh_at > 24h ago`. A CSR opening a contact within that window sees stale notes. Real-time refresh would require either a Pocomos→hub webhook (Pocomos has no outbound webhooks — §12) or an on-demand "refresh now" link from the dialer.
 
 4. **Active-customer upsell sync.** Customer No Add-Ons folder (`66229452`) was removed from PB on 2026-05-15 along with the v1 plan to feed active customers without renewal/upsell contracts into a follow-up bucket. Deferred until product decides what the upsell motion actually looks like.
 

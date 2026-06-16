@@ -1,20 +1,20 @@
 import { NextResponse } from "next/server";
 import { runLeadSync } from "@/lib/sync/leadSync";
-import { runConversionCleanup } from "@/lib/sync/conversionCleanup";
+import { refreshTrackedNotes } from "@/lib/sync/notesRefresh";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 /**
- * Pocomos → PhoneBurner sync. Two phases run in sequence:
+ * Pocomos → PhoneBurner lead sync (every 15 min). Two phases run in sequence:
  *   1. leadSync — pull new leads via the /leads/data web back-door,
  *      dedup, push to the Fresh folder with formatted notes.
- *   2. conversionCleanup — walk every contact already in an outbound
- *      folder, move converted ones to ACTIVE_CUSTOMER, lazily refresh
- *      notes blocks older than 24h.
+ *   2. notesRefresh — lazily refresh the PB `notes` field of tracked contacts
+ *      still in a policed folder whose cached notes are >24h old.
  *
- * The cron entry sits under `_disabled_crons` in vercel.json until the
- * sync is verified end-to-end against production.
+ * The folder-MOVE responsibility (active customers -> Active Customer folder)
+ * was moved OUT of this route into the hourly roster-reconciliation sweep at
+ * /api/cron/conversion-sweep — see docs/REFERENCE.md §5.5b.
  *
  * Auth: when CRON_SECRET is set, requires `Authorization: Bearer
  * $CRON_SECRET` (Vercel attaches this automatically on cron-triggered
@@ -47,9 +47,8 @@ export async function GET(request: Request) {
     pages_fetched: 0,
   }));
 
-  const conversionCleanup = await runConversionCleanup().catch((e) => ({
+  const notesRefresh = await refreshTrackedNotes().catch((e) => ({
     error: (e as Error).message,
-    moved: 0,
     refreshed_notes: 0,
     checked: 0,
     errors: [],
@@ -59,7 +58,7 @@ export async function GET(request: Request) {
   const combined = {
     ok: true,
     leadSync,
-    conversionCleanup,
+    notesRefresh,
     totalDurationMs: Date.now() - t0,
   };
 
