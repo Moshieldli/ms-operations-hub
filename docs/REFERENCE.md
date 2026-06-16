@@ -657,7 +657,9 @@ Top-level **Leads** tab (nav order: Sales · Leads · Calling · Combined · Ser
 
 **Real-lead hook:** `isRealLead(row)` in `closeRate.ts` is a v1 no-op (returns true) applied to the denominator — the clearly-commented place where a future "real close rate" will exclude unreachable / wrong-company leads (e.g. `reason_name` in {Can't Reach, Competitor}). NOT implemented yet.
 
-**KNOWN DATA GAP (verified 2026-06-16):** this office's `/leads/data` returns **no "Customer"-status rows** even with the filter dropped — only `Lead` / `Not Interested` / `Monitor` (3,026 all-time; 248 YTD). Converted leads leave the leads module (almost certainly the `mstli.apiuser` saved-view scoping → [[pocomos-leads-data-gotchas]]). So conversions currently compute as **0** and the raw close rate reads **0%**; `report.conversionSourceMissing` drives an on-screen banner. Lead counts + per-rep + unattributed are accurate now (YTD: Rena Shlomo 155, Rivka Leyton 93, unattributed 0). The conversion logic keys on `status === "Customer"` exactly as specified, so the metric lights up the moment those rows are exposed (or a customer-side conversion source is wired in — the recommended follow-up).
+**KNOWN DATA GAP (verified 2026-06-16):** this office's `/leads/data` returns **no "Customer"-status rows** even with the filter dropped — only `Lead` / `Not Interested` / `Monitor` (3,026 all-time; 248 YTD). Converted leads **leave the leads module**: `statuses[]=Customer` returns 0 rows to the `mstli.apiuser` API session (saved-view scoping → [[pocomos-leads-data-gotchas]]). So the leads-side conversion **numerator reads 0** and the raw close rate shows **0%**; `report.conversionSourceMissing` drives an on-screen banner. The conversion logic keys on `status === "Customer"` exactly as specified, so it lights up the moment those rows are exposed.
+
+**DOCUMENTED NEXT STEP (the fix):** source the **numerator from the CUSTOMER side**, not the leads grid — count customers carrying a `"{CURRENT_YEAR} - New Sale"` tag (a genuine new sale this season), attributed to a rep via the **customer record's service-information `Salesperson`** field (the `<dt>Salesperson</dt>` on `/customer/{id}/service-information`, per-customer scrape). **Keep the lead-side denominator** (leads created in the period, per rep) — that part is accurate today (YTD: Rena Shlomo 155, Rivka Leyton 93, unattributed 0). Only the numerator needs re-sourcing; the per-rep denominator and Unattributed bucketing stay as-is.
 
 ---
 
@@ -856,6 +858,10 @@ Status as of May 18, 2026 — after the rev 5 shipping pass.
 
 4. **Active-customer upsell sync.** Customer No Add-Ons folder (`66229452`) was removed from PB on 2026-05-15 along with the v1 plan to feed active customers without renewal/upsell contracts into a follow-up bucket. Deferred until product decides what the upsell motion actually looks like.
 
+5. **Assigned-only next-scheduled date (probe-confirmed 2026-06-15, NOT built).** The `/customers/data` col 9 "Next Service" (used today on `/service/overdue`) is **NOT assignment-aware** — Pocomos auto-creates a scheduled date as soon as a contract exists, so col 9 returns the earliest scheduled date regardless of whether a CSR has routed it. To show only *truly scheduled* jobs, source from the **per-customer** `GET /customer/{urlId}/scheduled-services` page (Surface C scrape), table `#scheduled-table`: columns `Date Scheduled (1) · Type (2) · Status (3) · … · Route Assigned (6) · Technician (7)`. **The assignment signal is the `Route Assigned` column == `"Assigned"` (exact match) — NOT `Status`**, which stays `Pending`/`Re-scheduled` even after routing. Beware: `"Unassigned"` contains the substring `"assigned"`, so match exactly (`/^assigned$/i`), never a substring. Compute "soonest future job where Route Assigned == Assigned". This is a per-customer scrape (no bulk source), and it's the input the `/service/overdue` row-coloring "48h rescue" hook in `overdue-view.tsx::rowToneClass()` is waiting on. Probes: `scripts/probe-scheduled-services.ts`, `scripts/probe-scheduled-scan.ts`.
+
+6. **Customer deactivation date + reason are NOT in the JWT API (probe-confirmed 2026-06-16, scrape-only).** Verified on active + inactive customers across all three JWT surfaces (customer list = 9 skinny fields; `GET /jwt/office/{office}/customer/{id}` = profile/state/addresses but only `status`; `/contracts` = `date_cancelled`/`sales_status_modified` null/unreliable for inactive). The customer-level **"Customer Deactivation Date"** and **deactivation Reason** live only in the web UI: the "Update Account Status" modal `GET /customer/{id}/deactivate?contractid={cid}` is a *write* form (selects don't echo current values) and exposes the **vocabularies** — Cancel Reasons (`activation[statusReason]`: Bad Debit, Bad Sale, Can't Reach, Competitor, DIY, Duplicate, Financial, Moved, Out of Service Area, Personal Reason, Results, Results - SL) and Sales Statuses (`activation[salesStatus]`: Pending, Initial Job Complete, Cancelled Customer, Cancelled - Do Not Contact, Cancelled - Moved). The recorded **Sales Status IS scrapeable** from `/customer/{id}/service-information` as a description-list pair (`<dt>Sales status</dt><dd>…</dd>`, contract-scoped). Consequence: **"Cancelled – This Year" (by true deactivation date) and a cancelled-by-reason breakdown remain UNBUILT** — they need a per-customer scrape job (mirror the inactive-enrichment cron). The current taxonomy (§ Sales) uses the tag-based "Not Renewed" carve + last-service-year breakdown as the available proxy. Probes: `scripts/probe-deactivation-fields.ts`, `probe-deact-modal.ts`, `probe-deact-dtdd.ts`, `probe-inactive-deact.ts`.
+
 ### Fallback if the web back-door breaks
 
 The web back-door (Surface B) is the load-bearing piece for the lead sync. If Pocomos changes the form, the CSRF scheme, the `/leads/data` schema, or the session cookie name, the sync silently empties out. Mitigations:
@@ -890,6 +896,16 @@ curl https://ms-operations-hub.vercel.app/api/cron/snapshot
 # Read last N snapshots
 curl https://ms-operations-hub.vercel.app/api/snapshots?limit=7
 ```
+
+### 11.1 Command hygiene (PowerShell on Windows) — avoids approval prompts
+
+The working agreement lives in `CLAUDE.md` (repo root); the load-bearing rules:
+
+- **Commit messages:** `git commit -m "short single line"`, OR a message file in the **project root** (`git commit -F msg.txt`, then delete it). **Never** write into `.git\`.
+- **Vercel CLI:** call via `npx vercel` or a resolved PATH string — never `& "$env:APPDATA\npm\vercel.cmd"` (the `.ps1`/`.cmd` shim call-operator form trips the sandbox).
+- **No** `$(...)` subexpressions, **no** `Set-Location "...";&` wrappers, and **no** output redirect/re-read on commands (`> file; Get-Content`, `Select-String`, `Select-Object -Skip/-First` piped from a command). Put any verification in a `.ts` script run as one plain `node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/<x>.ts` that logs only what's needed.
+- Assume you're already in the project directory; call `node`/`git`/`npm`/`vercel` directly.
+- npm-global CLIs: invoke the `.cmd` (e.g. `npx vercel`); the `.ps1` shim is blocked by execution policy.
 
 ---
 
