@@ -6,6 +6,10 @@
       service-information). See REFERENCE §9 #6.
 - [ ] Assigned-only "Next scheduled" + 48h color rescue: per-customer scheduled-services scrape,
       Route Assigned == "Assigned" (exact match), wire into rowToneClass() hook. See REFERENCE §9 #5.
+- [ ] Top converting lead sources — rank marketing source/type by conversion (which sources turn
+      into customers, not just volume). Note: lead-side marketing_type is ~93% blank, so source the
+      marketing type from the converted customer's record; join via the 76 converted leads from the
+      Advanced Search feed. Self-probe the customer-side marketing field first.
 
 ## Needs a human decision
 - [ ] "Real lead" definition for close rate — pending Rivka & Leon (drops into isRealLead() hook).
