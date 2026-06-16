@@ -10,6 +10,7 @@ const links = [
   { href: "/calling", label: "Calling" },
   { href: "/combined", label: "Combined" },
   { href: "/service", label: "Service" },
+  { href: "/texting", label: "Texting" },
 ];
 
 export function Nav() {
