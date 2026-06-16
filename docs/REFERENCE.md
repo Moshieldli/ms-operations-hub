@@ -667,6 +667,24 @@ Code: `src/lib/leads/closeRate.ts` (`setAdvancedSearchCriteria`, `fetchAllLeads`
 
 ---
 
+### 5.7 `/texting` — Aerialink texting archive + the app's only auth gate (2026-06-16)
+
+Read-only inbox-style archive of the Aerialink SMS history. Left pane lists conversations (newest activity first, client-side search by number/name/email/message); right pane renders the full thread bubble-style with inbound/outbound sides and per-day dividers. Built from two Neon tables (`texting_messages`, `texting_contacts` — see §7) imported once via root-level `import-texting.mjs` from `aerialink_open_messages.csv` + `aerialink_open_conversations.csv`.
+
+Code: `src/app/texting/page.tsx` (client inbox), `src/app/api/texting/search/route.ts` (`?list=1` left pane, `?cid=` thread, `?q=` body search), `src/app/texting/login/page.tsx` (login screen), `src/app/api/texting/login/route.ts` (password check + cookie), `src/middleware.ts` (the gate), `import-texting.mjs` (one-time loader).
+
+**Auth gate — this is the ONLY login in the entire app.** Every other page (`/`, `/sales`, `/leads`, `/service`, …) and most data APIs render publicly with no auth. Because the texting archive exposes customer names, emails, addresses and phone numbers, `src/middleware.ts` gates **only** `/texting`, `/texting/*`, and `/api/texting/*` behind a shared password (`TEXTING_PASSWORD` env var). Decision (2026-06-16): scope the gate to texting only, leaving the rest of the dashboard as-is.
+
+How it works:
+- `matcher: ['/texting', '/texting/:path*', '/api/texting/:path*']`. `/texting/login` and `/api/texting/login` are explicitly allow-listed so the login flow is reachable without a cookie.
+- The login POST compares against `TEXTING_PASSWORD` and, on match, sets an httpOnly `texting_auth` cookie holding `SHA-256("ms-texting:" + password)` (the plaintext never lives in the browser). Middleware recomputes the same token via Web Crypto and string-compares.
+- **Fail-closed:** if `TEXTING_PASSWORD` is unset, no cookie can match → pages stay locked (page → 307 to `/texting/login`; API → 401). No PII leaks when misconfigured.
+- Cookie TTL 30 days. To rotate/revoke: change `TEXTING_PASSWORD` in Vercel (invalidates all existing cookies since the token changes).
+
+Live verification (2026-06-16, `https://ms-operations-hub.vercel.app`): API without cookie → 401; `/texting` without cookie → 307 to login; wrong password → 401; correct password → 200 + cookie; with cookie API → 200 returning 6,430 conversations.
+
+---
+
 ## 6. File Structure (shipped)
 
 ```
@@ -746,6 +764,28 @@ CREATE TABLE mosquito_service_status (
 ```
 The `sign_up_date` and `open_balance` columns were added 2026-06-12; `next_service_date` and `is_weekly` were added 2026-06-14. `initSchema()` includes all of them in the `CREATE` and also runs `ALTER TABLE … ADD COLUMN IF NOT EXISTS` for environments where the table predates them. (As of 2026-06-14 `sign_up_date` is populated from the active mosquito contract's `date_start`, not grid col 7 — see §5.5.)
 
+**`texting_messages`** / **`texting_contacts`** — the Aerialink texting archive, backing `/texting` (see §5.7). Loaded by the one-time `import-texting.mjs` script from the CSV exports; safe to re-run (drops + rebuilds each time). 47,114 messages across ~6,420 phone numbers / 6,430 conversations as of 2026-06-16.
+```sql
+CREATE TABLE texting_contacts (
+  conversation_id TEXT PRIMARY KEY,
+  phone TEXT, phone_full TEXT,          -- last-10 + all-digits
+  first_name TEXT, last_name TEXT, email TEXT,
+  address TEXT, city TEXT, state TEXT, zip TEXT,
+  last_message TEXT, status TEXT,
+  updated_at TIMESTAMPTZ                -- drives the left-pane ordering
+);
+CREATE TABLE texting_messages (
+  id BIGSERIAL PRIMARY KEY,
+  conversation_id TEXT,
+  phone TEXT, phone_full TEXT,          -- the CONTACT's number (keyed by conversation_id), NOT our business line
+  body TEXT,
+  sent_at TIMESTAMPTZ,
+  direction TEXT,                       -- raw value of the export's "from" column
+  is_inbound BOOLEAN                    -- derived: true = from customer, false = from us
+);
+```
+**Import gotcha (fixed 2026-06-16):** the messages CSV has a `mobile_user` column that actually holds *our* business line, so keying the phone off it tagged every message with the same number (only 2 distinct). `import-texting.mjs` now takes the phone from `phoneByCid.get(conversation_id)` (the contacts file) first, falling back to the message column only when empty — which also fixes inbound/outbound detection.
+
 ### Tables to add for PhoneBurner
 
 **`sync_state`** — single-row table holding watermarks.
@@ -806,6 +846,9 @@ POCOMOS_OFFICE_ID=1512
 # PhoneBurner
 PHONEBURNER_TOKEN=exRZkIeTSL7wY0Q1MimzJRLmB3JWgvaatMmGhW6K
 WEBHOOK_SECRET=<generate a random string>
+
+# Texting archive (the ONLY auth gate in the app — see §5.7)
+TEXTING_PASSWORD=<shared password; set on Production+Preview+Development>
 
 # Neon (auto-set by Vercel Marketplace install)
 POSTGRES_URL=...
