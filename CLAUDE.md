@@ -10,6 +10,12 @@ column maps, bucket logic, integrations). Treat it as source of truth and keep i
 - READ-ONLY against Pocomos unless explicitly told otherwise — GET only, never mutate records,
   never switch a customer's active contract.
 - After any build: update docs/REFERENCE.md, then build, commit, push, and verify LIVE.
+- Self-probing builds: when a build depends on a data field or behavior we haven't confirmed,
+  probe it FIRST in the same session, print what you found, then proceed to build using the
+  finding — do not stop to ask. Only split into a separate probe-only run if I explicitly say
+  "probe only."
+- Maintain docs/BACKLOG.md: when I say "add X to the backlog," add it; when I say "build,"
+  pull the next item(s) from it and update their status. Keep it current.
 
 ## Command hygiene (PowerShell on Windows) — prevents approval prompts
 - Commit messages: git commit -m "short single line", OR a message file in the PROJECT ROOT
