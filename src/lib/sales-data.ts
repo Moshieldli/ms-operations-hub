@@ -80,7 +80,12 @@ export function normalizeSummary(raw: unknown): SalesSummary {
       AT_RISK: num(b.AT_RISK),
       CANCELLED: num(b.CANCELLED),
     },
-    retainedSubtypes: { auto: num(rs.auto), seb: num(rs.seb), eb: num(rs.eb) },
+    retainedSubtypes: {
+      auto: num(rs.auto),
+      seb: num(rs.seb),
+      eb: num(rs.eb),
+      renewed: num(rs.renewed),
+    },
     cancelled: {
       total: num(c.total),
       thisYear: num(c.thisYear),

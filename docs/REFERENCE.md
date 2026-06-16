@@ -313,6 +313,7 @@ A search POST only READS — it never mutates a record. Canonical fetcher: `src/
 | `2026 - Auto` | Auto-renewed | RETAINED — Auto |
 | `2026 - SEB` | Service Email Booking | RETAINED — SEB |
 | `2026 - EB` | Email Booking | RETAINED — EB |
+| `2026 - Renewed` | Renewed continuation (dominant 2026 continuation tag) | RETAINED — Renewed |
 | `2025 - New Sale`, `2024 - ...` etc. | Historical year tags | Distinguish RETURNING vs. NEW |
 | `L - Competitor` | Lead competing with another company | PhoneBurner folder 66223882 |
 | `L - Financial` | Lead has price/financial concerns | PhoneBurner folder 66223883 |
@@ -322,10 +323,17 @@ A search POST only READS — it never mutates a record. Canonical fetcher: `src/
 **Bucket logic (current implementation):**
 - **NEW** = has `2026 - New Sale` AND has no prior YYYY tag
 - **RETURNING** = has `2026 - New Sale` AND has any prior YYYY tag
-- **RETAINED — Auto / SEB / EB** = has matching `2026 - {Auto|SEB|EB}` tag
-- **AT_RISK** = active customer with no current-year tag
+- **RETAINED — Auto / SEB / EB / Renewed** = has a matching `2026 - {Auto|SEB|EB|Prepaid|Committed|Renewed}` continuation tag (no `New Sale`)
+- **AT_RISK** = active customer with a prior-year tag but no current-year continuation/new-sale tag
 - **CANCELLED** = status `Inactive`
-- **`2026 - Renewed` does NOT exist** — earlier code that looked for it was wrong, per Rivka.
+- **`2026 - Renewed` IS a live continuation tag (corrected 2026-06-15).** Probe A found 148 active customers carry it and 125 had it as their only current-year tag — those were wrongly dropping into AT_RISK ("Current Cancelled"). It is now folded into the RETAINED continuation set in `categorize.ts` (`bucketFor`) and tallied as a 4th RETAINED subtype (`retainedSubtypes.renewed`) alongside Auto/SEB/EB. After the fix: RETAINED ≈ 985, AT_RISK ≈ 17. Earlier docs/comments claiming the tag "does not exist" were wrong.
+
+**Sales-page display labels + layout (relabeled/reorganized 2026-06-15, display-only — internal bucket keys and `categorize.ts` logic unchanged):**
+- Label map: NEW→"New", RETURNING→"New – Season Skipped" (was "New – Lapsed"), RETAINED→"Returning", AT_RISK→"Not Renewed" (was "Current Cancelled"), CANCELLED→"Cancelled – All Time".
+- Tiles are arranged in two rows: **Row 1 (this season)** = Active Customers · Active Services · New · New – Season Skipped · Returning · Not Renewed; **Row 2** = Cancelled – All Time · Untagged.
+- Every tile is **self-describing**: the criteria/definition text is rendered inline inside each square (the old separate "How are buckets calculated?" card was removed).
+- A **reconciliation line** under Row 1 computes live: `<New+Skipped+Returning> tagged + <NotRenewed> not renewed = <sum> vs <Active> active (Δ<n> edge cases)`.
+- `/tv/sales` carries the same relabels + the Renewed subtype, but stays a glanceable grid (no inline definitions / reconciliation line — a deliberate choice for the TV view).
 
 **Headline metrics — Active Customers & Active Services (redefined 2026):**
 
@@ -618,6 +626,8 @@ In-season tool flagging active mosquito customers who haven't been serviced rece
 **Weekly pill (added 2026-06-14, display-only).** Rows for a weekly-cadence mosquito customer show a small inline "Weekly" pill next to the name. Detected via `isWeeklyContract()` from the mosquito contract's `service_frequency` and/or `service_type` name containing "Weekly" (bi-weekly excluded — it also contains the substring "weekly"). **Does NOT change the overdue threshold** — the flat 15-day line still applies to everyone; this is purely a visual marker.
 
 Every row (overdue / paused / needs-check) shows the customer's **sign-up date** (active mosquito contract `date_start`), **next scheduled service** (col 9), and a **Weekly** pill when applicable.
+
+**Row coloring + Profile link (added 2026-06-15).** Overdue rows are tinted by days since last mosquito service: **17–20 → yellow, 21+ → red, <17 (or unknown) → normal**. Thresholds are named constants in `overdue-view.tsx` (`LATE_DAYS = 17`, `VERY_LATE_DAYS = 21`), distinct from the 15-day `OVERDUE_THRESHOLD_DAYS` (bucketing) in `mosquito.ts`. There is a clearly-commented hook in `rowToneClass()` for a future **"48h rescue"** override (a row with an ASSIGNED job within 48h will drop back to normal once the assigned-only next-scheduled date is sourced — see the scheduled-services probe; NOT implemented yet). The per-row link now reads **"Profile"** and points at `https://mypocomos.net/customer/{pocomos_id}/service-information` (the 7-digit Pocomos url id) for overdue/paused rows; needs-check rows keep a **"History"** link to `/service-history` (so the contract can be switched + read).
 
 **Hybrid source (the speed fix — ~1–2 min vs ~30 min).** The JWT contract object has no usable last-service date (§9), so:
 1. **Bulk** — `POST /customers/data` (~6 pages) → every customer's "Last Service" date (column 8) **and next-scheduled date (column 9)**, plus `POST /finance/unpaid-data` (one report, §3.6) → every customer's open balance. Sign-up comes from the eligible mosquito contract's `date_start` (JWT, not the grid — see the sign-up note above), so col 7 is no longer read for sign-up. Precedence rules 1–2 and **mosquito-only** eligible customers (no active non-mosquito contract, ~79%) are all resolved here — no scrape.

@@ -89,43 +89,24 @@ function LiveStatus({
   );
 }
 
-function Stat({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-}) {
-  return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardDescription>{label}</CardDescription>
-        <CardTitle className="text-2xl tabular-nums sm:text-3xl">
-          {value}
-        </CardTitle>
-      </CardHeader>
-      {hint ? (
-        <CardContent className="pt-0 text-xs text-muted-foreground">
-          {hint}
-        </CardContent>
-      ) : null}
-    </Card>
-  );
-}
-
+/**
+ * Self-describing tile. `def` is the inline criteria/definition text shown in
+ * every square (replaces the old separate "How are buckets calculated?" card).
+ * `hint` carries an optional numeric sub-breakdown (e.g. RETAINED subtypes).
+ */
 function BucketCell({
   label,
   value,
+  def,
   hint,
 }: {
   label: string;
   value: number;
+  def?: string;
   hint?: string;
 }) {
   return (
-    <div className="rounded-md border p-3 sm:p-4">
+    <div className="flex flex-col rounded-md border p-3 sm:p-4">
       <div className="text-xs uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
@@ -133,7 +114,14 @@ function BucketCell({
         {fmt(value)}
       </div>
       {hint ? (
-        <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
+        <div className="mt-1 text-xs font-medium text-muted-foreground">
+          {hint}
+        </div>
+      ) : null}
+      {def ? (
+        <div className="mt-2 text-[11px] leading-snug text-muted-foreground">
+          {def}
+        </div>
       ) : null}
     </div>
   );
@@ -141,7 +129,7 @@ function BucketCell({
 
 function SalesDashboard({ summary }: { summary: SalesSummary }) {
   const { totals, buckets, retainedSubtypes, cancelled, debug, year } = summary;
-  const retainedHint = `Auto ${retainedSubtypes.auto} · SEB ${retainedSubtypes.seb} · EB ${retainedSubtypes.eb}`;
+  const retainedHint = `Auto ${retainedSubtypes.auto} · SEB ${retainedSubtypes.seb} · EB ${retainedSubtypes.eb} · Renewed ${retainedSubtypes.renewed}`;
   const onHoldHint = totals.onHoldCustomers
     ? `${fmt(totals.onHoldCustomers)} on hold`
     : undefined;
@@ -149,74 +137,98 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
   const tagsHint =
     debug.tagsFailed > 0
       ? `${fmt(debug.tagsFetched)} fetched · ${debug.tagsFailed} failed`
-      : `${fmt(debug.tagsFetched)} fetched in ${fetchSeconds}s`;
+      : `${fmt(debug.tagsFetched)} tags fetched in ${fetchSeconds}s`;
   const yearNum = parseInt(year, 10);
   const prevYear = yearNum - 1;
   const cancelledHint = `${fmt(cancelled.thisYear)} in ${year} · ${fmt(cancelled.lastYear)} in ${prevYear} · ${fmt(cancelled.earlier)} earlier`;
 
+  // Reconciliation: the three current-year-tagged buckets should sum to Active
+  // Customers; AT_RISK ("Not Renewed") sits outside that gate. Δ = the edge
+  // cases (untagged actives, uncategorized, and AT_RISK members lacking a
+  // current-year tag). Computed live so it always ties out to the buckets shown.
+  const taggedActive = buckets.NEW + buckets.RETURNING + buckets.RETAINED;
+  const notRenewed = buckets.AT_RISK;
+  const reconSum = taggedActive + notRenewed;
+  const reconDelta = Math.abs(reconSum - totals.activeCustomers);
+
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
-        <Stat label="Active Customers" value={fmt(totals.activeCustomers)} />
-        <Stat label="Active Services" value={fmt(totals.activeServices)} />
-        <Stat
-          label="Cancelled"
-          value={fmt(totals.cancelledCustomers)}
-          hint={onHoldHint}
+      {/*
+        DISPLAY-ONLY relabels — internal bucket keys + categorize.ts logic are
+        unchanged; only user-facing labels differ. Map by internal key:
+          NEW       → "New"
+          RETURNING → "New – Season Skipped"
+          RETAINED  → "Returning"
+          AT_RISK   → "Not Renewed"      (was "Current Cancelled")
+          CANCELLED → "Cancelled – All Time"
+        Every tile self-describes via `def` (replaces the old rules card).
+      */}
+
+      {/* Row 1 — this season */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-6">
+        <BucketCell
+          label="Active Customers"
+          value={totals.activeCustomers}
+          def={`Customers carrying a ${year} year-tag — counted active for this season.`}
         />
-        <Stat
+        <BucketCell
+          label="Active Services"
+          value={totals.activeServices}
+          def="Active contracts held by those current-year customers."
+        />
+        <BucketCell
+          label="New"
+          value={buckets.NEW}
+          def="Brand-new this year, no prior-year history."
+        />
+        <BucketCell
+          label="New – Season Skipped"
+          value={buckets.RETURNING}
+          def="Was a customer before, skipped one or more full seasons, signed up new again this year."
+        />
+        <BucketCell
+          label="Returning"
+          value={buckets.RETAINED}
+          hint={retainedHint}
+          def="Service continued from last year into this year (auto-renew / early rebook / renewed)."
+        />
+        <BucketCell
+          label="Not Renewed"
+          value={buckets.AT_RISK}
+          def="Treated in a prior year but no current-year tag yet — not renewed for this season."
+        />
+      </div>
+
+      {/* Reconciliation line */}
+      <p className="text-xs text-muted-foreground">
+        {fmt(taggedActive)} tagged + {fmt(notRenewed)} not renewed ={" "}
+        {fmt(reconSum)} vs {fmt(totals.activeCustomers)} active (Δ
+        {fmt(reconDelta)} edge cases)
+      </p>
+
+      {/* Row 2 — all-time / untagged */}
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-6">
+        <BucketCell
+          label="Cancelled – All Time"
+          value={totals.cancelledCustomers}
+          hint={onHoldHint ? `${cancelledHint} · ${onHoldHint}` : cancelledHint}
+          def="Marked Inactive in Pocomos (all years)."
+        />
+        <BucketCell
           label="Untagged"
-          value={fmt(debug.untagged)}
+          value={debug.untagged}
           hint={
             debug.uncategorized
               ? `${debug.uncategorized} uncategorized`
               : tagsHint
           }
+          def="Active in Pocomos but carrying no year tags at all."
         />
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Buckets &middot; {year}</CardTitle>
-          <CardDescription>
-            Live categorization from Pocomos year tags.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {/*
-            DISPLAY-ONLY relabels — internal bucket keys + categorize.ts logic
-            are unchanged; only the user-facing labels differ. The word
-            "Returning" intentionally moves from RETAINED's label to RETURNING's
-            new "New – Lapsed", so map by key carefully:
-              NEW       → "New"
-              RETURNING → "New – Lapsed"
-              RETAINED  → "Returning"
-              AT_RISK   → "Current Cancelled"
-              CANCELLED → "Cancelled"
-          */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-5">
-            <BucketCell label="New" value={buckets.NEW} />
-            <BucketCell label="New – Lapsed" value={buckets.RETURNING} />
-            <BucketCell
-              label="Returning"
-              value={buckets.RETAINED}
-              hint={retainedHint}
-            />
-            <BucketCell label="Current Cancelled" value={buckets.AT_RISK} />
-            <BucketCell
-              label="Cancelled"
-              value={buckets.CANCELLED}
-              hint={cancelledHint}
-            />
-          </div>
-        </CardContent>
-      </Card>
 
       <ContractTypeCard summary={summary} />
 
       <CancelledByYearCard summary={summary} />
-
-      <BucketRulesCard />
     </>
   );
 }
@@ -309,58 +321,3 @@ function CancelledByYearCard({ summary }: { summary: SalesSummary }) {
   );
 }
 
-function BucketRulesCard() {
-  // DISPLAY-ONLY: labels + criteria text are user-facing. Internal bucket keys
-  // and categorize.ts logic are unchanged — each entry below still maps 1:1 to
-  // the same internal bucket it always did (NEW, RETURNING, RETAINED, AT_RISK,
-  // CANCELLED, in that order).
-  const rules: Array<{ label: string; rule: string }> = [
-    {
-      // internal NEW
-      label: "New",
-      rule: "Brand-new this year, no prior-year history.",
-    },
-    {
-      // internal RETURNING
-      label: "New – Lapsed",
-      rule: "Was a customer before, skipped one or more full seasons, signed up new again this year.",
-    },
-    {
-      // internal RETAINED
-      label: "Returning",
-      rule: "Service continued from last year into this year (auto-renew / early rebook).",
-    },
-    {
-      // internal AT_RISK
-      label: "Current Cancelled",
-      rule: "Treated last year, NOT treated this year yet.",
-    },
-    {
-      // internal CANCELLED
-      label: "Cancelled",
-      rule: "Marked Inactive in Pocomos.",
-    },
-  ];
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>How are buckets calculated?</CardTitle>
-        <CardDescription>
-          Buckets read live Pocomos year tags per customer.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <dl className="grid gap-3 text-sm sm:grid-cols-2">
-          {rules.map((r) => (
-            <div key={r.label} className="rounded-md border p-3">
-              <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                {r.label}
-              </dt>
-              <dd className="mt-1 text-sm leading-snug">{r.rule}</dd>
-            </div>
-          ))}
-        </dl>
-      </CardContent>
-    </Card>
-  );
-}

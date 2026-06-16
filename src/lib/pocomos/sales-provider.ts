@@ -70,7 +70,7 @@ export interface SalesSummary {
     onHoldCustomers: number;
   };
   buckets: Record<Bucket, number>;
-  retainedSubtypes: { auto: number; seb: number; eb: number };
+  retainedSubtypes: { auto: number; seb: number; eb: number; renewed: number };
   cancelled: CancelledBreakdown;
   /**
    * Active services grouped into service families (Mosquito, Tick, Ant, Fly
@@ -148,6 +148,7 @@ export function summarize(dataset: PocomosDataset): SalesSummary {
   let auto = 0;
   let seb = 0;
   let eb = 0;
+  let renewed = 0;
   // Headline (tag-gated) counts.
   let activeCustomers = 0;
   let activeServices = 0;
@@ -201,9 +202,12 @@ export function summarize(dataset: PocomosDataset): SalesSummary {
       }
       buckets[b]++;
       if (b === "RETAINED") {
+        // Subtype precedence mirrors the order continuation tags are checked.
+        // "Renewed" is the 2026 office's dominant continuation tag (Probe A).
         if (tagSet.has(`${year} - Auto`)) auto++;
         else if (tagSet.has(`${year} - SEB`)) seb++;
         else if (tagSet.has(`${year} - EB`)) eb++;
+        else if (tagSet.has(`${year} - Renewed`)) renewed++;
       }
     } else if (status === "inactive") {
       cancelledTotal++;
@@ -267,7 +271,7 @@ export function summarize(dataset: PocomosDataset): SalesSummary {
       onHoldCustomers: dataset.diagnostics.onHoldCount,
     },
     buckets,
-    retainedSubtypes: { auto, seb, eb },
+    retainedSubtypes: { auto, seb, eb, renewed },
     cancelled,
     contractTypeGroups,
     debug: {

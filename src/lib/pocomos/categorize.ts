@@ -12,13 +12,16 @@ const CURRENT_YEAR = String(new Date().getFullYear());
  *    - If no prior YYYY tag, they're brand new — NEW.
  *  - No "{year} - New Sale" tag:
  *    - If they have a continuation tag for {year} (Auto / SEB / EB / Prepaid /
- *      Committed), service rolled into the new year — RETAINED.
+ *      Committed / Renewed), service rolled into the new year — RETAINED.
  *    - If they only have prior YYYY tags, the year hasn't been renewed yet —
  *      AT_RISK.
  *    - Otherwise null (untagged for the year — no bucket).
  *
- * Note: "{year} - Renewed" was removed. That tag doesn't exist in Pocomos;
- * the previous categorize logic checked for it and would have always missed.
+ * Note: "{year} - Renewed" IS a live continuation tag (Probe A, 2026-06-15:
+ * 148 active customers carry "2026 - Renewed", 125 of them with it as their
+ * only current-year tag). It was previously — and wrongly — excluded, which
+ * dropped those 125 into AT_RISK ("Current Cancelled"). It is now recognized
+ * as a continuation tag alongside Auto/SEB/EB/Prepaid/Committed.
  */
 // TODO (DEFERRED — do not implement yet; spec pending): Season reset.
 // After Sept 30, AT_RISK customers (shown on /sales as "Current Cancelled" —
@@ -33,7 +36,9 @@ export function bucketFor(tags: Set<string>, year: string): Bucket | null {
   const hasSEB = tags.has(`${year} - SEB`);
   const hasEB = tags.has(`${year} - EB`);
   const hasOther =
-    tags.has(`${year} - Prepaid`) || tags.has(`${year} - Committed`);
+    tags.has(`${year} - Prepaid`) ||
+    tags.has(`${year} - Committed`) ||
+    tags.has(`${year} - Renewed`);
   const hasContinuation = hasAuto || hasSEB || hasEB || hasOther;
   const hasPriorYear = Array.from(tags).some((t) => {
     const m = t.match(/^(\d{4}) -/);

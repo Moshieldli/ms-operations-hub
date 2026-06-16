@@ -14,6 +14,29 @@ import type { OverdueReport, MosquitoStatusRow } from "@/lib/service/refresh";
 
 const POCOMOS_BASE = "https://mypocomos.net";
 
+// Row-coloring thresholds (days since last mosquito service). Distinct from the
+// 15-day OVERDUE_THRESHOLD_DAYS in mosquito.ts — these only drive the visual
+// severity tint, not bucketing.
+const LATE_DAYS = 17; // 17–20 days → yellow row
+const VERY_LATE_DAYS = 21; // 21+ days → red row
+
+/**
+ * Severity tint for an overdue row, by days since last mosquito service:
+ *   21+ → red, 17–20 → yellow, <17 (or unknown) → normal.
+ *
+ * FUTURE — "48h rescue" override (not implemented yet): once we source the
+ * assigned-only next-scheduled date (per the scheduled-services probe), a row
+ * with an ASSIGNED job within the next 48h should drop back to normal (no tint)
+ * even when days_since is high, because service is imminent. Wire that in here:
+ *   if (hasAssignedJobWithin48h) return "";   // <-- 48h rescue hook
+ */
+function rowToneClass(daysSince: number | null): string {
+  if (daysSince == null) return "";
+  if (daysSince >= VERY_LATE_DAYS) return "bg-rose-50 dark:bg-rose-950/30";
+  if (daysSince >= LATE_DAYS) return "bg-amber-50 dark:bg-amber-950/30";
+  return "";
+}
+
 function fmt(n: number) {
   return n.toLocaleString("en-US");
 }
@@ -257,7 +280,10 @@ function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowKind }) 
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.pocomos_id} className="border-b last:border-0">
+            <tr
+              key={r.pocomos_id}
+              className={`border-b last:border-0 ${rowToneClass(r.days_since)}`}
+            >
               <td className="py-2 pr-4 font-medium">
                 <span className="inline-flex items-center gap-1.5">
                   {r.full_name || r.pocomos_id}
@@ -302,15 +328,19 @@ function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowKind }) 
                 {shortDate(r.sign_up_date)}
               </td>
               <td className="py-2 pl-4 text-right">
+                {/* needs-check rows link to service HISTORY (to read history &
+                    switch the contract); overdue/paused link to the customer
+                    PROFILE (service-information). pocomos_id is the 7-digit
+                    Pocomos url id. */}
                 <a
                   href={`${POCOMOS_BASE}/customer/${r.pocomos_id}/${
-                    kind === "paused" ? "service-information" : "service-history"
+                    kind === "needsCheck" ? "service-history" : "service-information"
                   }`}
                   target="_blank"
                   rel="noreferrer"
                   className="text-primary underline-offset-4 hover:underline"
                 >
-                  open
+                  {kind === "needsCheck" ? "History" : "Profile"}
                 </a>
               </td>
             </tr>
