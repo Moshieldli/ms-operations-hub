@@ -181,18 +181,6 @@ export function LeadsView({ initial }: { initial: LeadsCloseRateReport | null })
         </p>
       ) : (
         <>
-          {report.conversionSourceMissing ? (
-            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
-              No converted (&ldquo;Customer&rdquo;-status) leads were returned by
-              Pocomos&rsquo; <code>/leads/data</code> for this period, so
-              conversions read 0. This office&rsquo;s lead feed only exposes Lead
-              / Not Interested / Monitor (converted leads leave the leads module —
-              likely the <code>mstli.apiuser</code> saved-view scoping). Lead and
-              per-rep counts below are still accurate; the conversion source needs
-              to be resolved before the close rate is meaningful.
-            </div>
-          ) : null}
-
           {/* Team headline */}
           <Card>
             <CardHeader>

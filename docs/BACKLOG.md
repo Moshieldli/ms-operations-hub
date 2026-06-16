@@ -1,8 +1,6 @@
 # Backlog — MS Operations Hub
 
 ## Ready to build (unblocked)
-- [ ] Leads close-rate numerator: pull Customer-status leads from /leads/data using the exact
-      advanced-search request params (per the conversion probe). Lights up conversions + per-rep.
 - [ ] Cancelled – This Year (by deactivation date) + cancelled-by-reason — needs the per-customer
       deactivation scrape job (date+reason are scrape-only; sales_status scrapeable from
       service-information). See REFERENCE §9 #6.
@@ -23,4 +21,7 @@
 - [x] Overdue Profile link + day-based coloring + new-tab links
 - [x] Visual polish pass (type scale + semantic color)
 - [x] Leads tab scaffold (denominator + per-rep live; numerator pending)
+- [x] Leads close-rate numerator + denominator via the Advanced Search two-step feed
+      (set search[leadStatus][] for all five statuses, pull /lead/lead-advanced-search/data).
+      Conversions live: 76 / 324 = 23.5% YTD; per-rep + unattributed from the one feed.
 - [x] CLAUDE.md + REFERENCE.md consolidation

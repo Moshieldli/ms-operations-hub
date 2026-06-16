@@ -1,25 +1,46 @@
 import { initSchema, sql } from "@/lib/db";
-import { postSessioned } from "@/lib/pocomos/webSession";
+import {
+  postSessioned,
+  getSessionedHtml,
+  getPocomosSession,
+  pocomosWebBase,
+  invalidateSession,
+  looksLikeSessionExpired,
+} from "@/lib/pocomos/webSession";
 
 /**
- * Leads RAW close-rate report, sourced from the Pocomos /leads/data web
- * back-door (legacy DataTables 1.9 body — same session mechanism as
- * leadSync.ts) but WITHOUT the `statuses[]=Lead` filter, so every status is
- * returned.
+ * Leads RAW close-rate report, sourced from the Pocomos **Lead Advanced Search**
+ * feed (the only feed that returns converted/"Customer" leads).
+ *
+ * The plain `/leads/data` "View All" list is server-scoped to OPEN leads only
+ * (Lead / Not Interested / Monitor) and can never return Customer rows — no
+ * parameter changes that (confirmed by probes). Converted leads are NOT gone;
+ * they're reachable through the Advanced Search two-step flow:
+ *
+ *   1. setAdvancedSearchCriteria() — scrape `search[_token]` from
+ *      /leads/advanced-search/show, then POST /leads/lead-advanced-search with
+ *      `search[leadStatus][]` for ALL FIVE statuses (Lead, Not Home, Not
+ *      Interested, Customer, Monitor) + branch + token. This stores the criteria
+ *      in the PHP session.
+ *   2. fetchAllLeads() — POST /lead/lead-advanced-search/data (legacy DataTables
+ *      1.9 body) which reads the session criteria and returns `aaData` keyed
+ *      objects (id, status, date_added, salesperson, first_name, phone).
+ *
+ * Both halves of the metric come from THIS one feed (do NOT reuse the old
+ * /leads/data denominator — it excludes the converted leads and would overstate
+ * the rate).
  *
  * Metric (v1 — raw only):
- *   Raw close rate = (leads created in the period whose status is now
- *   "Customer") ÷ (all leads created in the period, any status) × 100.
- *   Period is bounded by `date_added`.
- *
- * NOTE (verified 2026-06-16): this office's /leads/data does NOT surface
- * "Customer"-status rows (only Lead / Not Interested / Monitor) — converted
- * leads leave the leads module (likely the `mstli.apiuser` saved-view scoping).
- * The conversion logic below keys on status === "Customer" exactly as specified,
- * so it lights up the moment those rows appear; until then `totalConversions`
- * reads 0 and the UI shows a banner. `statusBreakdown` is returned so callers
- * can detect this.
+ *   Raw close rate = (leads created in the period whose status is "Customer")
+ *   ÷ (all leads created in the period, any status) × 100. Period bounded by
+ *   `date_added` in code. READ-ONLY against Pocomos (GET + DataTables-read POST).
  */
+
+const ADV_SHOW = "/leads/advanced-search/show";
+const ADV_SUBMIT = "/leads/lead-advanced-search";
+const ADV_FEED = "/lead/lead-advanced-search/data";
+const LEAD_STATUSES = ["Lead", "Not Home", "Not Interested", "Customer", "Monitor"] as const;
+const OFFICE = process.env.POCOMOS_OFFICE || "1512";
 
 const POCOMOS_COLUMNS = [
   "name_with_company",
@@ -58,17 +79,72 @@ export interface LeadsCloseRateReport {
   reps: RepRow[];
   /** Telemetry: count per raw status value in the period. */
   statusBreakdown: Record<string, number>;
-  /** True when no "Customer"-status rows were present (conversion source gap). */
-  conversionSourceMissing: boolean;
   computedAt: string;
 }
 
 interface LeadsDataResponse {
   aaData?: Array<Record<string, unknown>>;
   data?: Array<Record<string, unknown>>;
+  type?: string;
+  redirect?: string;
 }
 
-async function fetchLeadsPage(start: number): Promise<Array<Record<string, unknown>>> {
+/**
+ * Step 1 — register "all five lead statuses" as the Advanced Search criteria in
+ * the session, so the feed (step 2) returns every status incl. Customer. POSTs
+ * the Symfony search form (returns HTML, not JSON) using the raw session cookie.
+ * Re-logs once on session expiry.
+ */
+async function setAdvancedSearchCriteria(): Promise<void> {
+  const html = await getSessionedHtml(ADV_SHOW);
+  const token = (html.match(/name="search\[_token\]"[^>]*value="([^"]+)"/) || [])[1] || "";
+  // Send every search[...] text input empty (Symfony form expectation), then
+  // override the bits we actually filter on.
+  const inputNames = new Set<string>();
+  for (const m of html.matchAll(/<input\b[^>]*name="(search\[[^"]+\])"[^>]*>/gi)) {
+    inputNames.add(m[1]);
+  }
+  const form = new URLSearchParams();
+  for (const n of inputNames) if (!/_token/.test(n)) form.set(n, "");
+  form.set("search[_token]", token);
+  form.append("search[branches][]", OFFICE);
+  form.set("search[allBranches]", "1");
+  for (const s of LEAD_STATUSES) form.append("search[leadStatus][]", s);
+
+  const submit = async (cookie: string) =>
+    fetch(`${pocomosWebBase()}${ADV_SUBMIT}`, {
+      method: "POST",
+      redirect: "manual",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Cookie: cookie,
+        Referer: `${pocomosWebBase()}${ADV_SHOW}`,
+        "User-Agent": "ms-operations-hub-sync/1.0",
+        Accept: "text/html,application/xhtml+xml",
+      },
+      body: form.toString(),
+      cache: "no-store",
+    });
+
+  let cookie = await getPocomosSession();
+  let resp = await submit(cookie);
+  let body = await resp.text();
+  const expired =
+    (resp.status >= 300 && resp.status < 400 && (resp.headers.get("location") || "").includes("/login")) ||
+    looksLikeSessionExpired(body);
+  if (expired) {
+    await invalidateSession();
+    cookie = await getPocomosSession();
+    // re-scrape the token under the fresh session before resubmitting
+    const fresh = await getSessionedHtml(ADV_SHOW);
+    const t2 = (fresh.match(/name="search\[_token\]"[^>]*value="([^"]+)"/) || [])[1] || token;
+    form.set("search[_token]", t2);
+    resp = await submit(cookie);
+    body = await resp.text();
+  }
+}
+
+function buildFeedBody(start: number): URLSearchParams {
   const body = new URLSearchParams();
   body.set("sEcho", "1");
   body.set("iColumns", String(POCOMOS_COLUMNS.length));
@@ -87,19 +163,25 @@ async function fetchLeadsPage(start: number): Promise<Array<Record<string, unkno
   body.set("iSortCol_0", String(POCOMOS_COLUMNS.indexOf("date_added")));
   body.set("sSortDir_0", "desc");
   body.set("iSortingCols", "1");
-  // DELIBERATELY no `statuses[]=Lead` — we want every status (incl. Customer).
-  body.set("salesperson", "");
-  const resp = await postSessioned<LeadsDataResponse>("/leads/data", body, {
-    referer: "/leads/",
+  return body;
+}
+
+async function fetchFeedPage(start: number): Promise<Array<Record<string, unknown>>> {
+  const resp = await postSessioned<LeadsDataResponse>(ADV_FEED, buildFeedBody(start), {
+    referer: ADV_SHOW,
   });
   return resp.aaData ?? resp.data ?? [];
 }
 
-/** Pull every lead row (all statuses). READ-ONLY. */
+/**
+ * Pull every lead row across ALL statuses (incl. Customer) via Advanced Search.
+ * READ-ONLY. Sets the session criteria once, then pages the feed.
+ */
 export async function fetchAllLeads(): Promise<Array<Record<string, unknown>>> {
+  await setAdvancedSearchCriteria();
   const all: Array<Record<string, unknown>> = [];
   for (let start = 0; start < 60_000; start += PAGE_SIZE) {
-    const rows = await fetchLeadsPage(start);
+    const rows = await fetchFeedPage(start);
     all.push(...rows);
     if (rows.length < PAGE_SIZE) break;
   }
@@ -193,7 +275,6 @@ export function computeReport(
     unattributedConversions,
     reps,
     statusBreakdown,
-    conversionSourceMissing: totalConversions === 0,
     computedAt: new Date().toISOString(),
   };
 }
