@@ -20,10 +20,8 @@ export default async function SalesPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
-            Sales
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground sm:text-base">
+          <h1 className="text-2xl font-semibold tracking-tight">Sales</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
             Live customer pipeline from Pocomos · year tags.
           </p>
         </div>

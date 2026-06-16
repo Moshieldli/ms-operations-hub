@@ -11,10 +11,22 @@ import {
 import { RefreshedAt } from "@/components/refreshed-at";
 import { useLiveSales, type SalesMeta } from "@/components/use-live-sales";
 import type { SalesSummary } from "@/lib/sales-data";
+import { cn } from "@/lib/utils";
 
 function fmt(n: number) {
   return n.toLocaleString("en-US");
 }
+
+// Status palette — meaningful color only (shared with the overdue view):
+// neutral = default, healthy = green, attention = amber, action = red.
+// Most tiles stay neutral; color is reserved for things that need a human.
+const TONE = {
+  neutral: "",
+  healthy: "text-emerald-600 dark:text-emerald-400",
+  attention: "text-amber-600 dark:text-amber-400",
+  action: "text-rose-600 dark:text-rose-400",
+} as const;
+type Tone = keyof typeof TONE;
 
 export function SalesView({
   initial,
@@ -26,13 +38,11 @@ export function SalesView({
   const { summary, live, refreshing, liveAsOf } = useLiveSales(initial, meta);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
-            Sales
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground sm:text-base">
+          <h1 className="text-2xl font-semibold tracking-tight">Sales</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
             Live customer pipeline from Pocomos · year tags.
           </p>
         </div>
@@ -90,33 +100,43 @@ function LiveStatus({
 }
 
 /**
- * Self-describing tile. `def` is the inline criteria/definition text shown in
- * every square (replaces the old separate "How are buckets calculated?" card).
- * `hint` carries an optional numeric sub-breakdown (e.g. RETAINED subtypes).
+ * Self-describing stat tile. `def` is the inline criteria/definition text shown
+ * in every square (replaces the old separate "How are buckets calculated?"
+ * card). `hint` carries an optional numeric sub-breakdown (e.g. RETAINED
+ * subtypes). `size="hero"` makes the headline KPIs dominate; `tone` applies the
+ * shared status palette (used sparingly — most tiles stay neutral).
  */
-function BucketCell({
+function Tile({
   label,
   value,
   def,
   hint,
+  size = "default",
+  tone = "neutral",
 }: {
   label: string;
   value: number;
   def?: string;
   hint?: string;
+  size?: "default" | "hero";
+  tone?: Tone;
 }) {
   return (
-    <div className="flex flex-col rounded-md border p-3 sm:p-4">
-      <div className="text-xs uppercase tracking-wide text-muted-foreground">
+    <div className="flex flex-col rounded-lg border bg-card p-4 sm:p-5">
+      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
-      <div className="mt-1 text-xl font-semibold tabular-nums sm:text-2xl">
+      <div
+        className={cn(
+          "mt-1.5 font-semibold tabular-nums",
+          size === "hero" ? "text-3xl sm:text-4xl" : "text-2xl",
+          TONE[tone]
+        )}
+      >
         {fmt(value)}
       </div>
       {hint ? (
-        <div className="mt-1 text-xs font-medium text-muted-foreground">
-          {hint}
-        </div>
+        <div className="mt-1.5 text-xs text-muted-foreground">{hint}</div>
       ) : null}
       {def ? (
         <div className="mt-2 text-[11px] leading-snug text-muted-foreground">
@@ -162,59 +182,68 @@ function SalesDashboard({ summary }: { summary: SalesSummary }) {
           AT_RISK   → "Not Renewed"      (was "Current Cancelled")
           CANCELLED → "Cancelled – All Time"
         Every tile self-describes via `def` (replaces the old rules card).
+        Visual hierarchy: the two headline KPIs dominate (hero), the bucket
+        breakdown is the secondary grid, and the all-time/untagged totals recede.
       */}
 
-      {/* Row 1 — this season */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-6">
-        <BucketCell
+      {/* Headline KPIs — dominate */}
+      <div className="grid grid-cols-2 gap-3 sm:gap-4">
+        <Tile
+          size="hero"
           label="Active Customers"
           value={totals.activeCustomers}
           def={`Customers carrying a ${year} year-tag — counted active for this season.`}
         />
-        <BucketCell
+        <Tile
+          size="hero"
           label="Active Services"
           value={totals.activeServices}
           def="Active contracts held by those current-year customers."
         />
-        <BucketCell
-          label="New"
-          value={buckets.NEW}
-          def="Brand-new this year, no prior-year history."
-        />
-        <BucketCell
-          label="New – Season Skipped"
-          value={buckets.RETURNING}
-          def="Was a customer before, skipped one or more full seasons, signed up new again this year."
-        />
-        <BucketCell
-          label="Returning"
-          value={buckets.RETAINED}
-          hint={retainedHint}
-          def="Service continued from last year into this year (auto-renew / early rebook / renewed)."
-        />
-        <BucketCell
-          label="Not Renewed"
-          value={buckets.AT_RISK}
-          def="Treated in a prior year but no current-year tag yet — not renewed for this season."
-        />
       </div>
 
-      {/* Reconciliation line */}
-      <p className="text-xs text-muted-foreground">
-        {fmt(taggedActive)} tagged + {fmt(notRenewed)} not renewed ={" "}
-        {fmt(reconSum)} vs {fmt(totals.activeCustomers)} active (Δ
-        {fmt(reconDelta)} edge cases)
-      </p>
+      {/* Bucket breakdown + reconciliation */}
+      <div className="space-y-2">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
+          <Tile
+            label="New"
+            value={buckets.NEW}
+            def="Brand-new this year, no prior-year history."
+          />
+          <Tile
+            label="New – Season Skipped"
+            value={buckets.RETURNING}
+            def="Was a customer before, skipped one or more full seasons, signed up new again this year."
+          />
+          <Tile
+            label="Returning"
+            value={buckets.RETAINED}
+            hint={retainedHint}
+            def="Service continued from last year into this year (auto-renew / early rebook / renewed)."
+          />
+          <Tile
+            label="Not Renewed"
+            value={buckets.AT_RISK}
+            tone="attention"
+            def="Treated in a prior year but no current-year tag yet — not renewed for this season."
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {fmt(taggedActive)} tagged + {fmt(notRenewed)} not renewed ={" "}
+          {fmt(reconSum)} vs {fmt(totals.activeCustomers)} active (Δ
+          {fmt(reconDelta)} edge cases)
+        </p>
+      </div>
 
-      {/* Row 2 — all-time / untagged */}
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-6">
-        <BucketCell
+      {/* All-time / untagged — recede */}
+      <div className="grid grid-cols-2 gap-3 sm:gap-4">
+        <Tile
           label="Cancelled – All Time"
           value={totals.cancelledCustomers}
           hint={onHoldHint ? `${cancelledHint} · ${onHoldHint}` : cancelledHint}
           def="Marked Inactive in Pocomos (all years)."
         />
-        <BucketCell
+        <Tile
           label="Untagged"
           value={debug.untagged}
           hint={
@@ -294,9 +323,9 @@ function CancelledByYearCard({ summary }: { summary: SalesSummary }) {
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
-          <BucketCell label={`${year}`} value={cancelled.thisYear} />
-          <BucketCell label={`${yearNum - 1}`} value={cancelled.lastYear} />
-          <BucketCell
+          <Tile label={`${year}`} value={cancelled.thisYear} />
+          <Tile label={`${yearNum - 1}`} value={cancelled.lastYear} />
+          <Tile
             label="Earlier"
             value={cancelled.earlier}
             hint={

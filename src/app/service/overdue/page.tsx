@@ -50,10 +50,8 @@ function Header() {
   return (
     <div className="flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
-          Overdue Sprays
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground sm:text-base">
+        <h1 className="text-2xl font-semibold tracking-tight">Overdue Sprays</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
           Active mosquito customers with no mosquito service in 15+ days.
         </p>
       </div>

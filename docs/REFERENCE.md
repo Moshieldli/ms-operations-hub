@@ -672,6 +672,16 @@ src/
 
 The old plan listed `sync/state.ts` and `sync/leadRouter.ts`; neither ended up as its own file. State (watermarks) lives in `lib/db.ts` via `getSyncState`/`setSyncState`, and routing is inline in `leadSync.ts`. The `pocomos/` directory has additional files outside the PhoneBurner integration story (`customers.ts`, `tags.ts`, `contracts.ts`, `pool.ts`, `contract-tags.ts`, `dataset.ts`, `sales-provider.ts`, `index.ts`) that drive `/sales` and the daily snapshot — they're not listed because they're not part of the PhoneBurner flow this document covers. Likewise `lib/service/` (`mosquito.ts`, `customersData.ts`, `openBalance.ts`, `serviceHistory.ts`, `refresh.ts`) + `app/service/**` + `app/api/cron/mosquito-status/route.ts` drive the `/service/overdue` report — see §5.5.
 
+### 6.1 UI / styling conventions (visual-polish pass, 2026-06-16)
+
+Display-only conventions for the dashboard views (no data logic lives in components). Established during the visual-polish pass:
+
+- **Type scale (one scale):** page title `text-2xl font-semibold tracking-tight`; headline KPI numbers `text-3xl sm:text-4xl` (the `size="hero"` tiles — Active Customers, Active Services, Overdue); standard tile numbers `text-2xl`; tile labels `text-xs font-medium uppercase tracking-wide text-muted-foreground`; body/descriptions `text-sm text-muted-foreground`; fine-print hints `text-[11px]`/`text-xs` muted.
+- **Tile geometry (uniform):** `rounded-lg border bg-card p-4 sm:p-5`, `tabular-nums` on all figures. Section cards use the shared shadcn `Card` (padding tightened to `p-5`). TV tiles use the larger `rounded-xl`.
+- **Status palette — meaningful color only.** A single shared `TONE` map is used in both `sales-view.tsx` and `overdue-view.tsx`: `neutral` (default foreground), `healthy` = emerald, `attention` = amber, `action` = rose/red. The amber/red here are the **same** hues as the overdue table row tints (`LATE_DAYS`/`VERY_LATE_DAYS`). Most of the UI stays neutral; color is reserved for things needing a human — e.g. Sales "Not Renewed" → amber; Overdue stat → red, Paused/Needs-check → amber, Current → emerald. No decorative per-category colors. (The old TV per-bucket rainbow and the sky "Weekly" pill were removed for this reason.)
+- **Visual hierarchy:** headline KPIs dominate (hero size); bucket breakdown is the secondary grid; all-time/untagged totals recede. On `/sales` the layout is three groups (KPIs → buckets+reconciliation → all-time) instead of one flat row.
+- **Browser vs TV split:** the dense inline definitions + reconciliation line live on `/sales` only; `/tv/sales` stays minimal, high-contrast, and glanceable (big neutral numbers, labels recede, no definition text).
+
 ---
 
 ## 7. Database — Neon Postgres (already live)

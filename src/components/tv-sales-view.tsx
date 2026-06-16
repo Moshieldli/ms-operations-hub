@@ -70,18 +70,19 @@ function TvDashboard({ summary }: { summary: SalesSummary }) {
           unchanged; "Returning" maps to RETAINED:
             NEW→"New", RETURNING→"New – Season Skipped", RETAINED→"Returning",
             AT_RISK→"Not Renewed", CANCELLED→"Cancelled – All Time".
+          Numbers are high-contrast neutral for glanceability; color is reserved
+          for the one bucket that needs attention (Not Renewed → amber).
         */}
         <div className="grid flex-1 grid-cols-2 gap-4 lg:grid-cols-5 lg:gap-6">
-          <BigBucket label="New" value={buckets.NEW} accent="emerald" />
-          <BigBucket label="New – Season Skipped" value={buckets.RETURNING} accent="sky" />
+          <BigBucket label="New" value={buckets.NEW} />
+          <BigBucket label="New – Season Skipped" value={buckets.RETURNING} />
           <BigBucket
             label="Returning"
             value={buckets.RETAINED}
-            accent="violet"
             hint={`Auto ${retainedSubtypes.auto} · SEB ${retainedSubtypes.seb} · EB ${retainedSubtypes.eb} · Renewed ${retainedSubtypes.renewed}`}
           />
-          <BigBucket label="Not Renewed" value={buckets.AT_RISK} accent="amber" />
-          <BigBucket label="Cancelled – All Time" value={buckets.CANCELLED} accent="rose" />
+          <BigBucket label="Not Renewed" value={buckets.AT_RISK} tone="attention" />
+          <BigBucket label="Cancelled – All Time" value={buckets.CANCELLED} />
         </div>
       </section>
 
@@ -122,24 +123,23 @@ function BigStat({ label, value }: { label: string; value: string }) {
   );
 }
 
-const ACCENT: Record<string, string> = {
-  emerald: "text-emerald-600 dark:text-emerald-400",
-  sky: "text-sky-600 dark:text-sky-400",
-  violet: "text-violet-600 dark:text-violet-400",
-  amber: "text-amber-600 dark:text-amber-400",
-  rose: "text-rose-600 dark:text-rose-400",
-};
+// TV uses meaningful color only: neutral (high-contrast foreground) for most,
+// amber for the one bucket that needs attention. No decorative per-bucket hues.
+const TV_TONE = {
+  neutral: "text-foreground",
+  attention: "text-amber-600 dark:text-amber-400",
+} as const;
 
 function BigBucket({
   label,
   value,
   hint,
-  accent,
+  tone = "neutral",
 }: {
   label: string;
   value: number;
   hint?: string;
-  accent: keyof typeof ACCENT;
+  tone?: keyof typeof TV_TONE;
 }) {
   return (
     <div className="flex flex-col rounded-xl border p-5 lg:p-7">
@@ -147,7 +147,7 @@ function BigBucket({
         {label}
       </div>
       <div
-        className={`mt-2 flex-1 text-4xl font-semibold tabular-nums lg:text-6xl ${ACCENT[accent]}`}
+        className={`mt-2 flex-1 text-4xl font-semibold tabular-nums lg:text-6xl ${TV_TONE[tone]}`}
       >
         {fmt(value)}
       </div>

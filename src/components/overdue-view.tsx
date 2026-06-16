@@ -11,8 +11,19 @@ import {
 import { Button } from "@/components/ui/button";
 import { RefreshedAt } from "@/components/refreshed-at";
 import type { OverdueReport, MosquitoStatusRow } from "@/lib/service/refresh";
+import { cn } from "@/lib/utils";
 
 const POCOMOS_BASE = "https://mypocomos.net";
+
+// Status palette — meaningful color only (shared with the sales view):
+// neutral = default, healthy = green, attention = amber, action = red.
+const TONE = {
+  neutral: "",
+  healthy: "text-emerald-600 dark:text-emerald-400",
+  attention: "text-amber-600 dark:text-amber-400",
+  action: "text-rose-600 dark:text-rose-400",
+} as const;
+type Tone = keyof typeof TONE;
 
 // Row-coloring thresholds (days since last mosquito service). Distinct from the
 // 15-day OVERDUE_THRESHOLD_DAYS in mosquito.ts — these only drive the visual
@@ -145,13 +156,13 @@ export function OverdueView({ initial }: { initial: OverdueReport }) {
         3 days are held back until a spray is actually due.
       </p>
 
-      {/* Stat row */}
+      {/* Stat row — Overdue dominates (hero + action color); color is semantic */}
       <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 lg:grid-cols-6">
-        <Stat label="Overdue" value={fmt(counts.overdue)} accent />
-        <Stat label="Paused (balance)" value={fmt(counts.pausedBalance)} amber />
-        <Stat label="Current" value={fmt(counts.current)} />
+        <Stat label="Overdue" value={fmt(counts.overdue)} tone="action" size="hero" />
+        <Stat label="Paused (balance)" value={fmt(counts.pausedBalance)} tone="attention" />
+        <Stat label="Current" value={fmt(counts.current)} tone="healthy" />
         <Stat label="Excluded (new)" value={fmt(counts.excludedNew)} />
-        <Stat label="Needs manual check" value={fmt(counts.needsCheck)} />
+        <Stat label="Needs manual check" value={fmt(counts.needsCheck)} tone="attention" />
         <Stat label="Eligible (mosquito)" value={fmt(counts.total)} />
       </div>
 
@@ -227,27 +238,25 @@ export function OverdueView({ initial }: { initial: OverdueReport }) {
 function Stat({
   label,
   value,
-  accent,
-  amber,
+  tone = "neutral",
+  size = "default",
 }: {
   label: string;
   value: string;
-  accent?: boolean;
-  amber?: boolean;
+  tone?: Tone;
+  size?: "default" | "hero";
 }) {
   return (
-    <div className="rounded-md border p-3 sm:p-4">
-      <div className="text-xs uppercase tracking-wide text-muted-foreground">
+    <div className="flex flex-col rounded-lg border bg-card p-4 sm:p-5">
+      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
       <div
-        className={`mt-1 text-xl font-semibold tabular-nums sm:text-2xl ${
-          accent
-            ? "text-rose-600 dark:text-rose-400"
-            : amber
-            ? "text-amber-600 dark:text-amber-400"
-            : ""
-        }`}
+        className={cn(
+          "mt-1.5 font-semibold tabular-nums",
+          size === "hero" ? "text-3xl sm:text-4xl" : "text-2xl",
+          TONE[tone]
+        )}
       >
         {value}
       </div>
@@ -288,7 +297,7 @@ function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowKind }) 
                 <span className="inline-flex items-center gap-1.5">
                   {r.full_name || r.pocomos_id}
                   {r.is_weekly ? (
-                    <span className="rounded-full border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-700 dark:border-sky-900/50 dark:bg-sky-950/40 dark:text-sky-300">
+                    <span className="rounded-full border bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                       Weekly
                     </span>
                   ) : null}
