@@ -46,6 +46,34 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // ----- search: query the DB directly so a full phone (or name) always finds its
+  // conversation, even when the client's in-memory list is capped/partial -----
+  const find = (sp.get('find') || '').trim();
+  if (find) {
+    const digits = find.replace(/\D/g, '');
+    const like = `%${find}%`;
+    const dlike = `%${digits}%`;
+    const conversations = digits.length >= 3
+      ? await sql`
+          SELECT conversation_id, phone, first_name, last_name, email, city, state,
+                 last_message, status, updated_at
+          FROM texting_contacts
+          WHERE phone LIKE ${dlike} OR phone_full LIKE ${dlike}
+             OR first_name ILIKE ${like} OR last_name ILIKE ${like}
+             OR email ILIKE ${like} OR city ILIKE ${like} OR last_message ILIKE ${like}
+          ORDER BY updated_at DESC NULLS LAST
+          LIMIT 300`
+      : await sql`
+          SELECT conversation_id, phone, first_name, last_name, email, city, state,
+                 last_message, status, updated_at
+          FROM texting_contacts
+          WHERE first_name ILIKE ${like} OR last_name ILIKE ${like}
+             OR email ILIKE ${like} OR city ILIKE ${like} OR last_message ILIKE ${like}
+          ORDER BY updated_at DESC NULLS LAST
+          LIMIT 300`;
+    return NextResponse.json({ conversations });
+  }
+
   // ----- right pane: one full thread -----
   const cid = sp.get('cid');
   if (cid) {

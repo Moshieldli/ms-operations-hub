@@ -48,6 +48,7 @@ export default function TextingArchive() {
   const [listErr, setListErr] = useState('');
   const [q, setQ] = useState('');
   const [limit, setLimit] = useState(200);
+  const [found, setFound] = useState<Conv[]>([]);
 
   const [selected, setSelected] = useState<Conv | null>(null);
   const [thread, setThread] = useState<Msg[]>([]);
@@ -69,16 +70,39 @@ export default function TextingArchive() {
     })();
   }, []);
 
+  // Authoritative search: hit the DB so a full phone (or name) always finds its
+  // conversation even if it isn't in the preloaded list. Debounced; results are
+  // merged into the in-memory matches below.
+  useEffect(() => {
+    const term = q.trim();
+    if (!term) { setFound([]); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/texting/search?find=${encodeURIComponent(term)}`);
+        if (!res.ok) return;
+        const d = await res.json();
+        if (!cancelled) setFound(d.conversations || []);
+      } catch { /* keep the instant client-side matches */ }
+    }, 250);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [q]);
+
   const filtered = useMemo(() => {
     const term = q.trim().toLowerCase();
     const digits = term.replace(/\D/g, '');
     if (!term) return convs;
-    return convs.filter(c => {
+    const local = convs.filter(c => {
       if (digits && (c.phone || '').replace(/\D/g, '').includes(digits)) return true;
       const hay = `${nameOf(c)} ${c.email || ''} ${c.city || ''} ${c.last_message || ''}`.toLowerCase();
       return hay.includes(term);
     });
-  }, [convs, q]);
+    // Merge in any DB matches the preloaded list didn't contain.
+    const seen = new Set(local.map(c => c.conversation_id));
+    const merged = local.slice();
+    for (const c of found) if (!seen.has(c.conversation_id)) merged.push(c);
+    return merged;
+  }, [convs, q, found]);
 
   async function open(c: Conv) {
     setSelected(c); setThread([]); setContact(null); setLoadingThread(true);
