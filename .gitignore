@@ -41,3 +41,11 @@ next-env.d.ts
 
 .vercel
 .env*.local
+
+# customer data / local artifacts — NEVER commit (PII: names, phones, emails, addresses)
+*.csv
+docs/active-ids-*.txt
+docs/active-with-phone.csv
+
+# local Claude Code settings
+.claude/settings.local.json
