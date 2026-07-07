@@ -8,8 +8,12 @@
       Route Assigned == "Assigned" (exact match), wire into rowToneClass() hook. See REFERENCE §9 #5.
 - [ ] Top converting lead sources — rank marketing source/type by conversion (which sources turn
       into customers, not just volume). Note: lead-side marketing_type is ~93% blank, so source the
-      marketing type from the converted customer's record; join via the 76 converted leads from the
-      Advanced Search feed. Self-probe the customer-side marketing field first.
+      marketing type from the converted customer's record; join via the converted leads from the
+      Advanced Search two-step feed (REFERENCE §9 Resolved #11). Self-probe the customer-side
+      marketing field first.
+- [ ] Return-rate data (spec TBD in chat)
+- [ ] Dashboard column tweaks (spec TBD in chat)
+- [ ] Marketing source breakdown: Long Island vs Westchester
 
 ## Needs a human decision
 - [ ] "Real lead" definition for close rate — pending Rivka & Leon (drops into isRealLead() hook).
@@ -33,7 +37,14 @@
 - [x] Overdue Profile link + day-based coloring + new-tab links
 - [x] Visual polish pass (type scale + semantic color)
 - [x] Leads tab scaffold (denominator + per-rep live; numerator pending)
-- [x] Leads close-rate numerator + denominator via the Advanced Search two-step feed
-      (set search[leadStatus][] for all five statuses, pull /lead/lead-advanced-search/data).
-      Conversions live: 76 / 324 = 23.5% YTD; per-rep + unattributed from the one feed.
+- [x] Leads close-rate — SHIPPED & LIVE at /leads (v1 raw rate). Numerator + denominator via the
+      Advanced Search two-step feed (set search[leadStatus][] for all five statuses, pull
+      /lead/lead-advanced-search/data); cached in leads_close_rate table, custom ranges computed live.
+      Conversions live: 76 / 324 = 23.5% YTD; per-rep + unattributed from the one feed. (isRealLead()
+      hook stays raw pending the "real lead" decision above.)
+- [x] Sales /sales + /tv/sales snapshot-first load with live background revalidation (GET
+      /api/sales/live + useLiveSales()); contract-type breakdown rolled up into service families.
 - [x] CLAUDE.md + REFERENCE.md consolidation
+- [x] Docs truth-up: REFERENCE rev 10 (texting/sweep/leads-tab/tables LIVE) → rev 11 (full audit vs
+      deployed code + live Neon information_schema, 2026-07-07); .gitignore for customer-data CSVs;
+      import-texting loader synced (multi-file merge + NUL-strip).

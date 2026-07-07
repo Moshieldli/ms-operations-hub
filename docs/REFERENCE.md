@@ -1,6 +1,6 @@
 # MS Operations Hub — Master Reference
 
-**Last updated:** July 7, 2026 (rev 10 — synced doc to shipped reality: the `/texting` Aerialink archive + the app's only auth gate (§5.7), the hourly roster-reconciliation conversion sweep (§5.5b), the `/leads` close-rate tab (§5.6), and the `texting_messages`/`texting_contacts` tables (§7) are all LIVE. Texting search is now server-authoritative via `?find=` (commit `cdf1b3f`); §6 file tree now lists the texting routes + `middleware.ts`. rev 9 — made `/sales` and `/tv/sales` snapshot-first: they paint instantly from the latest snapshot's `raw_json` (a fast DB read) and revalidate live in the background via a new `GET /api/sales/live` + `useLiveSales()` hook; label flips "as of {date}" → "live · updated just now". `normalizeSummary()` defends against partial/older snapshots; empty-table falls back to a live build. Page-level `AutoRefresh` removed (polling is now client-side). See §3.5 "Load path". rev 8 — rolled the `/sales` contract-type breakdown up into service families in a fixed ops order (Mosquito incl. Event Spray, Tick, Ant, Fly Trap, Spotted Lanternfly, Yellow Jacket, Other). Replaced `summary.contractTypeBreakdown` with `summary.contractTypeGroups` (each family carries `count` + granular `members[]`); card retitled "Service type". Granular contract types still drive the rollup via `contractTypeGroupOf()`. Active Customers / Active Services definitions unchanged. rev 7 — regrouped the `/sales` service breakdown by granular **Contract Type** (`contract.agreement.name`) instead of the broad Service Type (`pest_contract.service_type.name`), which had an "Other" catch-all. Added `NormalizedContract.contractType`; renamed `summary.serviceTypeBreakdown` → `summary.contractTypeBreakdown` and the card to "Contract type" on `/sales` + `/tv/sales`. Active Customers / Active Services definitions unchanged. rev 6 — redefined the `/sales` headline metrics. Active Customers and Active Services are now tag-gated on a current-year tag (`CURRENT_YEAR` in categorize.ts, auto-advancing), not raw `status=Active` counts; added the service breakdown (`summary.contractTypeBreakdown`) rendered on `/sales` and `/tv/sales`; raw pre-gate counts preserved in `summary.debug.activeAllStatuses` / `activeServicesAllStatuses`. See §3.5 "Headline metrics". Buckets logic unchanged. rev 5 — synced doc with shipped reality per commit fe1f12d: marked PhoneBurner sync (cron, age-based folder routing, two-custom-field write) as LIVE rather than planned; replaced the speculative §6 file tree with the files that actually shipped; updated §4 webhook field-name bullets against the real Call End payload; moved webhook field-name reverse-engineering and several integration-quirk items from §9 OPEN to RESOLVED.)
+**Last updated:** July 7, 2026 (rev 11 — full truth-up, doc now matches deployed code as of 2026-07-07. Audited against the live source tree + a live Neon `information_schema` query: added the "Current live state" block; §5 marks the PhoneBurner sync + webhook SHIPPED/LIVE since 2026-05-15 with real file paths + the four live crons; §6 file tree replaced with the actual tree; §7 lists the nine tables that really exist now (adds `leads_close_rate`, real row counts, `webhook_log.pb_contact_id`); §9 resolved items pruned and the lead-data path documented as the working answer (Advanced Search two-step feed — lead *tag-chip* read is the only lead gap left); §12 lead notes corrected. NOTE: requested as "rev 6", but the doc was already at rev 10 — advanced to rev 11 to preserve the rev 6–10 history below rather than regress the number. rev 10 — synced doc to shipped reality: the `/texting` Aerialink archive + the app's only auth gate (§5.7), the hourly roster-reconciliation conversion sweep (§5.5b), the `/leads` close-rate tab (§5.6), and the `texting_messages`/`texting_contacts` tables (§7) are all LIVE. Texting search is now server-authoritative via `?find=` (commit `cdf1b3f`); §6 file tree now lists the texting routes + `middleware.ts`. rev 9 — made `/sales` and `/tv/sales` snapshot-first: they paint instantly from the latest snapshot's `raw_json` (a fast DB read) and revalidate live in the background via a new `GET /api/sales/live` + `useLiveSales()` hook; label flips "as of {date}" → "live · updated just now". `normalizeSummary()` defends against partial/older snapshots; empty-table falls back to a live build. Page-level `AutoRefresh` removed (polling is now client-side). See §3.5 "Load path". rev 8 — rolled the `/sales` contract-type breakdown up into service families in a fixed ops order (Mosquito incl. Event Spray, Tick, Ant, Fly Trap, Spotted Lanternfly, Yellow Jacket, Other). Replaced `summary.contractTypeBreakdown` with `summary.contractTypeGroups` (each family carries `count` + granular `members[]`); card retitled "Service type". Granular contract types still drive the rollup via `contractTypeGroupOf()`. Active Customers / Active Services definitions unchanged. rev 7 — regrouped the `/sales` service breakdown by granular **Contract Type** (`contract.agreement.name`) instead of the broad Service Type (`pest_contract.service_type.name`), which had an "Other" catch-all. Added `NormalizedContract.contractType`; renamed `summary.serviceTypeBreakdown` → `summary.contractTypeBreakdown` and the card to "Contract type" on `/sales` + `/tv/sales`. Active Customers / Active Services definitions unchanged. rev 6 — redefined the `/sales` headline metrics. Active Customers and Active Services are now tag-gated on a current-year tag (`CURRENT_YEAR` in categorize.ts, auto-advancing), not raw `status=Active` counts; added the service breakdown (`summary.contractTypeBreakdown`) rendered on `/sales` and `/tv/sales`; raw pre-gate counts preserved in `summary.debug.activeAllStatuses` / `activeServicesAllStatuses`. See §3.5 "Headline metrics". Buckets logic unchanged. rev 5 — synced doc with shipped reality per commit fe1f12d: marked PhoneBurner sync (cron, age-based folder routing, two-custom-field write) as LIVE rather than planned; replaced the speculative §6 file tree with the files that actually shipped; updated §4 webhook field-name bullets against the real Call End payload; moved webhook field-name reverse-engineering and several integration-quirk items from §9 OPEN to RESOLVED.)
 **Project:** MS Analytics — Mosquito Shield of Long Island (Progranic LLC)
 **Office ID:** 1512
 **Live URL:** https://ms-operations-hub.vercel.app
@@ -8,6 +8,35 @@
 **Local path:** `C:\Users\OhaviaFeldman\Desktop\ms-operations-hub\`
 
 This document is the single source of truth for how Pocomos and PhoneBurner connect through the MS Operations Hub. Paste it into any new Claude chat or feed it to Claude Code when you need full context.
+
+---
+
+## Current live state
+
+**Deployed:** Next.js 14 (App Router) on Vercel — `https://ms-operations-hub.vercel.app`. Repo `github.com/Moshieldli/ms-operations-hub`, branch `main` (push = deploy). Data in Neon Postgres (`neon-indigo-dog`).
+
+**Shipped pages (live):**
+- `/sales` + `/tv/sales` — sales dashboard, snapshot-first with live background revalidation (§3.5, §6.1).
+- `/service/overdue` — mosquito overdue-spray report, DB-backed (§5.5).
+- `/leads` — lead close-rate tab, v1 raw rate via the Advanced Search two-step feed (§5.6). **LIVE** — not pending.
+- `/texting` — Aerialink SMS archive, behind the app's only auth gate (§5.7).
+- `/`, `/combined`, `/calling` — index/roll-up/placeholder views.
+
+**Live integrations & crons (`vercel.json`):**
+| Cron path | Schedule | Purpose |
+|---|---|---|
+| `/api/cron/snapshot` | `0 5 * * *` (05:00 daily) | Daily sales snapshot → `snapshots` |
+| `/api/phoneburner/sync-leads` | `*/15 * * * *` | Pocomos→PB lead sync (Phase A) + lazy notes refresh (Phase B) — §5.1 |
+| `/api/cron/conversion-sweep` | `0 * * * *` (hourly) | PhoneBurner roster-reconciliation active-customer sweep — §5.5b |
+| `/api/cron/mosquito-status` | `0 6 * * *` (06:00 daily) | Rebuild `mosquito_service_status` for `/service/overdue` — §5.5 |
+
+Plus the event-driven `POST /api/phoneburner/webhook` (PhoneBurner `api_calldone` → Pocomos note). PhoneBurner sync + webhook have been **SHIPPED/LIVE since 2026-05-15**.
+
+**Neon tables that actually exist** (live `information_schema`, 2026-07-07): `snapshots`, `customers`, `sync_state`, `mosquito_service_status`, `leads_close_rate`, `phoneburner_contacts`, `webhook_log`, `texting_contacts`, `texting_messages`. See §7 for columns + row counts.
+
+**Last major ship:** the `/texting` archive + texting-only auth gate, and the server-authoritative texting search (2026-06-16). PhoneBurner conversion logic last reworked to the hourly roster-reconciliation sweep (2026-06-16).
+
+**Pocomos posture:** READ-ONLY (GET + DataTables-read POST) except the single webhook note-write. Never mutates customer records or switches active contracts.
 
 ---
 
@@ -484,7 +513,14 @@ Setup in PhoneBurner UI: Settings → API Webhooks → Add Webhook → Event `ap
 
 ## 5. The Integration — How They Connect
 
-Two endpoints in the `ms-operations-hub` Vercel project handle the entire flow.
+> **STATUS: SHIPPED / LIVE since 2026-05-15.** The Pocomos ↔ PhoneBurner integration (lead sync, notes sync, conversion sweep, and the disposition webhook) is fully deployed and running in production, not planned. Real code + schedule:
+> - `src/lib/sync/leadSync.ts` → `POST /api/phoneburner/sync-leads` Phase A (cron `*/15 * * * *`)
+> - `src/lib/sync/notesRefresh.ts` → same route, Phase B (lazy 24h notes refresh)
+> - `src/lib/sync/conversionSweep.ts` → `POST /api/cron/conversion-sweep` (cron `0 * * * *`, hourly — §5.5b)
+> - `src/lib/sync/webhookProcessor.ts` → `POST /api/phoneburner/webhook` (event-driven `api_calldone`)
+> - `src/lib/phoneburner/client.ts` + `folders.ts` (PB REST wrapper + folder IDs)
+>
+> The daily sales snapshot (`/api/cron/snapshot`, `0 5 * * *`) and mosquito refresh (`/api/cron/mosquito-status`, `0 6 * * *`) round out the four live crons. See "Current live state" near the top for the full cron table.
 
 ### 5.1 `/api/phoneburner/sync-leads` — Pocomos → PhoneBurner (cron, every 15 min)
 
@@ -725,49 +761,72 @@ Live verification (2026-06-16, `https://ms-operations-hub.vercel.app`): API with
 
 ## 6. File Structure (shipped)
 
+Actual deployed tree (verified against the source 2026-07-07):
+
 ```
 src/
+├── middleware.ts                      ← the texting-only auth gate (§5.7)
 ├── lib/
-│   ├── db.ts                          ← Neon client, initSchema, getSyncState/setSyncState
+│   ├── db.ts                          ← Neon client, initSchema (all 7 initSchema tables), getSyncState/setSyncState
 │   ├── snapshots.ts                   ← writeSnapshot, listSnapshots
 │   ├── enrichment.ts                  ← enrichInactiveCustomers (overnight)
+│   ├── sales-data.ts / sales-taxonomy.ts   ← sales summary shaping + taxonomy for /sales
+│   ├── utils.ts
 │   ├── pocomos/
-│   │   ├── webSession.ts              ← PHPSESSID cache, Symfony login, postSessioned helper (Surface B/C bootstrap)
-│   │   ├── notes.ts                   ← getNotesForLead, formatNotesForPhoneBurner (JSON-first, HTML fallback)
-│   │   ├── client.ts                  ← JWT API wrapper (Surface A)
 │   │   ├── auth.ts                    ← JWT token mint + cache
-│   │   ├── categorize.ts              ← bucket logic (NEW / RETURNING / RETAINED / AT_RISK / CANCELLED)
-│   │   ├── types.ts
-│   │   └── interactionTypes.ts        ← probes accepted `interactionType` values for customer note/create
+│   │   ├── client.ts                  ← JWT API wrapper (Surface A: getJson, pocomosOffice)
+│   │   ├── webSession.ts              ← PHPSESSID cache, Symfony login, postSessioned/getSessionedHtml (Surface B/C)
+│   │   ├── notes.ts                   ← getNotesForLead/Customer, formatNotesForPhoneBurner (JSON-first, HTML fallback)
+│   │   ├── categorize.ts              ← bucket logic + CURRENT_YEAR (NEW/RETURNING/RETAINED/AT_RISK/CANCELLED)
+│   │   ├── tags.ts                    ← office tag dict (/jwt/pronexis/tags/list/{office}) + tagsForCustomer/Contract
+│   │   ├── contract-tags.ts           ← per-contract tags GET (/jwt/office/{office}/contract/{pcId}/tags)
+│   │   ├── contracts.ts / customers.ts / dataset.ts / dataset-types.ts / sales-provider.ts / pool.ts / index.ts
+│   │   ├── interactionTypes.ts        ← probes accepted `interactionType` values for note/create
+│   │   └── types.ts
 │   ├── phoneburner/
-│   │   ├── client.ts                  ← createContact, listContactsInFolder, normalizePhone
+│   │   ├── client.ts                  ← createContact, updateContact, listContactsInFolder, normalizePhone
 │   │   └── folders.ts                 ← FOLDERS + POLICED_FOLDERS / DESTINATION_FOLDER / EXEMPT_FOLDERS (§5.5b)
-│   └── sync/
-│       ├── leadSync.ts                ← Phase A: Pocomos → PhoneBurner, age-based folder routing, watermark advance
-│       ├── notesRefresh.ts            ← */15 Phase B: lazy 24h PB notes refresh for tracked contacts (§5.1)
-│       ├── conversionSweep.ts         ← hourly roster-reconciliation active-customer sweep (§5.5b)
-│       └── webhookProcessor.ts        ← PB webhook payload parser (status, recording_url_public, agent, contact.notes)
+│   ├── sync/
+│   │   ├── leadSync.ts                ← Phase A: Pocomos → PhoneBurner, age-based folder routing, watermark advance
+│   │   ├── notesRefresh.ts            ← */15 Phase B: lazy 24h PB notes refresh for tracked contacts (§5.1)
+│   │   ├── conversionSweep.ts         ← hourly roster-reconciliation active-customer sweep (§5.5b)
+│   │   └── webhookProcessor.ts        ← PB webhook payload parser (status, recording_url_public, agent, contact.notes)
+│   ├── leads/
+│   │   └── closeRate.ts               ← Advanced Search two-step feed → raw close-rate report (§5.6)
+│   ├── service/
+│   │   ├── mosquito.ts / customersData.ts / openBalance.ts / serviceHistory.ts / refresh.ts   ← /service/overdue (§5.5)
+│   └── sheets/
+│       └── csv.ts / provider.ts / categorize.ts / types.ts / index.ts   ← Google-Sheets CSV fallback provider
+├── components/
+│   ├── nav.tsx / shell.tsx / refreshed-at.tsx
+│   ├── sales-view.tsx / tv-sales-view.tsx / overdue-view.tsx / leads-view.tsx
+│   ├── use-live-sales.ts / use-sales-taxonomy.ts
+│   └── ui/ (button.tsx, card.tsx)     ← shadcn primitives
 └── app/
-    ├── api/
-    │   ├── cron/snapshot/route.ts          ← daily 05:00 ET snapshot
-    │   ├── cron/conversion-sweep/route.ts  ← hourly active-customer sweep (§5.5b)
-    │   ├── snapshots/route.ts              ← snapshot read endpoint
-    │   ├── phoneburner/
-    │   │   ├── sync-leads/route.ts    ← every 15 min: leadSync (Phase A) + notesRefresh (Phase B)
-    │   │   └── webhook/route.ts       ← `api_calldone` receiver, writes Pocomos note via waitUntil
-    │   └── texting/
-    │       ├── search/route.ts        ← ?list= / ?find= / ?cid= / ?q= (§5.7)
-    │       └── login/route.ts         ← password check → texting_auth cookie
-    ├── phoneburner/page.tsx           ← status page
-    └── texting/
-        ├── page.tsx                   ← client inbox (§5.7)
-        └── login/page.tsx             ← login screen
+    ├── layout.tsx / page.tsx
+    ├── sales/page.tsx · tv/sales/page.tsx · service/page.tsx · service/overdue/page.tsx
+    ├── leads/page.tsx · combined/page.tsx · calling/page.tsx
+    ├── texting/page.tsx · texting/login/page.tsx
+    └── api/
+        ├── cron/snapshot/route.ts            ← daily 05:00 snapshot  (cron 0 5 * * *)
+        ├── cron/conversion-sweep/route.ts    ← hourly active-customer sweep  (cron 0 * * * *, §5.5b)
+        ├── cron/mosquito-status/route.ts     ← daily 06:00 mosquito rebuild  (cron 0 6 * * *, §5.5)
+        ├── snapshots/route.ts                ← snapshot read endpoint
+        ├── sales/live/route.ts               ← live sales revalidation feed (§3.5 "Load path")
+        ├── sales/taxonomy/route.ts           ← sales taxonomy feed
+        ├── service/overdue/route.ts          ← overdue report read/refresh
+        ├── leads/close-rate/route.ts         ← GET cached / ?start&end live; POST recompute (§5.6)
+        ├── phoneburner/
+        │   ├── sync-leads/route.ts           ← every 15 min: leadSync (Phase A) + notesRefresh (Phase B)
+        │   └── webhook/route.ts              ← `api_calldone` receiver, writes Pocomos note via waitUntil
+        └── texting/
+            ├── search/route.ts               ← ?list= / ?find= / ?cid= / ?q= (§5.7)
+            └── login/route.ts                ← password check → texting_auth cookie
 
-middleware.ts                          ← src/middleware.ts: the texting-only auth gate (§5.7)
-import-texting.mjs                     ← root-level one-time Aerialink CSV → Neon loader (§7)
+import-texting.mjs                            ← root-level one-time Aerialink CSV → Neon loader (§7)
 ```
 
-The old plan listed `sync/state.ts` and `sync/leadRouter.ts`; neither ended up as its own file. State (watermarks) lives in `lib/db.ts` via `getSyncState`/`setSyncState`, and routing is inline in `leadSync.ts`. The `pocomos/` directory has additional files outside the PhoneBurner integration story (`customers.ts`, `tags.ts`, `contracts.ts`, `pool.ts`, `contract-tags.ts`, `dataset.ts`, `sales-provider.ts`, `index.ts`) that drive `/sales` and the daily snapshot — they're not listed because they're not part of the PhoneBurner flow this document covers. Likewise `lib/service/` (`mosquito.ts`, `customersData.ts`, `openBalance.ts`, `serviceHistory.ts`, `refresh.ts`) + `app/service/**` + `app/api/cron/mosquito-status/route.ts` drive the `/service/overdue` report — see §5.5.
+Notes: `src/app/phoneburner/page.tsx` (the old PB status page) is no longer in the tree — the PB flow is cron-driven and observed via `webhook_log`. The planned `sync/state.ts` / `sync/leadRouter.ts` never became their own files (watermarks live in `db.ts`; routing is inline in `leadSync.ts`). `lib/sheets/` is the Google-Sheets CSV fallback data provider (parallel to the Pocomos provider).
 
 ### 6.1 UI / styling conventions (visual-polish pass, 2026-06-16)
 
@@ -783,15 +842,17 @@ Display-only conventions for the dashboard views (no data logic lives in compone
 
 ## 7. Database — Neon Postgres (already live)
 
-Provisioned via Vercel Marketplace as `neon-indigo-dog`. Auto-wired env vars.
+Provisioned via Vercel Marketplace as `neon-indigo-dog`. Auto-wired env vars. Driver: `@neondatabase/serverless` via `src/lib/db.ts`; `initSchema()` creates seven of the tables idempotently (the two `texting_*` tables are created by `import-texting.mjs`).
+
+**Nine tables exist as of 2026-07-07** (live `information_schema` query): `snapshots` (55 rows), `customers` (2,758), `sync_state` (5), `mosquito_service_status` (1,146), `leads_close_rate` (1), `phoneburner_contacts` (276), `webhook_log` (129), `texting_contacts` (6,566), `texting_messages` (48,713). All PhoneBurner tables are LIVE — the "Tables to add" framing below is historical; they were created long ago.
 
 ### Existing tables
 
 **`snapshots`** — one row per Eastern calendar date, UPSERTed by the daily cron.
 Columns: `id, snapshot_date, active_count, services_count, new_count, returning_count, retained_count, retained_auto, retained_seb, retained_eb, at_risk_count, cancelled_count, cancelled_2026, cancelled_2025, cancelled_2024, cancelled_2023, cancelled_2022, cancelled_2021, on_hold_count, untagged_count, raw_json (jsonb)`
 
-**`customers`** — enriched non-active customers (Inactive + On-Hold), 2,674 rows as of 5/14.
-Populated by the resumable `enrichInactiveCustomers({ budgetMs, maxCustomers })` job that skips IDs already at `depth='full'` via a `refreshed_at` watermark.
+**`customers`** — enriched non-active customers (Inactive + On-Hold), **2,758 rows as of 2026-07-07**.
+Populated by the resumable `enrichInactiveCustomers({ budgetMs, maxCustomers })` job that skips IDs already at `depth='full'` via a `refreshed_at` watermark. Columns (live): `pocomos_id, status, full_name, first_name, last_name, email, phone, zip, date_created, last_service_date, next_service_date, cancel_date, sales_status, marketing_type, depth, tags (jsonb), contracts (jsonb), refreshed_at`.
 
 **`mosquito_service_status`** — one row per eligible mosquito customer, backing `/service/overdue`. Filled by the hybrid refresh job (see §5.5); the page reads this table instantly and never scrapes on load.
 ```sql
@@ -835,9 +896,22 @@ CREATE TABLE texting_messages (
 ```
 **Import gotcha (fixed 2026-06-16):** the messages CSV has a `mobile_user` column that actually holds *our* business line, so keying the phone off it tagged every message with the same number (only 2 distinct). `import-texting.mjs` now takes the phone from `phoneByCid.get(conversation_id)` (the contacts file) first, falling back to the message column only when empty — which also fixes inbound/outbound detection.
 
-### Tables to add for PhoneBurner
+**`leads_close_rate`** — singleton cache (row `id = 1`) for the `/leads` close-rate tab (§5.6). Holds the latest computed default-period report so the tab paints instantly; custom date ranges are computed live and NOT cached. Created by `initSchema()`; written by `refreshCloseRate()`.
+```sql
+CREATE TABLE leads_close_rate (
+  id INTEGER PRIMARY KEY,          -- always 1 (singleton)
+  period_start DATE NOT NULL,
+  period_end DATE NOT NULL,
+  report JSONB NOT NULL,           -- full LeadsCloseRateReport (totals, reps[], statusBreakdown)
+  computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
 
-**`sync_state`** — single-row table holding watermarks.
+### PhoneBurner tables (LIVE — created 2026-05-15)
+
+> Historically titled "Tables to add"; all three exist and are in active use. `sync_state` also backs the leads close-rate refresh lock and the snapshot job.
+
+**`sync_state`** — key/value table (5 keys live) holding watermarks + locks.
 ```sql
 CREATE TABLE sync_state (
   key TEXT PRIMARY KEY,
@@ -864,11 +938,12 @@ CREATE TABLE phoneburner_contacts (
 ```sql
 CREATE TABLE webhook_log (
   id BIGSERIAL PRIMARY KEY,
-  received_at TIMESTAMPTZ DEFAULT NOW(),
+  received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   pocomos_id TEXT,
+  pb_contact_id TEXT,                              -- added after initial ship (live)
   disposition TEXT,
   csr_name TEXT,
-  note_written BOOLEAN,
+  note_written BOOLEAN NOT NULL DEFAULT FALSE,
   error TEXT,
   raw_payload JSONB
 );
@@ -938,15 +1013,18 @@ Status as of May 18, 2026 — after the rev 5 shipping pass.
 
 9. **Pocomos `/leads/data` is DataTables 1.9, not 1.10+ — RESOLVED (2026-05-18).** `POST /leads/data` uses legacy DataTables 1.9 form-data parameters (`iSortCol_0`, `sSortDir_0`, `mDataProp_N`, `iDisplayStart`, `iDisplayLength`, `sEcho`). Modern DataTables 1.10+ params (`order[0][column]`, `start`, `length`, `columns[N][...]`) are silently ignored and produce an unsorted default-order response. Symptom we hit: the watermark sat at 2024-12-17 for months because the response wasn't actually sorted desc by `date_added`, so the watermark short-circuit broke on whichever stale row appeared first and skipped all newer leads. Always send the legacy format; the canonical body lives in `leadSync.ts::fetchLeadsPage`. Note that the **response** shape was already legacy 1.9 (`aaData` / `iTotalRecords` per §3.5 Surface B) — it's just that the **request** shape was modern and silently mismatched.
 
+11. **Reading lead data incl. converted leads — RESOLVED (shipped, 2026-06-16).** Two working, in-production paths, both READ-ONLY:
+    - **Open leads:** `POST /leads/data` (server-scoped to Lead/Not Interested/Monitor) returns `id, phone, email, date_added, salesperson, status, marketing_type_name`. Powers the PhoneBurner lead sync (`leadSync.ts`).
+    - **All statuses incl. converted "Customer":** the **Advanced Search two-step feed** — (1) `setAdvancedSearchCriteria()` scrapes `search[_token]` from `/leads/advanced-search/show` and POSTs `/leads/lead-advanced-search` with `search[leadStatus][]` for all five statuses (Lead, Not Home, Not Interested, Customer, Monitor) + branch + token, storing criteria in the PHP session; (2) `fetchAllLeads()` POSTs the legacy-1.9 DataTables body to `/lead/lead-advanced-search/data` and pages `aaData`. This is the ONLY feed that returns converted leads, and it powers the `/leads` close-rate (`src/lib/leads/closeRate.ts`, §5.6). Do NOT reuse the `/leads/data` denominator for close rate — it excludes converted leads and overstates the rate.
+
 10. **No per-contract last-service date on the JWT contract object — RESOLVED (2026-06-10).** `GET /jwt/pronexis/{office}/customer/{id}/contracts` carries `date_start`/`date_end`/`renewal_date`, `invoices[].date_due` (billing schedule, not service completion), and `pest_contract.initial_job` (the INITIAL job only, with `date_completed`), but **no recurring/Regular completed-service date** for active mosquito contracts (`number_of_jobs = 0`, `initial_job = null`, and a `pest_contract.initial_job.last_regular_service` field that is always null in samples). So the contract object cannot supply last-mosquito-spray date — the `/service/overdue` report uses the `/customers/data` "Last Service" column instead (see §3.5 Surface B column map + §5.5). Probe: `scripts/probe-bulk-spray-date.ts`.
 
 ### Still open
 
-1. **Lead-tag read endpoint.** No working API path for reading lead tags; tag-based routing is deferred. Possible v2 paths:
+1. **Lead *tag-chip* read (narrow gap — lead DATA is resolved, see Resolved #11).** Lead status/phone/email/date/salesperson are fully readable now, but there is still no working API path for reading a lead's **tag chips** (e.g. `L - Competitor`, `L - Financial`). Consequence: PhoneBurner lead routing is **age-based** (Fresh ≤30d / General older — shipped, §5.1), NOT tag-based. Tag-based sub-folder routing stays deferred. Possible v2 sources when one is needed:
    - The `marketing_type_name` field on `/leads/data` may proxy for the routing decision (e.g., a "Competitor switch" marketing type → folder `66223882`).
-   - Pocomos may add a lead-tags read endpoint.
-   - Scrape `/lead/{id}/lead-information` HTML for the tag chips.
-   - **TODO when a working source lands:** route `L - Competitor` → `66223882`, `L - Financial` → `66223883`, skip `NT - No Marketing` and `L - DNC`.
+   - Scrape `/lead/{id}/lead-information` HTML for the tag chips (same Surface-C pattern `notes.ts` already uses).
+   - **TODO if/when a working source lands:** route `L - Competitor` → `66223882`, `L - Financial` → `66223883`, skip `NT - No Marketing` and `L - DNC`. (Note: the office tag *dictionary* GET is `/jwt/pronexis/tags/list/{office}` and per-*contract* tags GET works — see §12 — but neither exposes a given lead's chips.)
 
 2. **`notesRefresh` throughput.** The `*/15` Phase B refreshes at most `NOTES_REFRESH_LIMIT` (default 40) tracked contacts per tick, oldest-first. With a few hundred tracked lead rows that cycles every contact through inside a day; raise the cap if the tracked set grows materially. (The old `conversionCleanup`, which walked every tracked row every tick, is gone — see §5.5b.)
 
@@ -1025,7 +1103,7 @@ GET  /jwt/pronexis/{office}/office/show
 GET  /jwt/pronexis/{office}/agreements
 GET  /jwt/pronexis/{office}/zipcodes
 GET  /jwt/pronexis/{office}/discounts
-GET  /jwt/pronexis/{office}/tags                      ← tag DEFINITIONS only (catalog)
+GET  /jwt/pronexis/tags/list/{office}                 ← tag DICTIONARY (id→name); this is the path in code (tags.ts)
 GET  /jwt/pronexis/{office}/pests/targets
 GET  /jwt/pronexis/{office}/pests/specialty
 GET  /jwt/pronexis/{office}/salespersons
@@ -1102,17 +1180,23 @@ POST /jwt/pronexis/{office}/customer/{customer}/charge/create
 
 ### Leads
 
+> **UPDATE (2026-06-16): the richer lead read DOES exist — it's the web back-door, not a JWT path.** The JWT lead endpoints below are shallow, but full lead data (phone, email, `date_added`, salesperson, status **including converted "Customer" leads**) is reachable and IN PRODUCTION via the Symfony web session:
+> - `POST /leads/data` (legacy DataTables 1.9 body, `statuses[]=Lead`) → open leads with phone/email/date. Used by `leadSync.ts`.
+> - **Advanced Search two-step feed** → ALL statuses incl. converted: register `search[leadStatus][]` for all five statuses at `/leads/advanced-search/show` + `/leads/lead-advanced-search`, then page `/lead/lead-advanced-search/data`. Used by `closeRate.ts` (§5.6). See §9 Resolved #11.
+>
+> Still no API path for a given lead's **tag chips** (§9 open #1) — lead routing is age-based instead.
+
 ```
 GET  /jwt/{office}/lead/list?limit=50&offset=0
      → Paginated lead list. NOTE the path uses /jwt/{office}/ — NOT /jwt/pronexis/.
      → Probe confirmed (5/14): returns id, company_name, first_name, last_name,
        status.value, reason, contact_address, quote.found_by_type.
-     → DOES NOT include phone, email, or created date in the response.
+     → Shallow: NO phone, email, or created date here. For those, use the web
+       back-door POST /leads/data / Advanced Search feed (see callout above).
 
 GET  /jwt/{office}/lead/{lead}
      → Single lead detail. Probe confirmed (5/14): returns same shallow fields
-       as the list. NO phone, email, or date. Open question whether a richer
-       endpoint exists.
+       as the list. NO phone, email, or date — again, use the web back-door.
 
 POST /jwt/pronexis/customer/save-lead/{office}
      Body example: {
@@ -1142,11 +1226,17 @@ PUT  /jwt/{office}/lead/{lead}
 ### Tags (added after the catalog was captured)
 
 ```
+GET /jwt/pronexis/tags/list/{office}
+    → Office tag DICTIONARY (id → name). Working; used by tags.ts to resolve
+      bare tag ids on customers/contracts.
+
 GET /jwt/office/{office}/contract/{pestContractId}/tags
-    → Returns tags for a specific contract. Works (proven in customers table
-      enrichment).
+    → Returns tags for a specific CONTRACT. Works (proven in customers table
+      enrichment; used by contract-tags.ts).
     → Does NOT accept ?lead_id= query param (probe disproved this 5/14).
-    → No working path found yet for reading lead tags.
+    → Still no working path for a given LEAD's tag chips (§9 open #1). NOTE this
+      is only about tag chips — lead status/phone/email/date ARE readable via the
+      web back-door + Advanced Search feed (§9 Resolved #11).
 ```
 
 ### Endpoint inventory at a glance
@@ -1163,13 +1253,13 @@ GET /jwt/office/{office}/contract/{pestContractId}/tags
 
 - No outbound webhooks from Pocomos — we poll
 - No dedicated "log a call" endpoint — we use `note/create` as the destination for PhoneBurner dispositions
-- No read endpoint for lead tags found yet
-- No `phone` / `email` / `created_at` in the documented lead GET endpoints (despite leads accepting these on CREATE)
+- No read endpoint for a given lead's **tag chips** (age-based routing shipped instead — §9 open #1)
+- No `phone` / `email` / `created_at` on the *JWT* lead GET endpoints — but the **web back-door** `POST /leads/data` + Advanced Search feed DO return them (§9 Resolved #11), so this is no longer a real blocker
 - No bulk endpoint for "all contracts in the office" — must iterate per customer
 
 ### Key insight from this catalog
 
-The customer list endpoint **does** return phone and email natively. This means Pocomos *can* expose contact data via API — it just doesn't on the lead endpoints. That's an asymmetry, not a fundamental limitation. The richer lead read endpoint may exist; we just haven't found the right path yet.
+The customer list endpoint **does** return phone and email natively, and the richer **lead** read turned out to exist too — not as a JWT endpoint, but through the Symfony web session (`POST /leads/data` for open leads, the Advanced Search two-step feed for all statuses incl. converted). Both are shipped and in production (§9 Resolved #11). The only lead field still unreadable via any path is a lead's tag chips. The asymmetry was never fundamental — just JWT-surface-only.
 
 ---
 

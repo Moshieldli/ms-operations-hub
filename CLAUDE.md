@@ -34,6 +34,8 @@ column maps, bucket logic, integrations). Treat it as source of truth and keep i
   "probe only."
 - Maintain docs/BACKLOG.md: when I say "add X to the backlog," add it; when I say "build,"
   pull the next item(s) from it and update their status. Keep it current.
+- End of every session: update the REFERENCE.md rev note + BACKLOG.md statuses, commit, and push.
+  The GitHub-synced docs are what every new chat reads — never end a session with stale docs.
 
 ## Command hygiene (PowerShell on Windows) — prevents approval prompts
 - Commit messages: git commit -m "short single line", OR a message file in the PROJECT ROOT
