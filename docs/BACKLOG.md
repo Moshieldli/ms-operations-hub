@@ -28,7 +28,7 @@
       Yuliya Lankri (1164303), Zachariah Robinson (1237274).
 
 ## Done (recent)
-- [x] /sales return-rate card (24→25 88.8%, 25→26 75.9%) — real mosquito customers (mosquito-family
+- [x] /sales return-rate card (live: 24→25 73.4%, 25→26 74.0%) — real mosquito customers (mosquito-family
       contract carrying that season's tag, Event-Spray-only excluded) who returned next season;
       primary + excl-mid-season denominators; computed in getSalesTaxonomy(); compact on /tv/sales.
       See §5.8. (Denominator choice → Needs a human decision above.)
