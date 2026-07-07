@@ -1,24 +1,26 @@
 /**
- * One-time import of the Aerialink texting export into your existing Neon database.
+ * Import of the Aerialink texting exports into your existing Neon database.
  *
- * Run it locally, once:
+ * Run it locally:
  *   1. vercel env pull .env.local      (so POSTGRES_URL is available)
- *   2. node --env-file=.env.local import-texting.mjs <messages.csv> <conversations.csv>
+ *   2. node --env-file=.env.local import-texting.mjs
  *
- * It creates two read-only tables — texting_messages and texting_contacts — and
- * loads everything in. Safe to re-run: it drops and rebuilds the tables each time.
+ * No arguments needed: it auto-discovers EVERY *conversations*.csv and
+ * *messages*.csv sitting next to this script, merges them, and dedupes by the
+ * row `id` so the overlapping open/all/(1) exports never double-count and
+ * nothing is lost across runs.
  *
- * Requires the @neondatabase/serverless package, which your dashboard already uses.
+ * It creates two read-only tables — texting_messages and texting_contacts —
+ * and rebuilds them each run. Requires @neondatabase/serverless, which the
+ * dashboard already uses.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { neon } from '@neondatabase/serverless';
 
-const [, , messagesPath, contactsPath] = process.argv;
-if (!messagesPath) {
-  console.error('Usage: node --env-file=.env.local import-texting.mjs <messages.csv> [conversations.csv]');
-  process.exit(1);
-}
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 const DB =
   process.env.POSTGRES_URL_NON_POOLING ||
@@ -33,6 +35,8 @@ const sql = neon(DB);
 /* ---------- small, robust CSV parser (handles quotes, commas, newlines) ---------- */
 function parseCSV(text) {
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  // Postgres text cannot store NUL (0x00); the Aerialink export occasionally embeds them.
+  text = text.replace(/\x00/g, '');
   const rows = [];
   let row = [], field = '', inQ = false;
   for (let i = 0; i < text.length; i++) {
@@ -53,6 +57,35 @@ function parseCSV(text) {
 const onlyDigits = s => String(s || '').replace(/\D/g, '');
 const last10 = s => { const d = onlyDigits(s); return d.length >= 10 ? d.slice(-10) : d; };
 const toISO = s => { const d = s ? new Date(s) : null; return d && !isNaN(d.getTime()) ? d.toISOString() : null; };
+const tstamp = s => { const d = s ? new Date(s) : null; return d && !isNaN(d.getTime()) ? d.getTime() : 0; };
+
+/* ---------- discover every messages / conversations csv beside this script ---------- */
+function discover() {
+  const csvs = readdirSync(HERE).filter(f => /\.csv$/i.test(f) && /aerialink/i.test(f));
+  const conversations = csvs.filter(f => /conversation/i.test(f));
+  const messages = csvs.filter(f => /message/i.test(f) && !/conversation/i.test(f));
+  return { conversations, messages };
+}
+
+/* ---------- parse + merge a set of files, deduping row objects by `id` ---------- */
+function loadMerged(files, pickNewer) {
+  const byId = new Map();
+  let parsed = 0, dropped = 0;
+  for (const f of files) {
+    const rows = parseCSV(readFileSync(join(HERE, f), 'utf8'));
+    parsed += rows.length;
+    for (const r of rows) {
+      const id = r.id;
+      if (!id) { dropped++; continue; }
+      const prev = byId.get(id);
+      if (!prev) { byId.set(id, r); continue; }
+      // duplicate id across exports: keep the newer row when a timestamp lets us tell.
+      if (pickNewer && pickNewer(r) >= pickNewer(prev)) byId.set(id, r);
+    }
+    console.log(`  ${f}: ${rows.length} rows`);
+  }
+  return { rows: [...byId.values()], parsed, dropped };
+}
 
 /* ---------- figure out which columns hold the body / date / direction ---------- */
 function detectColumns(rows) {
@@ -109,17 +142,18 @@ async function insertBatches(table, cols, records) {
 }
 
 (async () => {
+  const { conversations: convFiles, messages: msgFiles } = discover();
+  console.log(`Discovered ${convFiles.length} conversations file(s) and ${msgFiles.length} messages file(s) in ${HERE}`);
+
   /* ---------- contacts (names/emails + last-activity date for the list) ---------- */
   let phoneByCid = new Map();
-  if (contactsPath) {
-    console.log('Reading contacts file...');
-    const crows = parseCSV(readFileSync(contactsPath, 'utf8'));
-    const seen = new Set();
-    const contacts = [];
+  let contacts = [];
+  if (convFiles.length) {
+    console.log('Merging conversations...');
+    const { rows: crows } = loadMerged(convFiles, r => tstamp(r['updated_at'] || r['created_at']));
     for (const c of crows) {
       const cid = c.id || '';
-      if (!cid || seen.has(cid)) continue;
-      seen.add(cid);
+      if (!cid) continue;
       phoneByCid.set(cid, c['phone.number']);
       contacts.push({
         conversation_id: cid,
@@ -151,13 +185,13 @@ async function insertBatches(table, cols, records) {
     await insertBatches('texting_contacts',
       ['conversation_id','phone','phone_full','first_name','last_name','email','address','city','state','zip','last_message','status','updated_at'],
       contacts);
-    console.log(`Contacts loaded: ${contacts.length}`);
+    console.log(`Contacts (distinct conversations) loaded: ${contacts.length}`);
   }
 
   /* ---------- messages ---------- */
-  console.log('Reading messages file...');
-  const mrows = parseCSV(readFileSync(messagesPath, 'utf8'));
-  if (!mrows.length) { console.error('No rows found in messages file.'); process.exit(1); }
+  console.log('Merging messages...');
+  const { rows: mrows } = loadMerged(msgFiles, r => tstamp(r['created_at']));
+  if (!mrows.length) { console.error('No message rows found.'); process.exit(1); }
   const M = detectColumns(mrows);
   console.log('Detected message columns ->', M);
 
@@ -197,6 +231,9 @@ async function insertBatches(table, cols, records) {
     ['conversation_id','phone','phone_full','body','sent_at','direction','is_inbound'],
     records);
 
-  const distinct = new Set(records.map(r => r.phone)).size;
-  console.log(`\nDone. ${records.length} messages across ${distinct} phone numbers loaded into Neon.`);
+  const distinctPhones = new Set(records.map(r => r.phone)).size;
+  const sampleCid = '4035181';
+  const sampleCount = records.filter(r => r.conversation_id === sampleCid).length;
+  console.log(`\nDone. ${records.length} messages across ${distinctPhones} phone numbers and ${contacts.length} conversations loaded into Neon.`);
+  console.log(`Messages for conversation ${sampleCid}: ${sampleCount}`);
 })().catch(e => { console.error('\nImport failed:', e); process.exit(1); });
