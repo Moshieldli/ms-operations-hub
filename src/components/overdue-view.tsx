@@ -32,8 +32,10 @@ const LATE_DAYS = 17; // 17–20 days → yellow row
 const VERY_LATE_DAYS = 21; // 21+ days → red row
 
 /**
- * Severity tint for an overdue row, by days since last mosquito service:
- *   21+ → red, 17–20 → yellow, <17 (or unknown) → normal.
+ * Row tint:
+ *   scheduled today (next service == today, Eastern) → GREEN (being serviced
+ *     today; also excluded from the overdue count upstream), else by days since
+ *     last mosquito service: 21+ → red, 17–20 → yellow, <17 (or unknown) → normal.
  *
  * FUTURE — "48h rescue" override (not implemented yet): once we source the
  * assigned-only next-scheduled date (per the scheduled-services probe), a row
@@ -41,10 +43,12 @@ const VERY_LATE_DAYS = 21; // 21+ days → red row
  * even when days_since is high, because service is imminent. Wire that in here:
  *   if (hasAssignedJobWithin48h) return "";   // <-- 48h rescue hook
  */
-function rowToneClass(daysSince: number | null): string {
-  if (daysSince == null) return "";
-  if (daysSince >= VERY_LATE_DAYS) return "bg-rose-50 dark:bg-rose-950/30";
-  if (daysSince >= LATE_DAYS) return "bg-amber-50 dark:bg-amber-950/30";
+function rowToneClass(row: MosquitoStatusRow): string {
+  if (row.scheduled_today) return "bg-emerald-50 dark:bg-emerald-950/30";
+  const d = row.days_since;
+  if (d == null) return "";
+  if (d >= VERY_LATE_DAYS) return "bg-rose-50 dark:bg-rose-950/30";
+  if (d >= LATE_DAYS) return "bg-amber-50 dark:bg-amber-950/30";
   return "";
 }
 
@@ -158,7 +162,17 @@ export function OverdueView({ initial }: { initial: OverdueReport }) {
 
       {/* Stat row — Overdue dominates (hero + action color); color is semantic */}
       <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 lg:grid-cols-6">
-        <Stat label="Overdue" value={fmt(counts.overdue)} tone="action" size="hero" />
+        <Stat
+          label="Overdue"
+          value={fmt(counts.overdue)}
+          tone="action"
+          size="hero"
+          sub={
+            counts.scheduledToday
+              ? `Excludes ${fmt(counts.scheduledToday)} scheduled for today`
+              : undefined
+          }
+        />
         <Stat label="Paused (balance)" value={fmt(counts.pausedBalance)} tone="attention" />
         <Stat label="Current" value={fmt(counts.current)} tone="healthy" />
         <Stat label="Excluded (new)" value={fmt(counts.excludedNew)} />
@@ -240,11 +254,13 @@ function Stat({
   value,
   tone = "neutral",
   size = "default",
+  sub,
 }: {
   label: string;
   value: string;
   tone?: Tone;
   size?: "default" | "hero";
+  sub?: string;
 }) {
   return (
     <div className="flex flex-col rounded-lg border bg-card p-4 sm:p-5">
@@ -260,6 +276,11 @@ function Stat({
       >
         {value}
       </div>
+      {sub ? (
+        <div className="mt-1 text-[11px] leading-snug text-emerald-700 dark:text-emerald-400">
+          {sub}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -268,7 +289,7 @@ function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowKind }) 
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
-        <thead>
+        <thead className="[&>tr>th]:sticky [&>tr>th]:top-0 [&>tr>th]:z-10 [&>tr>th]:bg-background">
           <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
             <th className="py-2 pr-4 font-medium">Customer</th>
             <th className="py-2 pr-4 font-medium">Contract</th>
@@ -291,7 +312,7 @@ function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowKind }) 
           {rows.map((r) => (
             <tr
               key={r.pocomos_id}
-              className={`border-b last:border-0 ${rowToneClass(r.days_since)}`}
+              className={`border-b last:border-0 ${rowToneClass(r)}`}
             >
               <td className="py-2 pr-4 font-medium">
                 <span className="inline-flex items-center gap-1.5">
@@ -331,7 +352,14 @@ function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowKind }) 
                 </td>
               )}
               <td className="py-2 pr-4 tabular-nums text-muted-foreground">
-                {shortDate(r.next_service_date)}
+                <span className="inline-flex items-center gap-1.5">
+                  {shortDate(r.next_service_date)}
+                  {r.scheduled_today ? (
+                    <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400">
+                      Today
+                    </span>
+                  ) : null}
+                </span>
               </td>
               <td className="py-2 pr-4 tabular-nums text-muted-foreground">
                 {shortDate(r.sign_up_date)}

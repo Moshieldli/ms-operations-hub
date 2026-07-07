@@ -102,6 +102,33 @@ function TvDashboard({
         </div>
       </section>
 
+      {taxonomy?.returnRates && taxonomy.returnRates.pairs.length > 0 ? (
+        <section className="flex flex-col">
+          <div className="mb-3 text-sm uppercase tracking-[0.2em] text-muted-foreground lg:text-base">
+            Mosquito return rate
+          </div>
+          <div className="grid grid-cols-2 gap-4 lg:gap-6">
+            {taxonomy.returnRates.pairs.map((p) => (
+              <div
+                key={p.fromYear}
+                className="flex flex-col rounded-xl border p-5 lg:p-7"
+              >
+                <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground lg:text-sm">
+                  {p.fromYear} → {p.toYear}
+                </div>
+                <div className="mt-2 text-4xl font-semibold tabular-nums lg:text-6xl">
+                  {p.rate.toFixed(0)}%
+                </div>
+                <div className="mt-2 text-xs text-muted-foreground lg:text-sm tabular-nums">
+                  {fmt(p.returned)} / {fmt(p.realFrom)} · excl mid-season{" "}
+                  {p.exclRate.toFixed(0)}%
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {contractTypeGroups.length > 0 ? (
         <section className="flex flex-col">
           <div className="mb-3 text-sm uppercase tracking-[0.2em] text-muted-foreground lg:text-base">

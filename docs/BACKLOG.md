@@ -11,18 +11,31 @@
       marketing type from the converted customer's record; join via the converted leads from the
       Advanced Search two-step feed (REFERENCE §9 Resolved #11). Self-probe the customer-side
       marketing field first.
-- [ ] Return-rate data (spec TBD in chat)
-- [ ] Dashboard column tweaks (spec TBD in chat)
 - [ ] Marketing source breakdown: Long Island vs Westchester
 
 ## Needs a human decision
 - [ ] "Real lead" definition for close rate — pending Rivka & Leon (drops into isRealLead() hook).
+- [ ] Return rate: is the mid-season-cancel denominator canonical? /sales shows BOTH (primary =
+      count mid-season cancels; excl mid-season = drop them). Pick one as the headline. Pending
+      Rivka & Leon. See REFERENCE §5.8 / §9 open #8.
+- [ ] /service/overdue "Route" column: no route CODE exists in Pocomos (probe 2026-07-07 — see
+      REFERENCE §9 open #7). Decide whether to instead show the scheduled-services "Route Assigned"
+      status (Assigned/Unassigned) + technician, which needs a per-customer scrape of ALL eligible
+      (slows the daily refresh), or drop the column.
 
 ## Worklist / cleanup (not code)
 - [ ] 4 customers-with-issues to review: Alex Abraham (1305276), Ariel Roffel (1237341),
       Yuliya Lankri (1164303), Zachariah Robinson (1237274).
 
 ## Done (recent)
+- [x] /sales return-rate card (24→25 88.8%, 25→26 75.9%) — real mosquito customers (mosquito-family
+      contract carrying that season's tag, Event-Spray-only excluded) who returned next season;
+      primary + excl-mid-season denominators; computed in getSalesTaxonomy(); compact on /tv/sales.
+      See §5.8. (Denominator choice → Needs a human decision above.)
+- [x] /service/overdue scheduled-today rescue — next_service_date == today (Eastern) tints the row
+      green + "Today" pill and drops it from the overdue COUNT ("Excludes N scheduled for today"
+      sub-line); still visible. Read-time in getOverdueReport(). See §5.5.
+- [x] /service/overdue sticky table headers (overdue/paused/needs-check).
 - [x] /texting archive tab — Aerialink SMS history in a Neon-backed inbox (texting_messages +
       texting_contacts, imported via import-texting.mjs); left-pane list + threaded view. Gated by
       the app's only auth (TEXTING_PASSWORD + texting_auth cookie via src/middleware.ts). See §5.7.

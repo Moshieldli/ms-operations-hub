@@ -262,10 +262,79 @@ function SalesDashboard({
         />
       </div>
 
+      <ReturnRateCard taxonomy={taxonomy} loading={taxLoading} />
+
       <IssuesCard taxonomy={taxonomy} loading={taxLoading} year={year} prevYear={prevYear} />
 
       <ContractTypeCard summary={summary} />
     </>
+  );
+}
+
+function ReturnRateCard({
+  taxonomy,
+  loading,
+}: {
+  taxonomy: SalesTaxonomy | null;
+  loading: boolean;
+}) {
+  const rr = taxonomy?.returnRates;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Return rate</CardTitle>
+        <CardDescription>
+          Real mosquito customers — a mosquito-family contract carrying that
+          season&rsquo;s tag (Event-Spray-only excluded) — who came back the next
+          season. The primary rate counts every prior-season customer; the
+          &ldquo;excl. mid-season&rdquo; column drops customers who cancelled
+          mid-season from the denominator. Which one is canonical is a pending
+          ops decision.
+          {rr ? ` ${fmt(rr.eventSprayOnly)} event-spray-only customers excluded.` : ""}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {!rr ? (
+          <p className="text-sm text-muted-foreground">
+            {loading ? "Loading…" : "Couldn’t load return rates."}
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="[&>tr>th]:sticky [&>tr>th]:top-0 [&>tr>th]:z-10 [&>tr>th]:bg-background">
+                <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="py-2 pr-4 font-medium">Season</th>
+                  <th className="py-2 pr-4 text-right font-medium">Return rate</th>
+                  <th className="py-2 pr-4 text-right font-medium">Returned / Real</th>
+                  <th className="py-2 pl-4 text-right font-medium">Excl. mid-season</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rr.pairs.map((p) => (
+                  <tr key={p.fromYear} className="border-b last:border-0">
+                    <td className="py-2 pr-4 font-medium tabular-nums">
+                      {p.fromYear} → {p.toYear}
+                    </td>
+                    <td className="py-2 pr-4 text-right text-lg font-semibold tabular-nums">
+                      {p.rate.toFixed(1)}%
+                    </td>
+                    <td className="py-2 pr-4 text-right tabular-nums text-muted-foreground">
+                      {fmt(p.returned)} / {fmt(p.realFrom)}
+                    </td>
+                    <td className="py-2 pl-4 text-right tabular-nums">
+                      {p.exclRate.toFixed(1)}%
+                      <span className="ml-1 text-xs text-muted-foreground">
+                        ({fmt(p.exclDenom)} denom · −{fmt(p.midSeasonCancels)})
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

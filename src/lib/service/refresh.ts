@@ -430,6 +430,13 @@ export interface MosquitoStatusRow {
   open_balance: number;
   next_service_date: string | null;
   is_weekly: boolean;
+  /**
+   * True when this overdue row is scheduled for service TODAY (Eastern) —
+   * next_service_date == today. Computed at READ time (not stored) so "today"
+   * is always the day you're viewing. These rows are tinted green and excluded
+   * from the overdue COUNT, but stay visible in the overdue table.
+   */
+  scheduled_today: boolean;
   last_checked_at: string;
 }
 
@@ -444,6 +451,8 @@ export interface OverdueReport {
     needsCheck: number;
     pausedBalance: number;
     excludedNew: number;
+    /** Overdue rows whose next_service_date is today (Eastern) — excluded from `overdue`. */
+    scheduledToday: number;
     total: number;
   };
   meta: RefreshMeta | null;
@@ -455,6 +464,16 @@ function toDateStr(v: unknown): string | null {
   if (v == null) return null;
   if (v instanceof Date) return v.toISOString().slice(0, 10);
   return String(v).slice(0, 10);
+}
+
+/** Today's calendar date in Eastern time as "YYYY-MM-DD" (en-CA yields ISO order). */
+function easternTodayIso(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 }
 
 function normalizeRow(r: Record<string, unknown>): MosquitoStatusRow {
@@ -471,6 +490,7 @@ function normalizeRow(r: Record<string, unknown>): MosquitoStatusRow {
     open_balance: r.open_balance == null ? 0 : Number(r.open_balance),
     next_service_date: toDateStr(r.next_service_date),
     is_weekly: r.is_weekly === true,
+    scheduled_today: false, // set at read time in getOverdueReport
     last_checked_at:
       r.last_checked_at instanceof Date
         ? (r.last_checked_at as Date).toISOString()
@@ -498,6 +518,18 @@ export async function getOverdueReport(): Promise<OverdueReport> {
       if (b.days_since == null) return 1;
       return b.days_since - a.days_since;
     });
+
+  // Scheduled-today rescue: an overdue row whose next scheduled service is TODAY
+  // (Eastern) is being handled today — tint it green (in the view) and drop it
+  // from the overdue COUNT, but keep it visible in the table.
+  const today = easternTodayIso();
+  let scheduledToday = 0;
+  for (const r of overdue) {
+    if (r.next_service_date === today) {
+      r.scheduled_today = true;
+      scheduledToday++;
+    }
+  }
   const needsCheck = all
     .filter((r) => r.status === "needs_check")
     .sort((a, b) => (a.full_name || "").localeCompare(b.full_name || ""));
@@ -521,11 +553,14 @@ export async function getOverdueReport(): Promise<OverdueReport> {
     pausedBalance,
     needsCheck,
     counts: {
-      overdue: overdue.length,
+      // Scheduled-today rows stay in the `overdue` array (visible) but are not
+      // counted as overdue — they're being serviced today.
+      overdue: overdue.length - scheduledToday,
       current: currentCount,
       needsCheck: needsCheck.length,
       pausedBalance: pausedBalance.length,
       excludedNew: excludedNewCount,
+      scheduledToday,
       total: all.length,
     },
     meta,
