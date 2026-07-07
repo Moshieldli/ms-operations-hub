@@ -19,6 +19,14 @@
       Yuliya Lankri (1164303), Zachariah Robinson (1237274).
 
 ## Done (recent)
+- [x] /texting archive tab — Aerialink SMS history in a Neon-backed inbox (texting_messages +
+      texting_contacts, imported via import-texting.mjs); left-pane list + threaded view. Gated by
+      the app's only auth (TEXTING_PASSWORD + texting_auth cookie via src/middleware.ts). See §5.7.
+- [x] Texting search made server-authoritative: /api/texting/search?find= queries the DB by
+      phone/name so a full-number search always finds its conversation (not just the in-memory list).
+- [x] Nav: Texting tab added to the top nav.
+- [x] PhoneBurner: hourly roster-reconciliation conversion sweep (/api/cron/conversion-sweep,
+      §5.5b) replaces the old conversionCleanup; */15 route is now notes-refresh only.
 - [x] 2026-Renewed bucket fix (RETAINED ~991 / AT_RISK ~17)
 - [x] Year-relative cancelled taxonomy + Not Renewed (377) + issues list
 - [x] Sales relabel/reorg + inline definitions + reconciliation line

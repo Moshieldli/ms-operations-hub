@@ -3,6 +3,24 @@
 Read docs/REFERENCE.md first. It is the master reference for this project (Pocomos auth,
 column maps, bucket logic, integrations). Treat it as source of truth and keep it updated.
 
+## Docs are the source of truth — keep GitHub current, always
+- `docs/REFERENCE.md` (architecture, APIs, data model, decisions) and `docs/BACKLOG.md`
+  (pending-work queue, prioritized) are the canonical state of this project. They live in the
+  GitHub repo and auto-sync into the Claude project knowledge, so new chats read them without
+  any upload.
+- At the END of every work session — and immediately after shipping any change that alters
+  architecture, endpoints, data model, bucket/categorize logic, env vars, or the task queue — you
+  MUST update `docs/REFERENCE.md` and `docs/BACKLOG.md` to reflect reality, then commit and push to
+  main. Do this automatically, without being asked. A change isn't "done" until the docs are
+  updated and pushed.
+- `BACKLOG.md` rules: when a task is completed, move it to a "Shipped"/"Done" section with a
+  one-line note; when a new task or decision emerges, add it with priority. Keep it current enough
+  that a fresh chat can pick up the next task from `BACKLOG.md` alone.
+- `REFERENCE.md` rules: keep it accurate to shipped reality (not aspirational). If code and doc
+  disagree, fix the doc in the same session.
+- If `docs/BACKLOG.md` does not exist, create it from the current known pending items and commit it.
+- Never leave the working tree with doc changes uncommitted at session end.
+
 ## How to work here
 - Work autonomously start to finish. Do NOT ask for confirmation. Make reasonable choices on
   ambiguity and note them in your final report. Only stop if something is destructive,
