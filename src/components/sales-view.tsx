@@ -331,6 +331,14 @@ function ReturnRateCard({
                 ))}
               </tbody>
             </table>
+            <p className="mt-3 text-[11px] leading-snug text-muted-foreground">
+              A &ldquo;return&rdquo; counts anyone whose mosquito contract carries
+              both seasons&rsquo; tags — including customers now inactive/on-hold
+              who were tagged for the next season but later cancelled (which is
+              why this runs ahead of the &ldquo;Returning&rdquo; bucket, which
+              counts only currently-active continuations). Whether those later
+              cancels should count is a pending ops decision — see the backlog.
+            </p>
           </div>
         )}
       </CardContent>

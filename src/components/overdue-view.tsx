@@ -180,6 +180,26 @@ export function OverdueView({ initial }: { initial: OverdueReport }) {
         <Stat label="Eligible (mosquito)" value={fmt(counts.total)} />
       </div>
 
+      {/* Scheduled today — overdue accounts being serviced today (green), pulled
+          out of the overdue table + count. */}
+      {report.scheduledToday.length > 0 ? (
+        <Card className="border-emerald-300 dark:border-emerald-900/50">
+          <CardHeader>
+            <CardTitle className="text-emerald-700 dark:text-emerald-400">
+              Scheduled today ({fmt(report.scheduledToday.length)})
+            </CardTitle>
+            <CardDescription>
+              Overdue accounts whose next mosquito service is scheduled for today
+              — they&rsquo;re being handled today, so they&rsquo;re excluded from
+              the overdue count above and listed here instead.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <RowTable rows={report.scheduledToday} kind="overdue" />
+          </CardContent>
+        </Card>
+      ) : null}
+
       {/* Overdue table */}
       <Card>
         <CardHeader>
@@ -287,11 +307,15 @@ function Stat({
 
 function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowKind }) {
   return (
-    <div className="overflow-x-auto">
+    <div>
+      {/* No overflow wrapper: an overflow-x/-y container becomes the sticky
+          scroll context and the header would scroll away. Without it, sticky
+          resolves against the page, so the solid-bg header pins on page scroll. */}
       <table className="w-full text-sm">
-        <thead className="[&>tr>th]:sticky [&>tr>th]:top-0 [&>tr>th]:z-10 [&>tr>th]:bg-background">
+        <thead className="[&>tr>th]:sticky [&>tr>th]:top-0 [&>tr>th]:z-20 [&>tr>th]:bg-background">
           <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
             <th className="py-2 pr-4 font-medium">Customer</th>
+            <th className="py-2 pr-4 font-medium">Route</th>
             <th className="py-2 pr-4 font-medium">Contract</th>
             {kind === "overdue" ? (
               <>
@@ -323,6 +347,9 @@ function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowKind }) 
                     </span>
                   ) : null}
                 </span>
+              </td>
+              <td className="py-2 pr-4 tabular-nums text-muted-foreground">
+                {r.route_code ? r.route_code : "—"}
               </td>
               <td className="py-2 pr-4 text-muted-foreground">
                 {r.mosquito_contract_type || "—"}

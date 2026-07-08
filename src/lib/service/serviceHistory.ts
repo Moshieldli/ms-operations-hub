@@ -79,6 +79,29 @@ export function looksLikeLoginPage(html: string): boolean {
   return /name="form\[username\]"/i.test(html) || /id="login_form"/i.test(html);
 }
 
+/**
+ * Extract the customer's route CODE from a `/customer/{id}/service-information`
+ * page. The customer's "Routing" widget renders as
+ * `Routing / Code {value} / County … / Lot Size …`. Confirmed live 2026-07-07
+ * (values like "510", "505"; codes can also be alphanumeric like "WF2").
+ *
+ * The page ALSO has a nav sidebar "Routing" dropdown (Route List / Reminder /
+ * …) — skipped via the submenu/menu-text markers. Returns the code or null.
+ * (`customer-information` 404s; service-information is the profile page.)
+ */
+export function parseRouteCode(html: string): string | null {
+  for (const m of html.matchAll(/Routing/gi)) {
+    const start = m.index ?? 0;
+    const head = html.slice(start, start + 120);
+    if (/submenu|menu-text|dropdown-toggle/i.test(head)) continue; // nav dropdown, not the widget
+    const text = stripTags(html.slice(start, start + 400));
+    // "Routing Code 510 County ..." — the token right after the Code label.
+    const cm = text.match(/\bCode\s+([A-Za-z0-9][A-Za-z0-9-]*)/i);
+    if (cm && !/^(county|lot|pests|acres)$/i.test(cm[1])) return cm[1];
+  }
+  return null;
+}
+
 export function parseSelectedContractLabel(html: string): string | null {
   const idx = html.search(/Selected Contract/i);
   if (idx < 0) return null;

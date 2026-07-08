@@ -18,10 +18,11 @@
 - [ ] Return rate: is the mid-season-cancel denominator canonical? /sales shows BOTH (primary =
       count mid-season cancels; excl mid-season = drop them). Pick one as the headline. Pending
       Rivka & Leon. See REFERENCE §5.8 / §9 open #8.
-- [ ] /service/overdue "Route" column: no route CODE exists in Pocomos (probe 2026-07-07 — see
-      REFERENCE §9 open #7). Decide whether to instead show the scheduled-services "Route Assigned"
-      status (Assigned/Unassigned) + technician, which needs a per-customer scrape of ALL eligible
-      (slows the daily refresh), or drop the column.
+- [ ] Return rate: is **Active + "NT - Do Not Auto Renew"** (finished the season, declined renewal)
+      a CANCELLED customer for return-rate purposes? Pending Rivka & Leon. Related: the audit
+      (scripts/audit-return-gap.ts) shows the 25→26 numerator already counts ~128 now-inactive/on-hold
+      customers who carry a 2026 continuation tag — deciding this sets whether "real {year}" should
+      require currently-active/serviced. See REFERENCE §5.8 / §9 open #8.
 
 ## Worklist / cleanup (not code)
 - [ ] 4 customers-with-issues to review: Alex Abraham (1305276), Ariel Roffel (1237341),
@@ -32,10 +33,17 @@
       contract carrying that season's tag, Event-Spray-only excluded) who returned next season;
       primary + excl-mid-season denominators; computed in getSalesTaxonomy(); compact on /tv/sales.
       See §5.8. (Denominator choice → Needs a human decision above.)
-- [x] /service/overdue scheduled-today rescue — next_service_date == today (Eastern) tints the row
-      green + "Today" pill and drops it from the overdue COUNT ("Excludes N scheduled for today"
-      sub-line); still visible. Read-time in getOverdueReport(). See §5.5.
-- [x] /service/overdue sticky table headers (overdue/paused/needs-check).
+- [x] /service/overdue scheduled-today → OWN green "Scheduled today" section (rev 13; was inline in
+      the overdue table). next_service_date == today (Eastern), excluded from the overdue count.
+      Read-time in getOverdueReport(). See §5.5.
+- [x] /service/overdue sticky headers FIXED (rev 13) — removed the overflow-x-auto wrapper (it was
+      the sticky scroll-context) + solid bg + z-20; header now pins on page scroll on all sections.
+- [x] /service/overdue Route column (rev 13) — route CODE scraped from service-information
+      "Routing"→"Code" into mosquito_service_status.route_code (incremental; ?forceRoutes=1 re-scrapes
+      all). Full backfill ~1,021 codes in ~315s; ~0 steady-state. Shown between Customer and Contract.
+- [x] Return-rate audit (rev 13) — scripts/audit-return-gap.ts + audit-return-gap.csv (gitignored);
+      reconciled 25→26 numerator 1,079 vs Returning 1,004 (gap 130 = 123 inactive + 5 on-hold + 2
+      active); card hint added. See §5.8.
 - [x] /texting archive tab — Aerialink SMS history in a Neon-backed inbox (texting_messages +
       texting_contacts, imported via import-texting.mjs); left-pane list + threaded view. Gated by
       the app's only auth (TEXTING_PASSWORD + texting_auth cookie via src/middleware.ts). See §5.7.

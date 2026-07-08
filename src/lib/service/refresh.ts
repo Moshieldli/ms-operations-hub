@@ -28,7 +28,7 @@
 import { initSchema, sql, getSyncState, setSyncState } from "@/lib/db";
 import { getDataset, fetchPooled } from "@/lib/pocomos";
 import { getSessionedHtml } from "@/lib/pocomos/webSession";
-import { parseServiceHistory, looksLikeLoginPage } from "./serviceHistory";
+import { parseServiceHistory, parseRouteCode, looksLikeLoginPage } from "./serviceHistory";
 import { fetchAllCustomersLastService } from "./customersData";
 import { fetchOpenBalances } from "./openBalance";
 import {
@@ -69,6 +69,13 @@ export interface RefreshMeta {
   /** Subset of overdue with no service date at all (pinned "no spray yet"). */
   noServiceYet: number;
   failed: number;
+  /** Route-code scrape phase: rows updated, rows where a code was found, failures, ms. */
+  routesScraped: number;
+  routesFound: number;
+  routesFailed: number;
+  routeDurationMs: number;
+  /** Rows still missing a route_code after this run (retried next run). */
+  routesPending: number;
   /** Customers found in the unpaid-invoices report (telemetry). */
   balanceCustomers: number;
   /** Sum of all open balances across eligible customers (telemetry). */
@@ -84,6 +91,10 @@ export interface RefreshOptions {
   maxCustomers?: number;
   /** Force a fresh Pocomos dataset build rather than the 10-min cache. */
   forceDataset?: boolean;
+  /** Re-scrape route_code for ALL rows, not just those missing one. */
+  forceRoutes?: boolean;
+  /** Cap on route-code scrapes this invocation (default 5000). */
+  maxRoutes?: number;
 }
 
 function sleep(ms: number) {
@@ -391,6 +402,40 @@ export async function refreshMosquitoStatus(
   });
   failed = result.failures.length;
 
+  // ---- ROUTE phase: scrape each customer's route code from the "Routing"
+  //      widget on /customer/{id}/service-information. Incremental by default
+  //      (only rows missing a code); `forceRoutes` re-scrapes all. READ-ONLY
+  //      GET, pooled (5 concurrent) + paused, budget-capped so it resumes
+  //      across daily runs. Empty string marks "checked, no code" so a
+  //      code-less customer isn't retried every run. The main upserts above
+  //      never touch route_code, so codes persist across refreshes. ----
+  const routeStart = Date.now();
+  const routeCandidates = (options.forceRoutes
+    ? await sql`SELECT pocomos_id FROM mosquito_service_status`
+    : await sql`SELECT pocomos_id FROM mosquito_service_status WHERE route_code IS NULL`) as Array<{
+    pocomos_id: string;
+  }>;
+  const maxRoutes = options.maxRoutes ?? 5000;
+  const routeWork = routeCandidates.map((r) => String(r.pocomos_id)).slice(0, maxRoutes);
+  let routesScraped = 0;
+  let routesFound = 0;
+  const scrapeRoute = async (id: string): Promise<void> => {
+    if (Date.now() - t0 > budgetMs) return; // out of budget — leave NULL, retry next run
+    await sleep(PER_REQUEST_PAUSE_MS);
+    const html = await getSessionedHtml(`/customer/${id}/service-information`);
+    if (looksLikeLoginPage(html)) throw new Error("login page returned (session)");
+    const code = parseRouteCode(html);
+    if (code) routesFound++;
+    await sql`UPDATE mosquito_service_status SET route_code = ${code ?? ""} WHERE pocomos_id = ${id}`;
+    routesScraped++;
+  };
+  const routeResult = await fetchPooled(routeWork, scrapeRoute, {
+    concurrency: SCRAPE_CONCURRENCY,
+  });
+  const routesFailed = routeResult.failures.length;
+  const routeDurationMs = Date.now() - routeStart;
+  const routesPending = Math.max(0, routeCandidates.length - routesScraped);
+
   const meta: RefreshMeta = {
     startedAt,
     finishedAt: new Date().toISOString(),
@@ -406,6 +451,11 @@ export async function refreshMosquitoStatus(
     excludedNew,
     noServiceYet,
     failed,
+    routesScraped,
+    routesFound,
+    routesFailed,
+    routeDurationMs,
+    routesPending,
     balanceCustomers: balances.byId.size,
     openBalanceTotal: balances.totalBalance,
     reachedEndOfQueue: !budgetHit && work.length === toScrape.length,
@@ -430,11 +480,13 @@ export interface MosquitoStatusRow {
   open_balance: number;
   next_service_date: string | null;
   is_weekly: boolean;
+  /** Route code scraped from the Pocomos "Routing" widget (e.g. "510", "WF2"); null = not scraped yet, "" = no code. */
+  route_code: string | null;
   /**
    * True when this overdue row is scheduled for service TODAY (Eastern) —
    * next_service_date == today. Computed at READ time (not stored) so "today"
-   * is always the day you're viewing. These rows are tinted green and excluded
-   * from the overdue COUNT, but stay visible in the overdue table.
+   * is always the day you're viewing. These rows are pulled into their own
+   * green "Scheduled today" section and excluded from the overdue count.
    */
   scheduled_today: boolean;
   last_checked_at: string;
@@ -442,6 +494,8 @@ export interface MosquitoStatusRow {
 
 export interface OverdueReport {
   overdue: MosquitoStatusRow[];
+  /** Overdue rows whose next service is today (Eastern) — own section, green, not counted. */
+  scheduledToday: MosquitoStatusRow[];
   /** Eligible customers with an open balance > 0 (spray paused), balance DESC. */
   pausedBalance: MosquitoStatusRow[];
   needsCheck: MosquitoStatusRow[];
@@ -490,6 +544,7 @@ function normalizeRow(r: Record<string, unknown>): MosquitoStatusRow {
     open_balance: r.open_balance == null ? 0 : Number(r.open_balance),
     next_service_date: toDateStr(r.next_service_date),
     is_weekly: r.is_weekly === true,
+    route_code: (r.route_code as string) ?? null,
     scheduled_today: false, // set at read time in getOverdueReport
     last_checked_at:
       r.last_checked_at instanceof Date
@@ -509,7 +564,7 @@ export async function getOverdueReport(): Promise<OverdueReport> {
   `) as Array<Record<string, unknown>>;
   const all = rows.map(normalizeRow);
 
-  const overdue = all
+  const allOverdue = all
     .filter((r) => r.status === "overdue")
     .sort((a, b) => {
       // null days_since (no spray yet) first, then largest days_since.
@@ -520,14 +575,17 @@ export async function getOverdueReport(): Promise<OverdueReport> {
     });
 
   // Scheduled-today rescue: an overdue row whose next scheduled service is TODAY
-  // (Eastern) is being handled today — tint it green (in the view) and drop it
-  // from the overdue COUNT, but keep it visible in the table.
+  // (Eastern) is being handled today — pull it into its own green "Scheduled
+  // today" section and out of the overdue table + count.
   const today = easternTodayIso();
-  let scheduledToday = 0;
-  for (const r of overdue) {
+  const scheduledTodayRows: MosquitoStatusRow[] = [];
+  const overdue: MosquitoStatusRow[] = [];
+  for (const r of allOverdue) {
     if (r.next_service_date === today) {
       r.scheduled_today = true;
-      scheduledToday++;
+      scheduledTodayRows.push(r);
+    } else {
+      overdue.push(r);
     }
   }
   const needsCheck = all
@@ -550,17 +608,17 @@ export async function getOverdueReport(): Promise<OverdueReport> {
 
   return {
     overdue,
+    scheduledToday: scheduledTodayRows,
     pausedBalance,
     needsCheck,
     counts: {
-      // Scheduled-today rows stay in the `overdue` array (visible) but are not
-      // counted as overdue — they're being serviced today.
-      overdue: overdue.length - scheduledToday,
+      // Scheduled-today rows are in their own array/section — not counted here.
+      overdue: overdue.length,
       current: currentCount,
       needsCheck: needsCheck.length,
       pausedBalance: pausedBalance.length,
       excludedNew: excludedNewCount,
-      scheduledToday,
+      scheduledToday: scheduledTodayRows.length,
       total: all.length,
     },
     meta,

@@ -115,6 +115,7 @@ export async function initSchema(): Promise<void> {
       open_balance NUMERIC(10,2) NOT NULL DEFAULT 0,
       next_service_date DATE,
       is_weekly BOOLEAN NOT NULL DEFAULT FALSE,
+      route_code TEXT,
       last_checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
@@ -128,6 +129,8 @@ export async function initSchema(): Promise<void> {
   // Added 2026-06-14 (next-scheduled-service column + weekly-cadence pill).
   await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS next_service_date DATE`;
   await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS is_weekly BOOLEAN NOT NULL DEFAULT FALSE`;
+  // Added 2026-07-07 (route code scraped from service-information "Routing" widget).
+  await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS route_code TEXT`;
 
   // Leads close-rate report cache (/leads). Singleton row (id=1) holding the
   // latest computed report for the default period, so the tab paints fast.

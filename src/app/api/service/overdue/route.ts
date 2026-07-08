@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getOverdueReport, refreshMosquitoStatus } from "@/lib/service/refresh";
 import { getSyncState, setSyncState } from "@/lib/db";
 
@@ -31,8 +31,9 @@ export async function GET() {
  * upserts mosquito_service_status. A short-lived sync_state lock prevents a
  * double-click (or overlapping cron) from running two scrapes at once.
  */
-export async function POST() {
+export async function POST(req: NextRequest) {
   try {
+    const forceRoutes = req.nextUrl.searchParams.get("forceRoutes") === "1";
     const lock = await getSyncState<{ startedAt: string }>(LOCK_KEY);
     if (lock && Date.now() - Date.parse(lock.startedAt) < LOCK_TTL_MS) {
       return NextResponse.json({
@@ -43,7 +44,7 @@ export async function POST() {
     }
     await setSyncState(LOCK_KEY, { startedAt: new Date().toISOString() });
     try {
-      const meta = await refreshMosquitoStatus({ budgetMs: 250_000 });
+      const meta = await refreshMosquitoStatus({ budgetMs: 250_000, forceRoutes });
       return NextResponse.json({ ok: true, meta });
     } finally {
       await setSyncState(LOCK_KEY, { startedAt: new Date(0).toISOString() });
