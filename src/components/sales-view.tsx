@@ -284,12 +284,10 @@ function ReturnRateCard({
       <CardHeader>
         <CardTitle>Return rate</CardTitle>
         <CardDescription>
-          Real mosquito customers — a mosquito-family contract carrying that
-          season&rsquo;s tag (Event-Spray-only excluded) — who came back the next
-          season. The primary rate counts every prior-season customer; the
-          &ldquo;excl. mid-season&rdquo; column drops customers who cancelled
-          mid-season from the denominator. Which one is canonical is a pending
-          ops decision.
+          Of customers who received a completed mosquito service (Event Spray
+          excluded) in a season, how many are receiving mosquito service the next
+          season. Cancelled customers don&rsquo;t count as returned even if they
+          auto-renewed. On-Hold counts as returned (paused, not cancelled).
           {rr ? ` ${fmt(rr.eventSprayOnly)} event-spray-only customers excluded.` : ""}
         </CardDescription>
       </CardHeader>
@@ -305,8 +303,7 @@ function ReturnRateCard({
                 <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <th className="py-2 pr-4 font-medium">Season</th>
                   <th className="py-2 pr-4 text-right font-medium">Return rate</th>
-                  <th className="py-2 pr-4 text-right font-medium">Returned / Real</th>
-                  <th className="py-2 pl-4 text-right font-medium">Excl. mid-season</th>
+                  <th className="py-2 pl-4 text-right font-medium">Returned / Served</th>
                 </tr>
               </thead>
               <tbody>
@@ -318,26 +315,24 @@ function ReturnRateCard({
                     <td className="py-2 pr-4 text-right text-lg font-semibold tabular-nums">
                       {p.rate.toFixed(1)}%
                     </td>
-                    <td className="py-2 pr-4 text-right tabular-nums text-muted-foreground">
+                    <td className="py-2 pl-4 text-right tabular-nums text-muted-foreground">
                       {fmt(p.returned)} / {fmt(p.realFrom)}
-                    </td>
-                    <td className="py-2 pl-4 text-right tabular-nums">
-                      {p.exclRate.toFixed(1)}%
-                      <span className="ml-1 text-xs text-muted-foreground">
-                        ({fmt(p.exclDenom)} denom · −{fmt(p.midSeasonCancels)})
-                      </span>
+                      {p.toYear === String(new Date().getFullYear()) ? null : (
+                        <span className="ml-1 text-[11px]">(est.)</span>
+                      )}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
             <p className="mt-3 text-[11px] leading-snug text-muted-foreground">
-              A &ldquo;return&rdquo; counts anyone whose mosquito contract carries
-              both seasons&rsquo; tags — including customers now inactive/on-hold
-              who were tagged for the next season but later cancelled (which is
-              why this runs ahead of the &ldquo;Returning&rdquo; bucket, which
-              counts only currently-active continuations). Whether those later
-              cancels should count is a pending ops decision — see the backlog.
+              &ldquo;Served in a season&rdquo; is judged from completed-service
+              evidence (last-service date) where available, falling back to the
+              season enrollment tag. The current season&rsquo;s numerator is
+              anchored on live status, so it&rsquo;s exact; the older
+              season&rsquo;s row (marked <span className="italic">est.</span>)
+              relies on the tag as a continuity proxy for still-active customers,
+              since a per-year mosquito-service history isn&rsquo;t in bulk data.
             </p>
           </div>
         )}

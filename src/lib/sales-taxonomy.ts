@@ -57,18 +57,14 @@ export interface IssueCustomer {
 export interface ReturnRatePair {
   fromYear: string;
   toYear: string;
-  /** Denominator (primary): real {fromYear} customers (mosquito contract + {fromYear} tag). */
+  /** Denominator: customers who received a completed mosquito service in {fromYear}. */
   realFrom: number;
-  /** Numerator: real {fromYear} customers who genuinely returned as real {toYear} customers. */
+  /** Numerator: of those, customers receiving a mosquito service in {toYear}. */
   returned: number;
   /** returned / realFrom, percent. */
   rate: number;
-  /** Mid-season {fromYear} cancels removed for the excl variant (inactive, last service in {fromYear}, didn't return). */
-  midSeasonCancels: number;
-  /** Denominator excluding mid-season cancels = realFrom - midSeasonCancels. */
-  exclDenom: number;
-  /** returned / exclDenom, percent. */
-  exclRate: number;
+  /** Subset of `returned` that is currently On-Hold (counted per ops; paused ≠ cancelled). */
+  onHoldReturned: number;
 }
 
 export interface ReturnRates {
@@ -127,25 +123,44 @@ interface RRRec {
 }
 
 /**
- * Year-over-year mosquito return rate. A "real year-Y customer" = holds a
- * mosquito-family contract (excl. Event Spray) whose OWN tags carry a "{Y} -"
- * season tag — tag alone is NOT enough, there must be a mosquito contract.
+ * Year-over-year mosquito return rate (ops definition, 2026-07-07):
+ *   "of customers who received ≥1 completed mosquito service (not Event Spray)
+ *    in year Y, how many are receiving a mosquito service in year Y+1?"
  *
- * "Returned" applies the status/deactivation guard to the destination year so a
- * mid-season cancel doesn't count as a return: realValidated(Y) = real(Y) AND
- * NOT (inactive now with last service in Y). Active customers are never
- * mid-season cancels; auto-renewing mosquito contracts accumulate each season's
- * tag on one contract, so a single contract can be real across several years.
+ * `servedInYear(rec, Y)` decides real-customer membership from the best BULK
+ * evidence, preferring completed-service signal over tags:
+ *  - Identity + season: a mosquito-family contract (excl. Event Spray) whose OWN
+ *    tags carry a "{Y} -" tag. Tags are the only bulk per-season signal, so they
+ *    identify the mosquito contract and which seasons it was enrolled for.
+ *  - Completed-service gate:
+ *      · CURRENT (in-progress) season → the customer must still be LIVE (active,
+ *        or On-Hold = paused, counted per ops). An inactive/cancelled customer is
+ *        NOT receiving service, even if carrying an auto-renew tag. THIS is the
+ *        bug fix: a "{CY} -" tag on a cancelled customer no longer counts.
+ *      · COMPLETED past season → LIVE now (continuity proxy), OR direct evidence
+ *        that their last service was in year Y or later (`last_service_date`).
+ *        An inactive customer whose last service PRE-dates Y auto-renewed then
+ *        cancelled before the season materialised → never got a Y service →
+ *        excluded.
  *
- * Denominator has two variants (pending an ops decision on which is canonical):
- *   primary  = all real {from} customers (mid-season cancels count against you)
- *   exclDenom = real {from} minus mid-season {from} cancels
- * Both share the same numerator, and returned ⊆ exclDenom (a returner can't be a
- * mid-{from} cancel), so exclRate never exceeds 100%.
+ * Bulk-evidence limits (see REFERENCE §5.8): `last_service_date` is the MOST
+ * RECENT service only and is any-type (not mosquito-specific). It confirms the
+ * year of the last service (definitive YES for last-service==Y, definitive NO
+ * for last-service<Y) but cannot confirm a specific past year's service for a
+ * still-active customer whose last service is later — those rely on the season
+ * tag as a continuity proxy. A literal per-year completed-mosquito-service count
+ * would need a full service-history scrape of the cancelled cohort (not run).
+ * Consequence: the CURRENT-year numerator (2026) is anchored on live status
+ * (high confidence); the all-past-years rate (24→25) is a tag-anchored estimate.
+ *
+ * ON_HOLD_COUNTS: On-Hold customers count as served/returned (paused, not
+ * cancelled). Impact is ~0.1–0.3pp; flip to test the sensitivity.
  *
  * Sources: active customers' contracts from the live dataset; non-active from
  * the enriched `customers` table (contracts jsonb). READ-ONLY.
  */
+const ON_HOLD_COUNTS = true;
+
 function computeReturnRates(
   ds: Awaited<ReturnType<typeof getDataset>>,
   nonActive: Array<{
@@ -175,11 +190,18 @@ function computeReturnRates(
     });
   }
 
-  const realStrict = (rec: RRRec, y: string) =>
+  const cy = Number(CURRENT_YEAR);
+  const hasMosquitoSeasonTag = (rec: RRRec, y: string) =>
     rec.contracts.some((c) => isMosquitoType(c.serviceType) && contractHasYearTag(c.tags, y));
-  const isMidSeasonCancel = (rec: RRRec, y: string) =>
-    rec.status === "inactive" && String(rec.lastService || "").slice(0, 4) === y;
-  const realValidated = (rec: RRRec, y: string) => realStrict(rec, y) && !isMidSeasonCancel(rec, y);
+  const isLive = (rec: RRRec) =>
+    rec.status === "active" || (ON_HOLD_COUNTS && rec.status === "on-hold");
+  const servedInYear = (rec: RRRec, y: string): boolean => {
+    if (!hasMosquitoSeasonTag(rec, y)) return false;
+    if (Number(y) >= cy) return isLive(rec); // in-progress season: must still be live
+    if (isLive(rec)) return true; // completed season, still a customer (continuity)
+    const ly = yearOf(rec.lastService); // or direct service-date evidence
+    return ly != null && ly >= Number(y);
+  };
 
   let eventSprayOnly = 0;
   for (const rec of recs.values()) {
@@ -188,19 +210,20 @@ function computeReturnRates(
     if (hasEvent && !hasMosq) eventSprayOnly++;
   }
 
-  const cy = Number(CURRENT_YEAR);
   const pairs: ReturnRatePair[] = [];
   for (const [fromN, toN] of [[cy - 2, cy - 1], [cy - 1, cy]] as const) {
     const from = String(fromN);
     const to = String(toN);
     let realFrom = 0;
     let returned = 0;
-    let exclDenom = 0;
+    let onHoldReturned = 0;
     for (const rec of recs.values()) {
-      if (!realStrict(rec, from)) continue;
+      if (!servedInYear(rec, from)) continue;
       realFrom++;
-      if (!isMidSeasonCancel(rec, from)) exclDenom++;
-      if (realValidated(rec, to)) returned++;
+      if (servedInYear(rec, to)) {
+        returned++;
+        if (rec.status === "on-hold") onHoldReturned++;
+      }
     }
     pairs.push({
       fromYear: from,
@@ -208,9 +231,7 @@ function computeReturnRates(
       realFrom,
       returned,
       rate: realFrom ? (returned / realFrom) * 100 : 0,
-      midSeasonCancels: realFrom - exclDenom,
-      exclDenom,
-      exclRate: exclDenom ? (returned / exclDenom) * 100 : 0,
+      onHoldReturned,
     });
   }
   return { pairs, eventSprayOnly };

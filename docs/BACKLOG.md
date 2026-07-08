@@ -15,24 +15,29 @@
 
 ## Needs a human decision
 - [ ] "Real lead" definition for close rate — pending Rivka & Leon (drops into isRealLead() hook).
-- [ ] Return rate: is the mid-season-cancel denominator canonical? /sales shows BOTH (primary =
-      count mid-season cancels; excl mid-season = drop them). Pick one as the headline. Pending
-      Rivka & Leon. See REFERENCE §5.8 / §9 open #8.
-- [ ] Return rate: is **Active + "NT - Do Not Auto Renew"** (finished the season, declined renewal)
-      a CANCELLED customer for return-rate purposes? Pending Rivka & Leon. Related: the audit
-      (scripts/audit-return-gap.ts) shows the 25→26 numerator already counts ~128 now-inactive/on-hold
-      customers who carry a 2026 continuation tag — deciding this sets whether "real {year}" should
-      require currently-active/serviced. See REFERENCE §5.8 / §9 open #8.
+- [~] Return-rate mid-season-cancel decision — RESOLVED by the 2026-07-07 ops override: metric is
+      now completed-service-based ("served in Y, receiving in Y+1"), single rate per pair, no dual
+      denominator. On-Hold counts as returned (paused ≠ cancelled). See REFERENCE §5.8 / §9 #8.
+
+## Ready to build (unblocked) — accuracy follow-ups
+- [ ] Return-rate 24→25 is a TAG-ANCHORED ESTIMATE — for a literal per-year completed-mosquito-
+      service count, scrape service-history for the cancelled 2024/2025 cohort (mirror the inactive-
+      enrichment cron; ties to the deactivation scrape #6). Until then 24→25 is marked (est.) on the
+      card; 25→26 is live-status-anchored and exact. See REFERENCE §5.8.
 
 ## Worklist / cleanup (not code)
 - [ ] 4 customers-with-issues to review: Alex Abraham (1305276), Ariel Roffel (1237341),
       Yuliya Lankri (1164303), Zachariah Robinson (1237274).
 
 ## Done (recent)
-- [x] /sales return-rate card (live: 24→25 73.4%, 25→26 74.0%) — real mosquito customers (mosquito-family
-      contract carrying that season's tag, Event-Spray-only excluded) who returned next season;
-      primary + excl-mid-season denominators; computed in getSalesTaxonomy(); compact on /tv/sales.
-      See §5.8. (Denominator choice → Needs a human decision above.)
+- [x] Return-rate REDEFINED per ops (rev 14) — completed-service-based: "received ≥1 mosquito service
+      in Y, receiving service in Y+1?". New servedInYear() predicate fixes the numerator bug (CURRENT
+      season requires LIVE status → dropped 123 cancelled auto-renew-tagged customers); past seasons
+      use last_service_date evidence + tag fallback. Single rate per pair (dual denominator removed).
+      Live: 24→25 80.5% (1,037/1,288, est.), 25→26 72.6% (956/1,317). On-Hold counts. Task-#2
+      reconciliation: 55 Returning-not-numerator all correctly excluded. See §5.8.
+- [x] /sales return-rate card (rev 12/13; SUPERSEDED by rev 14) — tag-based real mosquito customers,
+      primary + excl-mid-season denominators. Replaced by the service-based definition above.
 - [x] /service/overdue scheduled-today → OWN green "Scheduled today" section (rev 13; was inline in
       the overdue table). next_service_date == today (Eastern), excluded from the overdue count.
       Read-time in getOverdueReport(). See §5.5.

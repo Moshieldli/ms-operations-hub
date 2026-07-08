@@ -120,8 +120,7 @@ function TvDashboard({
                   {p.rate.toFixed(0)}%
                 </div>
                 <div className="mt-2 text-xs text-muted-foreground lg:text-sm tabular-nums">
-                  {fmt(p.returned)} / {fmt(p.realFrom)} · excl mid-season{" "}
-                  {p.exclRate.toFixed(0)}%
+                  {fmt(p.returned)} / {fmt(p.realFrom)} served
                 </div>
               </div>
             ))}
