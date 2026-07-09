@@ -279,16 +279,24 @@ function ReturnRateCard({
   loading: boolean;
 }) {
   const rr = taxonomy?.returnRates;
+  const min = rr?.minTreatments ?? 2;
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Return rate</CardTitle>
+        <CardTitle>
+          Return rate
+          {rr?.computing ? (
+            <span className="ml-2 text-xs font-normal text-amber-700 dark:text-amber-400">
+              (computing — {rr.coveragePct}% covered)
+            </span>
+          ) : null}
+        </CardTitle>
         <CardDescription>
-          Of customers who received a completed mosquito service (Event Spray
-          excluded) in a season, how many are receiving mosquito service the next
-          season. Cancelled customers don&rsquo;t count as returned even if they
-          auto-renewed. On-Hold counts as returned (paused, not cancelled).
-          {rr ? ` ${fmt(rr.eventSprayOnly)} event-spray-only customers excluded.` : ""}
+          Of customers who received at least {min} completed mosquito services
+          (Event Spray never counts) in a season, how many received at least {min}{" "}
+          completed mosquito services the next season. A return is a real
+          treatment history — not a tag, not a one-off. The current season is in
+          progress, so its rate climbs as the season runs.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -312,27 +320,39 @@ function ReturnRateCard({
                     <td className="py-2 pr-4 font-medium tabular-nums">
                       {p.fromYear} → {p.toYear}
                     </td>
-                    <td className="py-2 pr-4 text-right text-lg font-semibold tabular-nums">
-                      {p.rate.toFixed(1)}%
-                    </td>
-                    <td className="py-2 pl-4 text-right tabular-nums text-muted-foreground">
-                      {fmt(p.returned)} / {fmt(p.realFrom)}
-                      {p.toYear === String(new Date().getFullYear()) ? null : (
-                        <span className="ml-1 text-[11px]">(est.)</span>
-                      )}
-                    </td>
+                    {p.reliable ? (
+                      <>
+                        <td className="py-2 pr-4 text-right text-lg font-semibold tabular-nums">
+                          {p.rate.toFixed(1)}%
+                        </td>
+                        <td className="py-2 pl-4 text-right tabular-nums text-muted-foreground">
+                          {fmt(p.returned)} / {fmt(p.realFrom)}
+                          {p.toYear === String(new Date().getFullYear()) ? (
+                            <span className="ml-1 text-[11px]">(in&nbsp;progress)</span>
+                          ) : null}
+                        </td>
+                      </>
+                    ) : (
+                      <td colSpan={2} className="py-2 pl-4 text-right text-[11px] text-muted-foreground">
+                        n/a — needs full service history ({p.fromYear} is outside
+                        the scraped window)
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
             <p className="mt-3 text-[11px] leading-snug text-muted-foreground">
-              &ldquo;Served in a season&rdquo; is judged from completed-service
-              evidence (last-service date) where available, falling back to the
-              season enrollment tag. The current season&rsquo;s numerator is
-              anchored on live status, so it&rsquo;s exact; the older
-              season&rsquo;s row (marked <span className="italic">est.</span>)
-              relies on the tag as a continuity proxy for still-active customers,
-              since a per-year mosquito-service history isn&rsquo;t in bulk data.
+              &ldquo;Served&rdquo; = ≥{min} completed mosquito-family services that
+              calendar year, counted from each customer&rsquo;s mosquito
+              service-history (Event Spray is a separate contract and never
+              counts).{" "}
+              {rr.computing
+                ? `Still computing: ${fmt(rr.covered)} of ${fmt(rr.cohortSize)} customers' histories scraped (${rr.coveragePct}%). Numbers firm up as coverage reaches 100%.`
+                : `Coverage ${rr.coveragePct}% (${fmt(rr.covered)}/${fmt(rr.cohortSize)}).`}{" "}
+              The service-history page only renders the most recent ~season of
+              services, so the current→prior pair is exact but earlier pairs
+              (2024→25) need a full-history source before they&rsquo;re valid.
             </p>
           </div>
         )}

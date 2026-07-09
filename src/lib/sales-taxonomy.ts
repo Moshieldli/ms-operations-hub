@@ -1,6 +1,7 @@
 import { getDataset } from "@/lib/pocomos";
 import { CURRENT_YEAR } from "@/lib/pocomos";
 import { initSchema, sql } from "@/lib/db";
+import { buildServiceCountCohort, getServiceCountsData } from "@/lib/service/serviceCounts";
 
 /**
  * Year-relative cancelled taxonomy + "customers with issues" roster for /sales.
@@ -30,48 +31,64 @@ import { initSchema, sql } from "@/lib/db";
 
 const PRIOR_YEAR = String(Number(CURRENT_YEAR) - 1);
 
-// ---- Return-rate helpers (mosquito-family detection, excluding Event Spray) ----
-// Same set as lib/service/mosquito.ts MOSQUITO_SERVICE_TYPES. Event Spray is
-// deliberately NOT in here, so an event-spray-only customer never counts.
-const MOSQUITO_SERVICE_TYPES = new Set(
-  [
-    "Mosquito Control",
-    "Natural Mosquito Control",
-    "Mosquito Control - Weekly",
-    "Natural Mosquito Control - Weekly",
-  ].map((s) => s.toLowerCase())
-);
-const isMosquitoType = (s: unknown): boolean =>
-  MOSQUITO_SERVICE_TYPES.has(String(s || "").trim().toLowerCase());
-const isEventSprayType = (s: unknown): boolean => /event\s*spray/i.test(String(s || ""));
-/** A contract's OWN per-contract tags carry the season enrollment (e.g. "2025 - Auto"). */
-const contractHasYearTag = (tags: string[] | undefined, year: string): boolean =>
-  (tags || []).some((t) => String(t).trim().startsWith(`${year} -`));
-
 export interface IssueCustomer {
   id: string;
   name: string;
   tags: string[];
 }
 
+/**
+ * MIN_RETURN_TREATMENTS — ops-canonical (2026-07-08): a customer counts as a
+ * "real year-Y mosquito customer" (denominator) AND as "returned in year Y"
+ * (numerator) only if they received at least this many COMPLETED mosquito-family
+ * services (Event Spray EXCLUDED) in that calendar year. Rationale: a return is
+ * someone who actually came back for treatment — not a tag, and not a one-off
+ * (a single spray). 2 = at least one real repeat visit. Counts come from the
+ * per-year service-count cache (lib/service/serviceCounts.ts), which reads the
+ * mosquito contract's completed-services history (Event Spray lives on a
+ * separate contract and never lands there, so it can never count).
+ */
+export const MIN_RETURN_TREATMENTS = 2;
+
+/**
+ * Coverage below this % keeps the card in a "(computing — N% covered)" state:
+ * the per-customer service-count scrape is resumable and may still be filling.
+ */
+export const RETURN_RATE_MIN_COVERAGE_PCT = 99;
+
 export interface ReturnRatePair {
   fromYear: string;
   toYear: string;
-  /** Denominator: customers who received a completed mosquito service in {fromYear}. */
+  /** Denominator: customers with >= MIN_RETURN_TREATMENTS completed mosquito services in {fromYear}. */
   realFrom: number;
-  /** Numerator: of those, customers receiving a mosquito service in {toYear}. */
+  /** Numerator: of those, customers with >= MIN_RETURN_TREATMENTS completed mosquito services in {toYear}. */
   returned: number;
   /** returned / realFrom, percent. */
   rate: number;
-  /** Subset of `returned` that is currently On-Hold (counted per ops; paused ≠ cancelled). */
-  onHoldReturned: number;
+  /**
+   * False when {fromYear} falls OUTSIDE the service-history window. The Pocomos
+   * service-history table only renders the most recent ~30 services (back to
+   * ~Sept of the prior year), so a customer still active this season has their
+   * two-years-ago services truncated away — `realFrom` for that year collapses
+   * and the rate is meaningless. Only {fromYear} >= CY-1 is reliable. The 24→25
+   * pair needs a full-history source (see §5.8 / BACKLOG) before it's valid.
+   */
+  reliable: boolean;
 }
 
 export interface ReturnRates {
   /** Ordered oldest→newest: [(CY-2 → CY-1), (CY-1 → CY)]. */
   pairs: ReturnRatePair[];
-  /** Customers with an event-spray contract and NO mosquito-family contract (excluded from all counts). */
-  eventSprayOnly: number;
+  /** The MIN_RETURN_TREATMENTS threshold in effect (surfaced on the card). */
+  minTreatments: number;
+  /** Cohort size (mosquito customers with a {CY-2..CY} tag) — the scrape target. */
+  cohortSize: number;
+  /** Cohort members whose service history has been scraped (coverage numerator). */
+  covered: number;
+  /** covered / cohortSize, percent (0–100). */
+  coveragePct: number;
+  /** True while coverage < RETURN_RATE_MIN_COVERAGE_PCT — show "(computing)". */
+  computing: boolean;
 }
 
 export interface CancelledBreakdownRel {
@@ -112,129 +129,75 @@ function yearOf(raw: string | null | undefined): number | null {
   return m ? parseInt(m[1], 10) : null;
 }
 
-interface RRContract {
-  serviceType?: string | null;
-  tags?: string[];
-}
-interface RRRec {
-  status: string;
-  contracts: RRContract[];
-  lastService: string | null;
-}
-
 /**
- * Year-over-year mosquito return rate (ops definition, 2026-07-07):
- *   "of customers who received ≥1 completed mosquito service (not Event Spray)
- *    in year Y, how many are receiving a mosquito service in year Y+1?"
+ * Year-over-year mosquito return rate (ops-canonical, 2026-07-08 — service-count
+ * based; supersedes the earlier tag/last-service model):
+ *   "of customers who received >= MIN_RETURN_TREATMENTS completed mosquito
+ *    services (Event Spray EXCLUDED) in year Y, how many received >=
+ *    MIN_RETURN_TREATMENTS completed mosquito services in year Y+1?"
  *
- * `servedInYear(rec, Y)` decides real-customer membership from the best BULK
- * evidence, preferring completed-service signal over tags:
- *  - Identity + season: a mosquito-family contract (excl. Event Spray) whose OWN
- *    tags carry a "{Y} -" tag. Tags are the only bulk per-season signal, so they
- *    identify the mosquito contract and which seasons it was enrolled for.
- *  - Completed-service gate:
- *      · CURRENT (in-progress) season → the customer must still be LIVE (active,
- *        or On-Hold = paused, counted per ops). An inactive/cancelled customer is
- *        NOT receiving service, even if carrying an auto-renew tag. THIS is the
- *        bug fix: a "{CY} -" tag on a cancelled customer no longer counts.
- *      · COMPLETED past season → LIVE now (continuity proxy), OR direct evidence
- *        that their last service was in year Y or later (`last_service_date`).
- *        An inactive customer whose last service PRE-dates Y auto-renewed then
- *        cancelled before the season materialised → never got a Y service →
- *        excluded.
+ * A "return" is thus a real treatment history — not a tag, not a one-off spray.
+ * Both the denominator (real year-Y customer) and numerator (returned in Y+1)
+ * use the SAME test against the per-year service-count cache
+ * (`mosquito_service_counts`, filled by lib/service/serviceCounts.ts from each
+ * customer's mosquito service-history). Event Spray lives on a separate contract
+ * and never lands on the mosquito table, so it can never contribute a count.
  *
- * Bulk-evidence limits (see REFERENCE §5.8): `last_service_date` is the MOST
- * RECENT service only and is any-type (not mosquito-specific). It confirms the
- * year of the last service (definitive YES for last-service==Y, definitive NO
- * for last-service<Y) but cannot confirm a specific past year's service for a
- * still-active customer whose last service is later — those rely on the season
- * tag as a continuity proxy. A literal per-year completed-mosquito-service count
- * would need a full service-history scrape of the cancelled cohort (not run).
- * Consequence: the CURRENT-year numerator (2026) is anchored on live status
- * (high confidence); the all-past-years rate (24→25) is a tag-anchored estimate.
+ * Only cohort members scraped with table_ok (their mosquito contract's history
+ * was actually read) are eligible; the rest are unknown and reflected in the
+ * coverage %. While coverage < RETURN_RATE_MIN_COVERAGE_PCT the card shows
+ * "(computing — N% covered)" because the resumable scrape is still filling.
  *
- * ON_HOLD_COUNTS: On-Hold customers count as served/returned (paused, not
- * cancelled). Impact is ~0.1–0.3pp; flip to test the sensitivity.
- *
- * Sources: active customers' contracts from the live dataset; non-active from
- * the enriched `customers` table (contracts jsonb). READ-ONLY.
+ * NOTE the CURRENT year (CY) is an in-progress season, so its numerator grows as
+ * the season runs (a customer needs 2 completed CY services so far to count).
+ * READ-ONLY.
  */
-const ON_HOLD_COUNTS = true;
-
-function computeReturnRates(
-  ds: Awaited<ReturnType<typeof getDataset>>,
-  nonActive: Array<{
-    pocomos_id: string;
-    status: string;
-    contracts: unknown;
-    last_service_date: string | null;
-  }>
-): ReturnRates {
-  const recs = new Map<string, RRRec>();
-  for (const c of ds.customers) {
-    if (c.status.toLowerCase() !== "active") continue;
-    recs.set(String(c.id), {
-      status: "active",
-      contracts: c.contracts.map((k) => ({ serviceType: k.serviceType, tags: k.tags })),
-      lastService: c.lastServiceDate ?? null,
-    });
-  }
-  for (const r of nonActive) {
-    const id = String(r.pocomos_id);
-    if (recs.has(id)) continue; // re-activated → counted on the active side
-    const contracts = Array.isArray(r.contracts) ? (r.contracts as RRContract[]) : [];
-    recs.set(id, {
-      status: r.status.toLowerCase(),
-      contracts,
-      lastService: r.last_service_date,
-    });
-  }
-
+async function computeReturnRates(): Promise<ReturnRates> {
   const cy = Number(CURRENT_YEAR);
-  const hasMosquitoSeasonTag = (rec: RRRec, y: string) =>
-    rec.contracts.some((c) => isMosquitoType(c.serviceType) && contractHasYearTag(c.tags, y));
-  const isLive = (rec: RRRec) =>
-    rec.status === "active" || (ON_HOLD_COUNTS && rec.status === "on-hold");
-  const servedInYear = (rec: RRRec, y: string): boolean => {
-    if (!hasMosquitoSeasonTag(rec, y)) return false;
-    if (Number(y) >= cy) return isLive(rec); // in-progress season: must still be live
-    if (isLive(rec)) return true; // completed season, still a customer (continuity)
-    const ly = yearOf(rec.lastService); // or direct service-date evidence
-    return ly != null && ly >= Number(y);
-  };
+  const [cohort, data] = await Promise.all([
+    buildServiceCountCohort(),
+    getServiceCountsData(),
+  ]);
+  const cohortIds = cohort.map((m) => m.id);
 
-  let eventSprayOnly = 0;
-  for (const rec of recs.values()) {
-    const hasMosq = rec.contracts.some((c) => isMosquitoType(c.serviceType));
-    const hasEvent = rec.contracts.some((c) => isEventSprayType(c.serviceType));
-    if (hasEvent && !hasMosq) eventSprayOnly++;
-  }
+  let covered = 0;
+  for (const id of cohortIds) if (data.scraped.has(id)) covered++;
+  const coveragePct = cohort.length ? Math.round((covered / cohort.length) * 1000) / 10 : 0;
+
+  // Real year-Y mosquito customer = scraped with a readable mosquito table AND
+  // >= MIN_RETURN_TREATMENTS completed mosquito services counted that year.
+  const isReal = (id: string, y: number): boolean =>
+    data.tableOk.has(id) && (data.counts.get(id)?.[y] ?? 0) >= MIN_RETURN_TREATMENTS;
 
   const pairs: ReturnRatePair[] = [];
   for (const [fromN, toN] of [[cy - 2, cy - 1], [cy - 1, cy]] as const) {
-    const from = String(fromN);
-    const to = String(toN);
     let realFrom = 0;
     let returned = 0;
-    let onHoldReturned = 0;
-    for (const rec of recs.values()) {
-      if (!servedInYear(rec, from)) continue;
+    for (const id of cohortIds) {
+      if (!isReal(id, fromN)) continue;
       realFrom++;
-      if (servedInYear(rec, to)) {
-        returned++;
-        if (rec.status === "on-hold") onHoldReturned++;
-      }
+      if (isReal(id, toN)) returned++;
     }
     pairs.push({
-      fromYear: from,
-      toYear: to,
+      fromYear: String(fromN),
+      toYear: String(toN),
       realFrom,
       returned,
       rate: realFrom ? (returned / realFrom) * 100 : 0,
-      onHoldReturned,
+      // Only the prior→current pair is inside the service-history window; older
+      // from-years are truncated (see ReturnRatePair.reliable / §5.8).
+      reliable: fromN >= cy - 1,
     });
   }
-  return { pairs, eventSprayOnly };
+
+  return {
+    pairs,
+    minTreatments: MIN_RETURN_TREATMENTS,
+    cohortSize: cohort.length,
+    covered,
+    coveragePct,
+    computing: coveragePct < RETURN_RATE_MIN_COVERAGE_PCT,
+  };
 }
 
 export async function getSalesTaxonomy(): Promise<SalesTaxonomy> {
@@ -305,7 +268,7 @@ export async function getSalesTaxonomy(): Promise<SalesTaxonomy> {
   // breakdown always sums to the headline count.
   const unknown = Math.max(0, cancelledAllTime - (cThis + cLast + cEarlier));
 
-  const returnRates = computeReturnRates(ds, rows);
+  const returnRates = await computeReturnRates();
 
   return {
     year: cy,

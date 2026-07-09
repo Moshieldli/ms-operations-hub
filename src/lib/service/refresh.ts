@@ -28,7 +28,13 @@
 import { initSchema, sql, getSyncState, setSyncState } from "@/lib/db";
 import { getDataset, fetchPooled } from "@/lib/pocomos";
 import { getSessionedHtml } from "@/lib/pocomos/webSession";
-import { parseServiceHistory, parseRouteCode, looksLikeLoginPage } from "./serviceHistory";
+import {
+  parseServiceHistory,
+  parseRouteCode,
+  parseScheduledServices,
+  hasAsapUpcomingJob,
+  looksLikeLoginPage,
+} from "./serviceHistory";
 import { fetchAllCustomersLastService } from "./customersData";
 import { fetchOpenBalances } from "./openBalance";
 import {
@@ -76,6 +82,11 @@ export interface RefreshMeta {
   routeDurationMs: number;
   /** Rows still missing a route_code after this run (retried next run). */
   routesPending: number;
+  /** ASAP-route scrape phase (scheduled-services for currently-overdue rows). */
+  asapScraped: number;
+  asapFound: number;
+  asapFailed: number;
+  asapDurationMs: number;
   /** Customers found in the unpaid-invoices report (telemetry). */
   balanceCustomers: number;
   /** Sum of all open balances across eligible customers (telemetry). */
@@ -436,6 +447,38 @@ export async function refreshMosquitoStatus(
   const routeDurationMs = Date.now() - routeStart;
   const routesPending = Math.max(0, routeCandidates.length - routesScraped);
 
+  // ---- ASAP phase: for CURRENTLY-OVERDUE rows only (keeps it cheap — ~overdue
+  //      count, not the whole eligible set), scrape /scheduled-services and flag
+  //      rows with an upcoming job on an ASAP route. Those are being caught up,
+  //      so the read side pulls them out of the overdue count. READ-ONLY GET,
+  //      pooled + paced, budget-capped. We reset asap_route=false for all
+  //      overdue first, then set true where detected, so a cleared ASAP job
+  //      (job completed / re-routed) drops the flag next run. ----
+  const asapStart = Date.now();
+  const todayIso = easternTodayIso();
+  await sql`UPDATE mosquito_service_status SET asap_route = FALSE WHERE status <> 'overdue' AND asap_route = TRUE`;
+  const overdueRows = (await sql`
+    SELECT pocomos_id FROM mosquito_service_status WHERE status = 'overdue'
+  `) as Array<{ pocomos_id: string }>;
+  const asapWork = overdueRows.map((r) => String(r.pocomos_id));
+  let asapScraped = 0;
+  let asapFound = 0;
+  const scrapeAsap = async (id: string): Promise<void> => {
+    if (Date.now() - t0 > budgetMs) return; // out of budget — leave prior flag, retry next run
+    await sleep(PER_REQUEST_PAUSE_MS);
+    const html = await getSessionedHtml(`/customer/${id}/scheduled-services`);
+    if (looksLikeLoginPage(html)) throw new Error("login page returned (session)");
+    const asap = hasAsapUpcomingJob(parseScheduledServices(html), todayIso);
+    if (asap) asapFound++;
+    await sql`UPDATE mosquito_service_status SET asap_route = ${asap} WHERE pocomos_id = ${id}`;
+    asapScraped++;
+  };
+  const asapResult = await fetchPooled(asapWork, scrapeAsap, {
+    concurrency: SCRAPE_CONCURRENCY,
+  });
+  const asapFailed = asapResult.failures.length;
+  const asapDurationMs = Date.now() - asapStart;
+
   const meta: RefreshMeta = {
     startedAt,
     finishedAt: new Date().toISOString(),
@@ -456,6 +499,10 @@ export async function refreshMosquitoStatus(
     routesFailed,
     routeDurationMs,
     routesPending,
+    asapScraped,
+    asapFound,
+    asapFailed,
+    asapDurationMs,
     balanceCustomers: balances.byId.size,
     openBalanceTotal: balances.totalBalance,
     reachedEndOfQueue: !budgetHit && work.length === toScrape.length,
@@ -482,6 +529,8 @@ export interface MosquitoStatusRow {
   is_weekly: boolean;
   /** Route code scraped from the Pocomos "Routing" widget (e.g. "510", "WF2"); null = not scraped yet, "" = no code. */
   route_code: string | null;
+  /** True when an upcoming job is assigned to an ASAP route (scraped from scheduled-services). */
+  asap_route: boolean;
   /**
    * True when this overdue row is scheduled for service TODAY (Eastern) —
    * next_service_date == today. Computed at READ time (not stored) so "today"
@@ -496,6 +545,8 @@ export interface OverdueReport {
   overdue: MosquitoStatusRow[];
   /** Overdue rows whose next service is today (Eastern) — own section, green, not counted. */
   scheduledToday: MosquitoStatusRow[];
+  /** Overdue rows with an upcoming ASAP-route job — own section, not counted. */
+  asapRoute: MosquitoStatusRow[];
   /** Eligible customers with an open balance > 0 (spray paused), balance DESC. */
   pausedBalance: MosquitoStatusRow[];
   needsCheck: MosquitoStatusRow[];
@@ -507,6 +558,8 @@ export interface OverdueReport {
     excludedNew: number;
     /** Overdue rows whose next_service_date is today (Eastern) — excluded from `overdue`. */
     scheduledToday: number;
+    /** Overdue rows on an ASAP route — excluded from `overdue`. */
+    asapRoute: number;
     total: number;
   };
   meta: RefreshMeta | null;
@@ -545,6 +598,7 @@ function normalizeRow(r: Record<string, unknown>): MosquitoStatusRow {
     next_service_date: toDateStr(r.next_service_date),
     is_weekly: r.is_weekly === true,
     route_code: (r.route_code as string) ?? null,
+    asap_route: r.asap_route === true,
     scheduled_today: false, // set at read time in getOverdueReport
     last_checked_at:
       r.last_checked_at instanceof Date
@@ -574,16 +628,20 @@ export async function getOverdueReport(): Promise<OverdueReport> {
       return b.days_since - a.days_since;
     });
 
-  // Scheduled-today rescue: an overdue row whose next scheduled service is TODAY
-  // (Eastern) is being handled today — pull it into its own green "Scheduled
-  // today" section and out of the overdue table + count.
+  // Two read-time rescues pull rows out of the overdue count (both are being
+  // handled): (1) scheduled-today — next service is TODAY (Eastern); (2) ASAP —
+  // an upcoming job is assigned to an ASAP route (asap_route flag, scraped).
+  // Precedence: scheduled-today wins (more immediate), then ASAP, else overdue.
   const today = easternTodayIso();
   const scheduledTodayRows: MosquitoStatusRow[] = [];
+  const asapRows: MosquitoStatusRow[] = [];
   const overdue: MosquitoStatusRow[] = [];
   for (const r of allOverdue) {
     if (r.next_service_date === today) {
       r.scheduled_today = true;
       scheduledTodayRows.push(r);
+    } else if (r.asap_route) {
+      asapRows.push(r);
     } else {
       overdue.push(r);
     }
@@ -609,16 +667,18 @@ export async function getOverdueReport(): Promise<OverdueReport> {
   return {
     overdue,
     scheduledToday: scheduledTodayRows,
+    asapRoute: asapRows,
     pausedBalance,
     needsCheck,
     counts: {
-      // Scheduled-today rows are in their own array/section — not counted here.
+      // Scheduled-today and ASAP rows are in their own arrays/sections — not counted here.
       overdue: overdue.length,
       current: currentCount,
       needsCheck: needsCheck.length,
       pausedBalance: pausedBalance.length,
       excludedNew: excludedNewCount,
       scheduledToday: scheduledTodayRows.length,
+      asapRoute: asapRows.length,
       total: all.length,
     },
     meta,

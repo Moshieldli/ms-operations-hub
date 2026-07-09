@@ -20,22 +20,30 @@
       denominator. On-Hold counts as returned (paused ≠ cancelled). See REFERENCE §5.8 / §9 #8.
 
 ## Ready to build (unblocked) — accuracy follow-ups
-- [ ] Return-rate 24→25 is a TAG-ANCHORED ESTIMATE — for a literal per-year completed-mosquito-
-      service count, scrape service-history for the cancelled 2024/2025 cohort (mirror the inactive-
-      enrichment cron; ties to the deactivation scrape #6). Until then 24→25 is marked (est.) on the
-      card; 25→26 is live-status-anchored and exact. See REFERENCE §5.8.
+- [ ] Return-rate 24→25 BLOCKED on full history — the Pocomos service-history table renders only the
+      most recent ~30 services (~1 season), so 2024 counts collapse and 24→25 shows "n/a" on the card.
+      To unblock: parse the PDF export (/customer/{id}/contract/{cid}/history/download → application/pdf)
+      or find a paginated/date-ranged services endpoint, then backfill 2024 into mosquito_service_counts.
+      Probe: scripts/probe-history-window.ts. See REFERENCE §5.8 / §9 #8.
 
 ## Worklist / cleanup (not code)
 - [ ] 4 customers-with-issues to review: Alex Abraham (1305276), Ariel Roffel (1237341),
       Yuliya Lankri (1164303), Zachariah Robinson (1237274).
 
 ## Done (recent)
-- [x] Return-rate REDEFINED per ops (rev 14) — completed-service-based: "received ≥1 mosquito service
-      in Y, receiving service in Y+1?". New servedInYear() predicate fixes the numerator bug (CURRENT
-      season requires LIVE status → dropped 123 cancelled auto-renew-tagged customers); past seasons
-      use last_service_date evidence + tag fallback. Single rate per pair (dual denominator removed).
-      Live: 24→25 80.5% (1,037/1,288, est.), 25→26 72.6% (956/1,317). On-Hold counts. Task-#2
-      reconciliation: 55 Returning-not-numerator all correctly excluded. See §5.8.
+- [x] /service/overdue ASAP-route rescue (rev 15) — overdue accounts with an upcoming job on the
+      "Z-ASAP" route (Technician "Z-ASAP 01" + Route Assigned "Assigned" on scheduled-services,
+      detected per-row) → own blue "On ASAP route" card + ASAP pill, excluded from the count
+      ("Excludes N on ASAP route" sub-line). Cached in mosquito_service_status.asap_route, scraped
+      for overdue rows only (17 rows/6.5s). Live: 3 on ASAP route. See §5.5.
+- [x] /service/overdue scheduled-today section MOVED below the overdue table (rev 15; was above).
+- [x] Return-rate REDEFINED to COMPLETED-SERVICE COUNTS (rev 15) — ≥2 completed mosquito services
+      (Event Spray never counts) in Y AND Y+1. New resumable scrape serviceCounts.ts → 
+      mosquito_service_counts (+ mosquito_service_scrape coverage), cron /api/cron/service-counts,
+      card shows "(computing — N% covered)". Backfill: 1,816 cohort, 100% covered, ~850s.
+      Live: 25→26 = 75.9% (911/1,200). 24→25 = n/a (service-history truncated — see follow-up above).
+- [x] Return-rate rev 14 (SUPERSEDED by rev 15) — tag/last-service "served in Y" model. Replaced
+      by the completed-service-count definition above; the rev-14 estimates (25→26 72.6%) are stale.
 - [x] /sales return-rate card (rev 12/13; SUPERSEDED by rev 14) — tag-based real mosquito customers,
       primary + excl-mid-season denominators. Replaced by the service-based definition above.
 - [x] /service/overdue scheduled-today → OWN green "Scheduled today" section (rev 13; was inline in

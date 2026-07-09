@@ -102,6 +102,88 @@ export function parseRouteCode(html: string): string | null {
   return null;
 }
 
+export interface ScheduledRow {
+  /** ISO date "YYYY-MM-DD" of the scheduled job, or null if unparseable. */
+  date: string | null;
+  type: string;
+  status: string;
+  /** "Assigned" | "Unassigned". */
+  routeAssigned: string;
+  /** Assigned route/technician name, e.g. "Cesar Barrerra" or "Z-ASAP 01". */
+  technician: string;
+}
+
+/**
+ * Parse the `#scheduled-table` on a `/customer/{id}/scheduled-services` page.
+ * Columns (confirmed 2026-07-08 via scripts/probe-asap-route.ts):
+ *   [checkbox, Date Scheduled, Type, Status, Service Price, Invoice Total,
+ *    Route Assigned, Technician, actions]
+ * The ASAP route surfaces as the Technician value "Z-ASAP 01" (with Route
+ * Assigned = "Assigned"), NOT literally in the Route Assigned column — and the
+ * string "ASAP" appears elsewhere on the page (the route dropdown), so ASAP
+ * MUST be detected per-row from this table, never by a page substring.
+ */
+export function parseScheduledServices(html: string): ScheduledRow[] {
+  const inner = extractTableInner(html, "scheduled-table");
+  if (!inner) return [];
+  const bodyMatch = inner.match(/<tbody\b[^>]*>([\s\S]*?)<\/tbody>/i);
+  const body = bodyMatch ? bodyMatch[1] : inner;
+  const rows: ScheduledRow[] = [];
+  for (const tr of body.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const cells = Array.from(tr[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)).map((c) => c[1]);
+    if (cells.length < 8) continue;
+    const dateText = stripTags(cells[1]).replace(/\(.*?\)/g, "").trim();
+    const d = parseUsDate(dateText);
+    rows.push({
+      date: d
+        ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+        : null,
+      type: stripTags(cells[2]),
+      status: stripTags(cells[3]),
+      routeAssigned: stripTags(cells[6]),
+      technician: stripTags(cells[7]),
+    });
+  }
+  return rows;
+}
+
+/**
+ * True if the customer has an UPCOMING job (scheduled date >= todayIso, Eastern)
+ * assigned to an ASAP route — i.e. a not-yet-past job whose Route Assigned is
+ * "Assigned" and whose route/technician name matches /asap/. This is the signal
+ * that an overdue account is actively being caught up.
+ */
+export function hasAsapUpcomingJob(rows: ScheduledRow[], todayIso: string): boolean {
+  return rows.some(
+    (r) =>
+      r.date != null &&
+      r.date >= todayIso &&
+      /assigned/i.test(r.routeAssigned) &&
+      !/unassigned/i.test(r.routeAssigned) &&
+      /asap/i.test(r.technician)
+  );
+}
+
+/**
+ * Count COMPLETED mosquito services per calendar year from parsed
+ * service-history rows. Only Status="Complete" rows with a parseable date are
+ * counted; every completed service type on the mosquito contract's table counts
+ * (Initial / Regular / Re-service / Respray). Event Spray is a SEPARATE contract
+ * and never appears on this table, so it is excluded by construction. Returns a
+ * plain map { year: count } for the given years of interest.
+ */
+export function countCompletedByYear(rows: ServiceRow[], years: number[]): Record<number, number> {
+  const want = new Set(years);
+  const out: Record<number, number> = {};
+  for (const y of years) out[y] = 0;
+  for (const r of rows) {
+    if (!/complete/i.test(r.status) || r.parsedDate == null) continue;
+    const y = r.parsedDate.getFullYear();
+    if (want.has(y)) out[y] += 1;
+  }
+  return out;
+}
+
 export function parseSelectedContractLabel(html: string): string | null {
   const idx = html.search(/Selected Contract/i);
   if (idx < 0) return null;

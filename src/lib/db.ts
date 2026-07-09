@@ -131,6 +131,35 @@ export async function initSchema(): Promise<void> {
   await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS is_weekly BOOLEAN NOT NULL DEFAULT FALSE`;
   // Added 2026-07-07 (route code scraped from service-information "Routing" widget).
   await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS route_code TEXT`;
+  // Added 2026-07-08 (ASAP-route rescue: an overdue customer with an upcoming job
+  // assigned to the "Z-ASAP" route is being caught up — excluded from the count).
+  // Scraped from /customer/{id}/scheduled-services for currently-overdue rows only.
+  await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS asap_route BOOLEAN NOT NULL DEFAULT FALSE`;
+
+  // Per-customer-per-year COMPLETED mosquito-family service counts (Event Spray
+  // excluded — it's a separate contract, never on the mosquito service-history
+  // table). Feeds the ops-canonical return-rate metric (§5.8): a "real year-Y
+  // customer" / a "return" = received >= MIN_RETURN_TREATMENTS completed mosquito
+  // services that year. Filled by the resumable scrape job (lib/service/serviceCounts.ts).
+  await c`
+    CREATE TABLE IF NOT EXISTS mosquito_service_counts (
+      pocomos_id TEXT NOT NULL,
+      year INTEGER NOT NULL,
+      service_count INTEGER NOT NULL,
+      PRIMARY KEY (pocomos_id, year)
+    )
+  `;
+  // Coverage tracker: which cohort members have been scraped, and whether the
+  // rendered service-history table was actually their mosquito contract
+  // (table_ok=false = add-on customer whose default table isn't mosquito → we
+  // never switch contracts, so their counts are unknown). Row-exists = scraped.
+  await c`
+    CREATE TABLE IF NOT EXISTS mosquito_service_scrape (
+      pocomos_id TEXT PRIMARY KEY,
+      table_ok BOOLEAN NOT NULL,
+      scraped_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
 
   // Leads close-rate report cache (/leads). Singleton row (id=1) holding the
   // latest computed report for the default period, so the tab paints fast.

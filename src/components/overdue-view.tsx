@@ -45,6 +45,7 @@ const VERY_LATE_DAYS = 21; // 21+ days → red row
  */
 function rowToneClass(row: MosquitoStatusRow): string {
   if (row.scheduled_today) return "bg-emerald-50 dark:bg-emerald-950/30";
+  if (row.asap_route) return "bg-sky-50 dark:bg-sky-950/30"; // being caught up on an ASAP route
   const d = row.days_since;
   if (d == null) return "";
   if (d >= VERY_LATE_DAYS) return "bg-rose-50 dark:bg-rose-950/30";
@@ -168,9 +169,14 @@ export function OverdueView({ initial }: { initial: OverdueReport }) {
           tone="action"
           size="hero"
           sub={
-            counts.scheduledToday
-              ? `Excludes ${fmt(counts.scheduledToday)} scheduled for today`
-              : undefined
+            [
+              counts.scheduledToday
+                ? `Excludes ${fmt(counts.scheduledToday)} scheduled for today`
+                : null,
+              counts.asapRoute ? `Excludes ${fmt(counts.asapRoute)} on ASAP route` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ") || undefined
           }
         />
         <Stat label="Paused (balance)" value={fmt(counts.pausedBalance)} tone="attention" />
@@ -180,8 +186,31 @@ export function OverdueView({ initial }: { initial: OverdueReport }) {
         <Stat label="Eligible (mosquito)" value={fmt(counts.total)} />
       </div>
 
+      {/* Overdue table */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Overdue — no mosquito service in 15+ days</CardTitle>
+          <CardDescription>
+            Sorted by days since last mosquito service (longest first). &ldquo;No
+            spray yet&rdquo; accounts (a 2026 signup awaiting their first
+            service) are pinned to the top. Accounts with an open balance are not
+            here — see the paused section below. Accounts scheduled for today or
+            on an ASAP route are excluded from the count and listed below.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {report.overdue.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No overdue customers. 🎉
+            </p>
+          ) : (
+            <RowTable rows={report.overdue} kind="overdue" />
+          )}
+        </CardContent>
+      </Card>
+
       {/* Scheduled today — overdue accounts being serviced today (green), pulled
-          out of the overdue table + count. */}
+          out of the overdue table + count. Rendered BELOW the overdue table. */}
       {report.scheduledToday.length > 0 ? (
         <Card className="border-emerald-300 dark:border-emerald-900/50">
           <CardHeader>
@@ -200,27 +229,25 @@ export function OverdueView({ initial }: { initial: OverdueReport }) {
         </Card>
       ) : null}
 
-      {/* Overdue table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Overdue — no mosquito service in 15+ days</CardTitle>
-          <CardDescription>
-            Sorted by days since last mosquito service (longest first). &ldquo;No
-            spray yet&rdquo; accounts (a 2026 signup awaiting their first
-            service) are pinned to the top. Accounts with an open balance are not
-            here — see the paused section below.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {report.overdue.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No overdue customers. 🎉
-            </p>
-          ) : (
-            <RowTable rows={report.overdue} kind="overdue" />
-          )}
-        </CardContent>
-      </Card>
+      {/* On ASAP route — overdue accounts with an upcoming job assigned to an
+          ASAP route (being caught up), pulled out of the overdue count. */}
+      {report.asapRoute.length > 0 ? (
+        <Card className="border-sky-300 dark:border-sky-900/50">
+          <CardHeader>
+            <CardTitle className="text-sky-700 dark:text-sky-400">
+              On ASAP route ({fmt(report.asapRoute.length)})
+            </CardTitle>
+            <CardDescription>
+              Overdue accounts with an upcoming job assigned to an ASAP route —
+              they&rsquo;re being caught up, so they&rsquo;re excluded from the
+              overdue count above and listed here instead.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <RowTable rows={report.asapRoute} kind="overdue" />
+          </CardContent>
+        </Card>
+      ) : null}
 
       {/* Service paused — open balance */}
       <Card>
@@ -384,6 +411,11 @@ function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowKind }) 
                   {r.scheduled_today ? (
                     <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400">
                       Today
+                    </span>
+                  ) : null}
+                  {r.asap_route ? (
+                    <span className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-700 dark:bg-sky-950/40 dark:text-sky-400">
+                      ASAP
                     </span>
                   ) : null}
                 </span>
