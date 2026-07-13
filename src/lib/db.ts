@@ -139,16 +139,25 @@ export async function initSchema(): Promise<void> {
   // Per-customer-per-year COMPLETED mosquito-family service counts (Event Spray
   // excluded — it's a separate contract, never on the mosquito service-history
   // table). Feeds the ops-canonical return-rate metric (§5.8): a "real year-Y
-  // customer" / a "return" = received >= MIN_RETURN_TREATMENTS completed mosquito
-  // services that year. Filled by the resumable scrape job (lib/service/serviceCounts.ts).
+  // customer" / a "return" = received >= 1 completed mosquito service that year,
+  // EXCEPT a late one-off (only spray after LATE_SEASON_CUTOFF, Aug 15). The
+  // first/last service-date columns carry the earliest/last completed mosquito
+  // spray per year so the late-one-off carve-out is computable. Filled by the
+  // resumable scrape job (lib/service/serviceCounts.ts).
   await c`
     CREATE TABLE IF NOT EXISTS mosquito_service_counts (
       pocomos_id TEXT NOT NULL,
       year INTEGER NOT NULL,
       service_count INTEGER NOT NULL,
+      first_service_date DATE,
+      last_service_date DATE,
       PRIMARY KEY (pocomos_id, year)
     )
   `;
+  // Added 2026-07-13 (per-spray dates for the late-one-off return-rate carve-out).
+  // Cover environments where the table predates these columns.
+  await c`ALTER TABLE mosquito_service_counts ADD COLUMN IF NOT EXISTS first_service_date DATE`;
+  await c`ALTER TABLE mosquito_service_counts ADD COLUMN IF NOT EXISTS last_service_date DATE`;
   // Coverage tracker: which cohort members have been scraped, and whether the
   // rendered service-history table was actually their mosquito contract
   // (table_ok=false = add-on customer whose default table isn't mosquito → we

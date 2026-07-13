@@ -184,6 +184,50 @@ export function countCompletedByYear(rows: ServiceRow[], years: number[]): Recor
   return out;
 }
 
+export interface YearServiceSummary {
+  /** Number of COMPLETED mosquito services in the year. */
+  count: number;
+  /** Earliest completed mosquito spray in the year, ISO "YYYY-MM-DD", or null. */
+  first: string | null;
+  /** Latest completed mosquito spray in the year, ISO "YYYY-MM-DD", or null. */
+  last: string | null;
+}
+
+function toIso(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Like {@link countCompletedByYear} but also carries the EARLIEST and LATEST
+ * completed mosquito spray date per year. The earliest-spray date drives the
+ * return-rate "late one-off" carve-out (§5.8): a customer whose only spray in a
+ * year lands after Aug 15 is an extended-season sale, not a real customer. Only
+ * Status="Complete" rows with a parseable date count; Event Spray is a separate
+ * contract and never appears on this table, so it is excluded by construction.
+ */
+export function summarizeCompletedByYear(
+  rows: ServiceRow[],
+  years: number[]
+): Record<number, YearServiceSummary> {
+  const want = new Set(years);
+  const out: Record<number, YearServiceSummary> = {};
+  for (const y of years) out[y] = { count: 0, first: null, last: null };
+  for (const r of rows) {
+    if (!/complete/i.test(r.status) || r.parsedDate == null) continue;
+    const y = r.parsedDate.getFullYear();
+    if (!want.has(y)) continue;
+    const bucket = out[y];
+    bucket.count += 1;
+    const iso = toIso(r.parsedDate);
+    if (bucket.first == null || iso < bucket.first) bucket.first = iso;
+    if (bucket.last == null || iso > bucket.last) bucket.last = iso;
+  }
+  return out;
+}
+
 export function parseSelectedContractLabel(html: string): string | null {
   const idx = html.search(/Selected Contract/i);
   if (idx < 0) return null;

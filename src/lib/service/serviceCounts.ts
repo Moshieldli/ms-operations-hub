@@ -1,9 +1,11 @@
 /**
  * Resumable scrape job: per-customer-per-year COMPLETED mosquito-family service
- * counts. This is the evidence layer for the ops-canonical return-rate metric
- * (§5.8): a "real year-Y customer" and a "return in year Y" both mean the
- * customer received >= MIN_RETURN_TREATMENTS completed mosquito services that
- * year — a real treatment history, not a tag and not a one-off.
+ * counts + the earliest/last spray date per year. This is the evidence layer for
+ * the ops-canonical return-rate metric (§5.8): a "real year-Y customer" and a
+ * "return in year Y" both mean the customer received >= 1 completed mosquito
+ * service that year, EXCEPT a late one-off (only spray after LATE_SEASON_CUTOFF,
+ * Aug 15 — extended-season sale, not a real customer). The per-year first-spray
+ * date makes that carve-out computable.
  *
  * Event Spray NEVER counts: it is a separate Pocomos contract and never appears
  * on the mosquito contract's service-history table, so counting Complete rows on
@@ -29,7 +31,7 @@ import { getDataset, CURRENT_YEAR, fetchPooled } from "@/lib/pocomos";
 import { getSessionedHtml } from "@/lib/pocomos/webSession";
 import {
   parseServiceHistory,
-  countCompletedByYear,
+  summarizeCompletedByYear,
   looksLikeLoginPage,
 } from "./serviceHistory";
 import { isMosquitoServiceType, renderedTableIsMosquito } from "./mosquito";
@@ -177,14 +179,19 @@ export async function refreshServiceCounts(
     const parsed = parseServiceHistory(html);
     const ok = renderedTableIsMosquito(parsed.tableContractLabel, parsed.selectedContractLabel);
     if (ok) {
-      const counts = countCompletedByYear(parsed.rows, years);
+      const summary = summarizeCompletedByYear(parsed.rows, years);
       await sql`DELETE FROM mosquito_service_counts WHERE pocomos_id = ${m.id}`;
       for (const y of years) {
-        if (counts[y] > 0) {
+        const s = summary[y];
+        if (s.count > 0) {
           await sql`
-            INSERT INTO mosquito_service_counts (pocomos_id, year, service_count)
-            VALUES (${m.id}, ${y}, ${counts[y]})
-            ON CONFLICT (pocomos_id, year) DO UPDATE SET service_count = EXCLUDED.service_count
+            INSERT INTO mosquito_service_counts
+              (pocomos_id, year, service_count, first_service_date, last_service_date)
+            VALUES (${m.id}, ${y}, ${s.count}, ${s.first}, ${s.last})
+            ON CONFLICT (pocomos_id, year) DO UPDATE SET
+              service_count = EXCLUDED.service_count,
+              first_service_date = EXCLUDED.first_service_date,
+              last_service_date = EXCLUDED.last_service_date
           `;
         }
       }
@@ -227,27 +234,66 @@ export async function refreshServiceCounts(
 export interface ServiceCountsData {
   /** pocomos_id → { year → completed mosquito service count }. Only scraped, table_ok members. */
   counts: Map<string, Record<number, number>>;
+  /** pocomos_id → { year → earliest completed mosquito spray, ISO "YYYY-MM-DD" }. */
+  firstDates: Map<string, Record<number, string>>;
+  /** pocomos_id → { year → latest completed mosquito spray, ISO "YYYY-MM-DD" }. */
+  lastDates: Map<string, Record<number, string>>;
   /** pocomos_ids that have been scraped (any table_ok). */
   scraped: Set<string>;
   /** pocomos_ids scraped with table_ok=true (counts are trustworthy). */
   tableOk: Set<string>;
 }
 
+/** Coerce a DB DATE (Date | "YYYY-MM-DD..." string) to an ISO "YYYY-MM-DD" or null. */
+function isoDate(v: unknown): string | null {
+  if (v == null) return null;
+  if (v instanceof Date) {
+    const y = v.getUTCFullYear();
+    const m = String(v.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(v.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  const m = String(v).match(/(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
+}
+
 /** Read the counts + coverage tables for the return-rate computation. */
 export async function getServiceCountsData(): Promise<ServiceCountsData> {
   await initSchema();
   const countRows = (await sql`
-    SELECT pocomos_id, year, service_count FROM mosquito_service_counts
-  `) as Array<{ pocomos_id: string; year: number; service_count: number }>;
+    SELECT pocomos_id, year, service_count, first_service_date, last_service_date
+    FROM mosquito_service_counts
+  `) as Array<{
+    pocomos_id: string;
+    year: number;
+    service_count: number;
+    first_service_date: unknown;
+    last_service_date: unknown;
+  }>;
   const scrapeRows = (await sql`
     SELECT pocomos_id, table_ok FROM mosquito_service_scrape
   `) as Array<{ pocomos_id: string; table_ok: boolean }>;
   const counts = new Map<string, Record<number, number>>();
+  const firstDates = new Map<string, Record<number, string>>();
+  const lastDates = new Map<string, Record<number, string>>();
   for (const r of countRows) {
     const id = String(r.pocomos_id);
+    const y = Number(r.year);
     const rec = counts.get(id) ?? {};
-    rec[Number(r.year)] = Number(r.service_count);
+    rec[y] = Number(r.service_count);
     counts.set(id, rec);
+    const first = isoDate(r.first_service_date);
+    if (first) {
+      const f = firstDates.get(id) ?? {};
+      f[y] = first;
+      firstDates.set(id, f);
+    }
+    const last = isoDate(r.last_service_date);
+    if (last) {
+      const l = lastDates.get(id) ?? {};
+      l[y] = last;
+      lastDates.set(id, l);
+    }
   }
   const scraped = new Set<string>();
   const tableOk = new Set<string>();
@@ -255,5 +301,5 @@ export async function getServiceCountsData(): Promise<ServiceCountsData> {
     scraped.add(String(r.pocomos_id));
     if (r.table_ok) tableOk.add(String(r.pocomos_id));
   }
-  return { counts, scraped, tableOk };
+  return { counts, firstDates, lastDates, scraped, tableOk };
 }

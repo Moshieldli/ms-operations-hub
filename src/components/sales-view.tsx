@@ -183,7 +183,7 @@ function SalesDashboard({
       {/*
         DISPLAY-ONLY relabels — internal bucket keys + categorize.ts logic
         unchanged. NEW→"New", RETURNING→"New – Season Skipped", RETAINED→
-        "Returning". The Not-Renewed / Cancelled / Issues groups below are
+        "Returning". The Not-Renewed / Cancelled / Missing-tags groups below are
         year-relative and come from /api/sales/taxonomy.
       */}
 
@@ -264,7 +264,7 @@ function SalesDashboard({
 
       <ReturnRateCard taxonomy={taxonomy} loading={taxLoading} />
 
-      <IssuesCard taxonomy={taxonomy} loading={taxLoading} year={year} prevYear={prevYear} />
+      <MissingTagsCard taxonomy={taxonomy} loading={taxLoading} year={year} prevYear={prevYear} />
 
       <ContractTypeCard summary={summary} />
     </>
@@ -279,7 +279,7 @@ function ReturnRateCard({
   loading: boolean;
 }) {
   const rr = taxonomy?.returnRates;
-  const min = rr?.minTreatments ?? 2;
+  const cutoff = rr?.lateSeasonCutoff ?? "Aug 15";
   return (
     <Card>
       <CardHeader>
@@ -292,11 +292,13 @@ function ReturnRateCard({
           ) : null}
         </CardTitle>
         <CardDescription>
-          Of customers who received at least {min} completed mosquito services
-          (Event Spray never counts) in a season, how many received at least {min}{" "}
-          completed mosquito services the next season. A return is a real
-          treatment history — not a tag, not a one-off. The current season is in
-          progress, so its rate climbs as the season runs.
+          Of the real mosquito customers of a season, how many came back the next
+          season. A <strong>real customer</strong> of a year received at least one
+          completed mosquito service that year (Event Spray never counts), unless
+          their <em>only</em> spray landed after {cutoff} — a late one-off
+          (extended-season sale), which doesn&rsquo;t count as a real customer.
+          The current season is in progress, so its rate climbs as the season
+          runs.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -343,10 +345,16 @@ function ReturnRateCard({
               </tbody>
             </table>
             <p className="mt-3 text-[11px] leading-snug text-muted-foreground">
-              &ldquo;Served&rdquo; = ≥{min} completed mosquito-family services that
-              calendar year, counted from each customer&rsquo;s mosquito
-              service-history (Event Spray is a separate contract and never
-              counts).{" "}
+              &ldquo;Served&rdquo; = real customers that season: ≥1 completed
+              mosquito-family service that calendar year (Event Spray never
+              counts), excluding customers whose only spray fell after {cutoff}{" "}
+              (a late one-off).{" "}
+              {rr.pairs.some((p) => p.reliable && p.excludedLateFrom + p.excludedLateTo > 0)
+                ? `Late one-offs excluded — ${rr.pairs
+                    .filter((p) => p.reliable)
+                    .map((p) => `${p.fromYear}: ${fmt(p.excludedLateFrom)}, ${p.toYear}: ${fmt(p.excludedLateTo)}`)
+                    .join("; ")}. `
+                : ""}
               {rr.computing
                 ? `Still computing: ${fmt(rr.covered)} of ${fmt(rr.cohortSize)} customers' histories scraped (${rr.coveragePct}%). Numbers firm up as coverage reaches 100%.`
                 : `Coverage ${rr.coveragePct}% (${fmt(rr.covered)}/${fmt(rr.cohortSize)}).`}{" "}
@@ -402,7 +410,14 @@ function ContractTypeCard({ summary }: { summary: SalesSummary }) {
   );
 }
 
-function IssuesCard({
+/**
+ * "Missing tags" — every currently-active customer with NO current-year tag
+ * (any prior tags or none). This is the full off-bucket active set; it absorbs
+ * the old narrower "Customers with issues" roster (no current AND no prior tag),
+ * which is now flagged inline with a "no prior tag" badge. Columns: name, id,
+ * all tags, last service date, Profile link (new tab).
+ */
+function MissingTagsCard({
   taxonomy,
   loading,
   year,
@@ -413,31 +428,41 @@ function IssuesCard({
   year: string;
   prevYear: number;
 }) {
-  const issues = taxonomy?.issues ?? [];
+  const rows = taxonomy?.missingTags ?? [];
+  const noPrior = rows.filter((c) => !c.hadPriorYearTag).length;
+  const withPrior = rows.length - noPrior;
   return (
     <Card>
       <CardHeader>
         <CardTitle>
-          Customers with issues
+          Missing tags
           {taxonomy ? (
             <span className="ml-2 text-sm font-normal text-muted-foreground tabular-nums">
-              {fmt(taxonomy.issuesCount)}
+              {fmt(taxonomy.missingTagsCount)}
             </span>
           ) : null}
         </CardTitle>
         <CardDescription>
-          Active in Pocomos but carrying no {year} tag and no {prevYear} tag — odd
-          edge cases that don&rsquo;t fit any bucket and need eyeballing.
+          Active in Pocomos but carrying no {year} tag — the full off-bucket set
+          that still needs a {year} tag applied.{" "}
+          {taxonomy ? (
+            <span className="tabular-nums">
+              {fmt(withPrior)} have a {prevYear} tag (not renewed) ·{" "}
+              {fmt(noPrior)} have no prior-year tag at all (
+              <span className="text-amber-600 dark:text-amber-400">flagged below</span>
+              ).
+            </span>
+          ) : null}
         </CardDescription>
       </CardHeader>
       <CardContent>
         {!taxonomy ? (
           <p className="text-sm text-muted-foreground">
-            {loading ? "Loading…" : "Couldn’t load the issues list."}
+            {loading ? "Loading…" : "Couldn’t load the missing-tags list."}
           </p>
-        ) : issues.length === 0 ? (
+        ) : rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            None — every active customer fits a bucket. 🎉
+            None — every active customer carries a {year} tag. 🎉
           </p>
         ) : (
           <div className="overflow-x-auto">
@@ -447,18 +472,29 @@ function IssuesCard({
                   <th className="py-2 pr-4 font-medium">Customer</th>
                   <th className="py-2 pr-4 font-medium">ID</th>
                   <th className="py-2 pr-4 font-medium">Tags</th>
+                  <th className="py-2 pr-4 font-medium">Last service</th>
                   <th className="py-2 pl-4 text-right font-medium">Pocomos</th>
                 </tr>
               </thead>
               <tbody>
-                {issues.map((c) => (
+                {rows.map((c) => (
                   <tr key={c.id} className="border-b last:border-0 align-top">
-                    <td className="py-2 pr-4 font-medium">{c.name || c.id}</td>
+                    <td className="py-2 pr-4 font-medium">
+                      {c.name || c.id}
+                      {!c.hadPriorYearTag ? (
+                        <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-700 dark:bg-amber-950 dark:text-amber-400">
+                          no prior tag
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="py-2 pr-4 tabular-nums text-muted-foreground">
                       {c.id}
                     </td>
                     <td className="py-2 pr-4 text-xs text-muted-foreground">
                       {c.tags.length ? c.tags.join(" · ") : "(no tags)"}
+                    </td>
+                    <td className="py-2 pr-4 tabular-nums text-muted-foreground">
+                      {c.lastServiceDate ?? "—"}
                     </td>
                     <td className="py-2 pl-4 text-right">
                       <a

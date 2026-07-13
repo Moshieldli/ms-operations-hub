@@ -27,10 +27,21 @@
       Probe: scripts/probe-history-window.ts. See REFERENCE §5.8 / §9 #8.
 
 ## Worklist / cleanup (not code)
-- [ ] 4 customers-with-issues to review: Alex Abraham (1305276), Ariel Roffel (1237341),
-      Yuliya Lankri (1164303), Zachariah Robinson (1237274).
+- [ ] Apply a 2026 tag (or confirm cancellation) for the **10 Missing-tag active customers** on
+      `/sales` → Missing tags (8 carry a 2025 tag = not renewed; 2 have no prior-year tag at all,
+      flagged "no prior tag"). Live roster is on the card (name/id/tags/last service/Profile).
 
 ## Done (recent)
+- [x] Return-rate "real customer" rule changed (rev 16, 2026-07-13) — replaced MIN_RETURN_TREATMENTS=2
+      with: real customer of Y = ≥1 completed mosquito service in Y (Event Spray never counts) EXCEPT
+      a single spray after LATE_SEASON_CUTOFF (Aug 15). Added first/last spray-date columns to
+      mosquito_service_counts (backfilled via run-service-counts force re-scrape). Applied to both
+      denominator (Y) and numerator (Y+1). Live 25→26 = 76.5% (945/1,235) vs old ≥2 rule 75.9%/76.2%;
+      single-late excluded: 2025=89, 2026=0. 24→25 still n/a (truncation). See §5.8.
+- [x] "Missing tags" section on /sales (rev 16, 2026-07-13) — ALL active customers with no CURRENT_YEAR
+      tag (name/id/all tags/last service date/Profile link + stat header). Supersedes/absorbs the
+      narrower "Customers with issues" card (now flagged inline with a "no prior tag" badge). Live: 10
+      (8 not-renewed-with-prior-tag + 2 no-prior-tag). See §3.5.
 - [x] /service/overdue ASAP-route rescue (rev 15) — overdue accounts with an upcoming job on the
       "Z-ASAP" route (Technician "Z-ASAP 01" + Route Assigned "Assigned" on scheduled-services,
       detected per-row) → own blue "On ASAP route" card + ASAP pill, excluded from the count
