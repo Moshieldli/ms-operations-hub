@@ -165,13 +165,25 @@ function SalesDashboard({
   taxonomy: SalesTaxonomy | null;
   taxLoading: boolean;
 }) {
-  const { totals, buckets, retainedSubtypes, debug, year } = summary;
-  const retainedHint = `Auto ${retainedSubtypes.auto} · SEB ${retainedSubtypes.seb} · EB ${retainedSubtypes.eb} · Renewed ${retainedSubtypes.renewed}`;
+  const { totals, buckets, debug, year } = summary;
   const prevYear = parseInt(year, 10) - 1;
 
+  // "Returning" now comes from the TAXONOMY (rev 17), not summary.buckets.RETAINED:
+  // it is the return-rate numerator set — prior-year real customers who returned
+  // (see ReturningBox). summary.retainedSubtypes / buckets.RETAINED remain the
+  // tag-only series and still feed the snapshots table; they are NOT displayed.
+  const box = taxonomy?.returningBox;
+  const returningHint = box
+    ? `Auto ${fmt(box.auto)} · SEB ${fmt(box.seb)} · EB ${fmt(box.eb)} · Renewed ${fmt(
+        box.renewed
+      )} · by spray history ${fmt(box.bySprayHistory)}`
+    : undefined;
+
   // Reconciliation (synchronous, from summary): Active Customers is the tag-gated
-  // count (= NEW + RETURNING + RETAINED); the remaining active-status customers
-  // are off-bucket (the Not-Renewed-active + Issues that the taxonomy details).
+  // count; the remaining active-status customers are off-bucket (the
+  // Not-Renewed-active + Issues that the taxonomy details). NOTE: this no longer
+  // equals NEW + RETURNING + Returning — the Returning tile is now a
+  // service-evidence population, not the tag-based RETAINED bucket.
   const taggedActive = totals.activeCustomers;
   const offBucket = Math.max(0, debug.activeAllStatuses - totals.activeCustomers);
 
@@ -181,10 +193,11 @@ function SalesDashboard({
   return (
     <>
       {/*
-        DISPLAY-ONLY relabels — internal bucket keys + categorize.ts logic
-        unchanged. NEW→"New", RETURNING→"New – Season Skipped", RETAINED→
-        "Returning". The Not-Renewed / Cancelled / Missing-tags groups below are
-        year-relative and come from /api/sales/taxonomy.
+        Relabels — categorize.ts logic unchanged. NEW→"New", RETURNING→"New –
+        Season Skipped". "Returning" is NO LONGER the RETAINED bucket: as of
+        rev 17 it is the taxonomy's returningBox (= the return-rate numerator).
+        The Not-Renewed / Cancelled / Missing-tags groups below are year-relative
+        and also come from /api/sales/taxonomy.
       */}
 
       {/* Headline KPIs — dominate */}
@@ -218,9 +231,9 @@ function SalesDashboard({
           />
           <Tile
             label="Returning"
-            value={buckets.RETAINED}
-            hint={retainedHint}
-            def="Service continued from last year into this year (auto-renew / early rebook / renewed)."
+            value={taxNum(box?.total)}
+            hint={returningHint}
+            def={`Real ${prevYear} customers who came back: they've had a real ${year} season (2+ mosquito services, or one late signup) or their service rolled over on a ${year} auto-renew / early-rebook / renewed tag. Same population as the Return rate card's ${prevYear} → ${year} numerator.`}
           />
         </div>
         <p className="text-xs text-muted-foreground">
@@ -293,12 +306,16 @@ function ReturnRateCard({
         </CardTitle>
         <CardDescription>
           Of the real mosquito customers of a season, how many came back the next
-          season. A <strong>real customer</strong> of a year received at least one
-          completed mosquito service that year (Event Spray never counts), unless
-          their <em>only</em> spray landed after {cutoff} — a late one-off
-          (extended-season sale), which doesn&rsquo;t count as a real customer.
-          The current season is in progress, so its rate climbs as the season
-          runs.
+          season. A <strong>real customer</strong> of a year got{" "}
+          <strong>two or more</strong> completed mosquito services that year — or{" "}
+          <strong>exactly one, after {cutoff}</strong>, which means they signed up
+          too late in the season to have had a second (Event Spray never counts).
+          A single early- or mid-season spray is a one-off and doesn&rsquo;t
+          count. A customer <strong>returned</strong> if they&rsquo;re a real
+          customer of the next season <em>or</em> they&rsquo;re still active with
+          that season&rsquo;s auto-renew / early-rebook / renewed tag (service
+          rolled over, spray not due yet). The current season is in progress, so
+          its rate climbs as the season runs.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -313,7 +330,7 @@ function ReturnRateCard({
                 <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <th className="py-2 pr-4 font-medium">Season</th>
                   <th className="py-2 pr-4 text-right font-medium">Return rate</th>
-                  <th className="py-2 pl-4 text-right font-medium">Returned / Served</th>
+                  <th className="py-2 pl-4 text-right font-medium">Returned / Real</th>
                 </tr>
               </thead>
               <tbody>
@@ -345,14 +362,20 @@ function ReturnRateCard({
               </tbody>
             </table>
             <p className="mt-3 text-[11px] leading-snug text-muted-foreground">
-              &ldquo;Served&rdquo; = real customers that season: ≥1 completed
-              mosquito-family service that calendar year (Event Spray never
-              counts), excluding customers whose only spray fell after {cutoff}{" "}
-              (a late one-off).{" "}
-              {rr.pairs.some((p) => p.reliable && p.excludedLateFrom + p.excludedLateTo > 0)
-                ? `Late one-offs excluded — ${rr.pairs
+              &ldquo;Real&rdquo; = 2+ completed mosquito-family services that
+              calendar year, or exactly one after {cutoff} (a late-season signup);
+              Event Spray never counts. &ldquo;Returned&rdquo; = real the next
+              season, or still active on that season&rsquo;s continuation tag.{" "}
+              {rr.pairs.some((p) => p.reliable && p.lateSignupsFrom + p.lateSignupsTo > 0)
+                ? `Late-season signups counted as real — ${rr.pairs
                     .filter((p) => p.reliable)
-                    .map((p) => `${p.fromYear}: ${fmt(p.excludedLateFrom)}, ${p.toYear}: ${fmt(p.excludedLateTo)}`)
+                    .map((p) => `${p.fromYear}: ${fmt(p.lateSignupsFrom)}, ${p.toYear}: ${fmt(p.lateSignupsTo)}`)
+                    .join("; ")}. `
+                : ""}
+              {rr.pairs.some((p) => p.reliable && p.returnedByTag > 0)
+                ? `Returns by continuation tag vs. spray history — ${rr.pairs
+                    .filter((p) => p.reliable)
+                    .map((p) => `${p.fromYear}→${p.toYear}: ${fmt(p.returnedByTag)} tag, ${fmt(p.returnedBySprayHistory)} sprays`)
                     .join("; ")}. `
                 : ""}
               {rr.computing

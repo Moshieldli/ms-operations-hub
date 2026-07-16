@@ -19,12 +19,29 @@
       now completed-service-based ("served in Y, receiving in Y+1"), single rate per pair, no dual
       denominator. On-Hold counts as returned (paused ≠ cancelled). See REFERENCE §5.8 / §9 #8.
 
+## Blocked (waiting on the user)
+- [ ] **Import RealGreen dump → unblock 24→25 return rate.** HISTORY: the company ran **RealGreen
+      before Pocomos; Pocomos data starts 2025**, so 2024 service history does not exist in Pocomos
+      at all — 24→25 is not computable from anything we hold and the card shows "n/a"
+      (`reliable=false`). The user will supply a **RealGreen data dump** of 2024 service history.
+      When it lands: map its customers to `pocomos_id` (name/address/phone match — RealGreen ids
+      won't join), backfill 2024 rows into `mosquito_service_counts` (`service_count`,
+      `first_service_date`, `last_service_date` — the rev-17 rule needs the dates), mark those rows
+      as dump-sourced so the nightly scrape can't prune them (the current prune drops ids outside
+      the live cohort), then flip `reliable` for `fromYear === CY-2`. See REFERENCE §5.8 / §9 #8.
+
 ## Ready to build (unblocked) — accuracy follow-ups
-- [ ] Return-rate 24→25 BLOCKED on full history — the Pocomos service-history table renders only the
-      most recent ~30 services (~1 season), so 2024 counts collapse and 24→25 shows "n/a" on the card.
-      To unblock: parse the PDF export (/customer/{id}/contract/{cid}/history/download → application/pdf)
-      or find a paginated/date-ranged services endpoint, then backfill 2024 into mosquito_service_counts.
-      Probe: scripts/probe-history-window.ts. See REFERENCE §5.8 / §9 #8.
+- [ ] Return-rate full-history source (NOT a 24→25 fix — 2024 is pre-Pocomos, see the RealGreen item
+      above). The Pocomos service-history table renders only the most recent ~30 services (~1 season),
+      so any from-year older than CY-1 collapses even within the Pocomos era. To widen the window:
+      parse the PDF export (/customer/{id}/contract/{cid}/history/download → application/pdf) or find
+      a paginated/date-ranged services endpoint. Probe: scripts/probe-history-window.ts.
+      See REFERENCE §5.8 / §9 #8.
+- [ ] Return-rate coverage gap: 7 customers in the old Returning box have no readable mosquito
+      service history (`table_ok=false` — their default rendered contract isn't the mosquito one), so
+      rule 1 can't confirm them and they fail closed out of the box/denominator. ~0.4% of the box.
+      To fix we'd need to read a NON-default contract's history without switching the customer's
+      active contract (READ-ONLY constraint). Low priority; documented in REFERENCE §5.8.
 
 ## Worklist / cleanup (not code)
 - [ ] Apply a 2026 tag (or confirm cancellation) for the **10 Missing-tag active customers** on
@@ -32,6 +49,22 @@
       flagged "no prior tag"). Live roster is on the card (name/id/tags/last service/Profile).
 
 ## Done (recent)
+- [x] **Return-rate + Returning-box unification (rev 17, 2026-07-16)** — ops-canonical. (1) "Real
+      customer of Y" REVERSED from rev 16: ≥2 completed mosquito services in Y, OR exactly 1 dated
+      AFTER Aug 15 (late-season signup); a single early/mid-season spray no longer counts. New
+      constant REAL_CUSTOMER_MIN_SERVICES. (2) "Returned in Y+1" = real customer of Y+1 OR an ACTIVE
+      customer with a Y+1 continuation tag (Auto/SEB/EB/Renewed); denominator stays rule-1-only.
+      (3) The /sales + /tv/sales "Returning" box IS the numerator set (taxonomy.returningBox),
+      restricted to prior-year real customers — box.total === pair.returned, asserted by
+      scripts/verify-return-unification.ts. Kept Auto/SEB/EB/Renewed sub-counts, added
+      "by spray history"; sub-counts partition the total. (4) Card description + the wrong
+      "excluding late one-offs" label rewritten. sales-provider.ts untouched (buckets.RETAINED +
+      retainedSubtypes remain the tag-only series feeding snapshots; no longer displayed).
+      **Live 25→26 = 75.9% (976/1,286)** vs rev-16 76.5% shipped / 76.6% (946/1,235) recomputed
+      = −0.7pp. Numerator: 954 by tag + 22 by spray history. Late-season signups counted real:
+      2025=88, 2026=0. **Returning box 976** (Auto 404 · SEB 292 · EB 139 · Renewed 119 · spray 22),
+      was 1,009 tag-only: 55 dropped (all denominator-membership, incl. 7 table_ok=false), 22 added
+      (19 non-active + 3 untagged, all spray-qualified). See §5.8.
 - [x] Return-rate "real customer" rule changed (rev 16, 2026-07-13) — replaced MIN_RETURN_TREATMENTS=2
       with: real customer of Y = ≥1 completed mosquito service in Y (Event Spray never counts) EXCEPT
       a single spray after LATE_SEASON_CUTOFF (Aug 15). Added first/last spray-date columns to

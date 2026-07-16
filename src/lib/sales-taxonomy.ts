@@ -55,25 +55,54 @@ export interface MissingTagCustomer {
 }
 
 /**
- * Return-rate "real customer" rule — ops-canonical (2026-07-13; replaces the
- * MIN_RETURN_TREATMENTS=2 threshold).
+ * Return-rate "real customer" rule — ops-canonical (rev 17, 2026-07-16).
  *
- *   A customer is a "real customer of year Y" iff they received >= 1 COMPLETED
- *   mosquito-family service in Y (Event Spray NEVER counts — separate contract),
- *   EXCEPT a customer whose ONLY Y spray landed AFTER Aug 15 of Y. That single
- *   late spray is an extended-season one-off sale, not a real customer.
+ *   A customer is a "real customer of year Y" iff EITHER
+ *     (a) they received >= REAL_CUSTOMER_MIN_SERVICES (2) COMPLETED
+ *         mosquito-family services in Y, OR
+ *     (b) they received exactly 1, and its date falls AFTER LATE_SEASON_CUTOFF
+ *         (Aug 15) of Y — a LATE-SEASON SIGNUP: they joined too late in the
+ *         season to have received more than one spray, so their single spray is
+ *         evidence of a real customer, not of a one-off.
+ *   A single EARLY/MID-season spray (on or before the cutoff) does NOT qualify:
+ *   a customer who had the whole season available and took one spray is a
+ *   one-off, not a real customer.
  *
- * The SAME test defines both the denominator (real year-Y customer) and the
- * numerator (returned = real customer of Y+1). Counts + the earliest spray date
- * per year come from the service-count cache (lib/service/serviceCounts.ts),
- * which reads each customer's mosquito service-history; Event Spray lives on a
- * separate contract and never lands there, so it can never count.
+ *   Event Spray NEVER counts — it is a separate Pocomos contract and never lands
+ *   on the mosquito contract's service-history table.
+ *
+ * ⚠ This REVERSES the rev-16 carve-out, which excluded a single LATE spray and
+ * accepted a single early one. Ops confirmed the opposite is the real signal:
+ * lateness EXPLAINS a low spray count rather than discrediting it.
+ *
+ * This rule alone defines the return-rate DENOMINATOR (real customers of Y).
+ * The NUMERATOR and the /sales "Returning" box additionally accept a
+ * continuation-tag path — see `hasContinuationTag` / `computeReturnRatesAndBox`.
+ *
+ * Counts + the per-year first-spray date come from the service-count cache
+ * (lib/service/serviceCounts.ts), which reads each customer's mosquito
+ * service-history.
  *
  * LATE_SEASON_CUTOFF is a month/day (year-relative — applied against whichever
  * year Y is under test, never hardcoded to a specific calendar year).
  */
 export const LATE_SEASON_CUTOFF = { month: 8, day: 15 } as const; // Aug 15
 export const LATE_SEASON_CUTOFF_LABEL = "Aug 15";
+export const REAL_CUSTOMER_MIN_SERVICES = 2;
+
+/**
+ * Continuation tags that mark a customer's service as having rolled into year Y
+ * (ops list: Auto / SEB / EB / Renewed). `Prepaid` / `Committed` are also
+ * continuation tags in categorize.ts's bucket logic and are accepted here so the
+ * two never silently disagree — as of 2026-07-16 ZERO customers carry either
+ * without also carrying one of the four named tags, so including them changes no
+ * count today (probe: scripts/probe-return-unification.ts).
+ *
+ * The four NAMED tags drive the Returning box's sub-counts, in this precedence
+ * order (a customer can hold several; each is counted once).
+ */
+export const CONTINUATION_TAGS_NAMED = ["Auto", "SEB", "EB", "Renewed"] as const;
+const CONTINUATION_TAGS_ALL = [...CONTINUATION_TAGS_NAMED, "Prepaid", "Committed"] as const;
 
 /**
  * Is an earliest-spray ISO date ("YYYY-MM-DD") strictly after LATE_SEASON_CUTOFF
@@ -98,16 +127,20 @@ export const RETURN_RATE_MIN_COVERAGE_PCT = 99;
 export interface ReturnRatePair {
   fromYear: string;
   toYear: string;
-  /** Denominator: real customers of {fromYear} (>=1 completed mosquito service, late one-off excluded). */
+  /** Denominator: real customers of {fromYear} (rule 1 — sprays only, no tag path). */
   realFrom: number;
-  /** Numerator: of those, real customers of {toYear} (same rule). */
+  /** Numerator: of those, real customers of {toYear} OR holding a {toYear} continuation tag while active. */
   returned: number;
   /** returned / realFrom, percent. */
   rate: number;
-  /** Single-late-spray customers excluded from {fromYear}'s denominator by the late-one-off carve-out. */
-  excludedLateFrom: number;
-  /** Single-late-spray customers excluded from {toYear}'s numerator test. */
-  excludedLateTo: number;
+  /** Of `returned`: qualified by {toYear} spray history (rule 1), with no continuation tag. */
+  returnedBySprayHistory: number;
+  /** Of `returned`: qualified by a {toYear} continuation tag (may also have sprays). */
+  returnedByTag: number;
+  /** Single LATE-season sprayers who QUALIFY as real {fromYear} customers (rule 1b). */
+  lateSignupsFrom: number;
+  /** Single LATE-season sprayers who qualify as real {toYear} customers (rule 1b). */
+  lateSignupsTo: number;
   /**
    * False when {fromYear} falls OUTSIDE the service-history window. The Pocomos
    * service-history table only renders the most recent ~30 services (back to
@@ -119,10 +152,44 @@ export interface ReturnRatePair {
   reliable: boolean;
 }
 
+/**
+ * The /sales "Returning" box (rev 17) — UNIFIED with the return-rate numerator.
+ *
+ * Members = real customers of PRIOR_YEAR (rule 1) who RETURNED into CURRENT_YEAR
+ * (rule 2: real customer of CY by spray history, OR an active customer holding a
+ * CY continuation tag). This is EXACTLY the CY-1 → CY numerator set, so the two
+ * cards on /sales can never disagree: `total` === that pair's `returned`.
+ *
+ * Before rev 17 this box was a pure tag count (active + any CY continuation tag,
+ * no CY New Sale = categorize.ts's RETAINED bucket), which answered a different
+ * question than the return rate and read ~33 higher.
+ *
+ * Sub-counts partition `total`: a member with a continuation tag is counted under
+ * its highest-precedence named tag; a member who qualified only through spray
+ * history falls into `bySprayHistory`.
+ */
+export interface ReturningBox {
+  /** Prior-year real customers who returned. === the CY-1→CY pair's `returned`. */
+  total: number;
+  auto: number;
+  seb: number;
+  eb: number;
+  renewed: number;
+  /** Qualified via CY spray history with NO continuation tag. */
+  bySprayHistory: number;
+  /**
+   * Denominator context: real customers of PRIOR_YEAR (the box's universe).
+   * total / priorYearReal === the CY-1→CY return rate.
+   */
+  priorYearReal: number;
+  /** Members NOT currently Active in Pocomos (qualified purely on CY sprays). */
+  nonActive: number;
+}
+
 export interface ReturnRates {
   /** Ordered oldest→newest: [(CY-2 → CY-1), (CY-1 → CY)]. */
   pairs: ReturnRatePair[];
-  /** The late-season one-off cutoff in effect (surfaced on the card), e.g. "Aug 15". */
+  /** The late-season signup cutoff in effect (surfaced on the card), e.g. "Aug 15". */
   lateSeasonCutoff: string;
   /** Cohort size (mosquito customers with a {CY-2..CY} tag) — the scrape target. */
   cohortSize: number;
@@ -163,6 +230,8 @@ export interface SalesTaxonomy {
   enrichedNonActive: number;
   /** Year-over-year mosquito return rates (24→25, 25→26). */
   returnRates: ReturnRates;
+  /** The /sales "Returning" box — unified with the CY-1→CY numerator (rev 17). */
+  returningBox: ReturningBox;
   asOf: string;
 }
 
@@ -185,74 +254,102 @@ function isoDateOnly(raw: string | null | undefined): string | null {
 }
 
 /**
- * Year-over-year mosquito return rate (ops-canonical, 2026-07-13 — >=1 completed
- * service with a late-one-off carve-out; supersedes the rev-15 ">=2 services"
- * threshold):
- *   "of the REAL customers of year Y, how many were REAL customers of year Y+1?"
+ * Year-over-year mosquito return rate + the unified "Returning" box
+ * (ops-canonical, rev 17, 2026-07-16):
+ *   "of the REAL customers of year Y, how many RETURNED in year Y+1?"
  *
- * Real customer of Y = >= 1 completed mosquito service in Y (Event Spray EXCLUDED),
- * EXCEPT a customer whose ONLY Y spray landed after LATE_SEASON_CUTOFF (Aug 15) —
- * a late one-off, not a real customer. The SAME test drives the denominator (real
- * customer of Y) and the numerator (returned = real customer of Y+1), against the
- * per-year service-count cache (`mosquito_service_counts` + first-spray dates,
- * filled by lib/service/serviceCounts.ts from each customer's mosquito
- * service-history). Event Spray lives on a separate contract and never lands on
- * the mosquito table, so it can never contribute a count.
+ * DENOMINATOR — real customers of Y (rule 1, sprays only, NO tag path):
+ *   >= REAL_CUSTOMER_MIN_SERVICES (2) completed mosquito services in Y, OR
+ *   exactly 1 whose date is AFTER LATE_SEASON_CUTOFF (a late-season signup).
+ *   Event Spray never counts (separate contract, never on the mosquito table).
  *
- * Only cohort members scraped with table_ok (their mosquito contract's history
- * was actually read) are eligible; the rest are unknown and reflected in the
- * coverage %. While coverage < RETURN_RATE_MIN_COVERAGE_PCT the card shows
- * "(computing — N% covered)" because the resumable scrape is still filling.
+ * NUMERATOR — returned in Y+1 (rule 2, the COMBINED definition):
+ *   a real customer of Y+1 by rule 1, OR an ACTIVE customer carrying a Y+1
+ *   continuation tag (Auto/SEB/EB/Renewed). The tag path catches customers whose
+ *   service has rolled into the new season but who haven't been sprayed yet —
+ *   without it, an in-progress season understates returns. The tag path requires
+ *   ACTIVE status so a cancelled customer's stale auto-renew tag can't count as a
+ *   return (the rev-14 bug).
+ *
+ * RETURNING BOX = the numerator set itself (see `ReturningBox`), so the /sales
+ * "Returning" tile and the return-rate card are the same population by
+ * construction — box.total === the CY-1→CY pair's `returned`.
+ *
+ * Counts come from the per-year service-count cache (`mosquito_service_counts` +
+ * first-spray dates, filled by lib/service/serviceCounts.ts). Only cohort members
+ * scraped with table_ok (their mosquito contract's history was actually read) can
+ * qualify by spray history; the rest are reflected in the coverage %. While
+ * coverage < RETURN_RATE_MIN_COVERAGE_PCT the card shows "(computing — N%)".
  *
  * NOTE the CURRENT year (CY) is an in-progress season, so its numerator grows as
  * the season runs. READ-ONLY.
  */
-async function computeReturnRates(): Promise<ReturnRates> {
+async function computeReturnRatesAndBox(): Promise<{
+  returnRates: ReturnRates;
+  returningBox: ReturningBox;
+}> {
   const cy = Number(CURRENT_YEAR);
   const [cohort, data] = await Promise.all([
     buildServiceCountCohort(),
     getServiceCountsData(),
   ]);
   const cohortIds = cohort.map((m) => m.id);
+  const byId = new Map(cohort.map((m) => [m.id, m]));
 
   let covered = 0;
   for (const id of cohortIds) if (data.scraped.has(id)) covered++;
   const coveragePct = cohort.length ? Math.round((covered / cohort.length) * 1000) / 10 : 0;
 
-  // Real customer of year Y = scraped with a readable mosquito table AND >= 1
-  // completed mosquito service in Y, UNLESS the only Y spray is a late one-off
-  // (single spray after LATE_SEASON_CUTOFF). Returns false when the member isn't
-  // table_ok (counts unknown) or has no Y service.
+  const sprayCount = (id: string, y: number): number =>
+    data.tableOk.has(id) ? data.counts.get(id)?.[y] ?? 0 : 0;
+
+  // Rule 1 — real customer of Y by SPRAY HISTORY alone. Requires table_ok (an
+  // unreadable mosquito table means counts are unknown, not zero).
   const isReal = (id: string, y: number): boolean => {
     if (!data.tableOk.has(id)) return false;
-    const count = data.counts.get(id)?.[y] ?? 0;
-    if (count < 1) return false;
-    if (count >= 2) return true; // more than one spray → not a one-off
+    const count = sprayCount(id, y);
+    if (count >= REAL_CUSTOMER_MIN_SERVICES) return true;
+    if (count !== 1) return false;
+    // Exactly one spray: real ONLY if it landed after the cutoff (late-season
+    // signup — too late in the season to have had a second spray).
     const first = data.firstDates.get(id)?.[y]; // single spray → its date
-    return first ? !isLateSeasonSpray(first) : true;
-  };
-
-  // A single-late-spray customer for year Y: exactly one Y spray, after the
-  // cutoff — counted so we can report how many the carve-out excludes.
-  const isSingleLate = (id: string, y: number): boolean => {
-    if (!data.tableOk.has(id)) return false;
-    if ((data.counts.get(id)?.[y] ?? 0) !== 1) return false;
-    const first = data.firstDates.get(id)?.[y];
     return first ? isLateSeasonSpray(first) : false;
   };
+
+  // A single LATE-season sprayer for year Y — qualifies via rule 1b. Reported so
+  // the card can show how many of the real customers came in that way.
+  const isLateSignup = (id: string, y: number): boolean =>
+    sprayCount(id, y) === 1 && isReal(id, y);
+
+  // Rule 2's tag path — an ACTIVE customer whose service rolled into year Y.
+  const hasContinuationTag = (id: string, y: number): boolean => {
+    const m = byId.get(id);
+    if (!m || !m.active) return false; // stale tag on a cancelled customer ≠ return
+    const tags = new Set(m.tags);
+    return CONTINUATION_TAGS_ALL.some((t) => tags.has(`${y} - ${t}`));
+  };
+
+  // Rule 2 — RETURNED in year Y: real by sprays, OR active with a Y continuation tag.
+  const hasReturned = (id: string, y: number): boolean =>
+    isReal(id, y) || hasContinuationTag(id, y);
 
   const pairs: ReturnRatePair[] = [];
   for (const [fromN, toN] of [[cy - 2, cy - 1], [cy - 1, cy]] as const) {
     let realFrom = 0;
     let returned = 0;
-    let excludedLateFrom = 0;
-    let excludedLateTo = 0;
+    let returnedBySprayHistory = 0;
+    let returnedByTag = 0;
+    let lateSignupsFrom = 0;
+    let lateSignupsTo = 0;
     for (const id of cohortIds) {
-      if (isSingleLate(id, fromN)) excludedLateFrom++;
-      if (isSingleLate(id, toN)) excludedLateTo++;
-      if (!isReal(id, fromN)) continue;
+      if (isLateSignup(id, fromN)) lateSignupsFrom++;
+      if (isLateSignup(id, toN)) lateSignupsTo++;
+      if (!isReal(id, fromN)) continue; // denominator = rule 1 only
       realFrom++;
-      if (isReal(id, toN)) returned++;
+      if (!hasReturned(id, toN)) continue;
+      returned++;
+      if (hasContinuationTag(id, toN)) returnedByTag++;
+      else returnedBySprayHistory++;
     }
     pairs.push({
       fromYear: String(fromN),
@@ -260,21 +357,60 @@ async function computeReturnRates(): Promise<ReturnRates> {
       realFrom,
       returned,
       rate: realFrom ? (returned / realFrom) * 100 : 0,
-      excludedLateFrom,
-      excludedLateTo,
+      returnedBySprayHistory,
+      returnedByTag,
+      lateSignupsFrom,
+      lateSignupsTo,
       // Only the prior→current pair is inside the service-history window; older
       // from-years are truncated (see ReturnRatePair.reliable / §5.8).
       reliable: fromN >= cy - 1,
     });
   }
 
+  // ---- Returning box: the CY-1 → CY numerator set, with sub-counts ----
+  const box: ReturningBox = {
+    total: 0,
+    auto: 0,
+    seb: 0,
+    eb: 0,
+    renewed: 0,
+    bySprayHistory: 0,
+    priorYearReal: 0,
+    nonActive: 0,
+  };
+  for (const id of cohortIds) {
+    if (!isReal(id, cy - 1)) continue;
+    box.priorYearReal++;
+    if (!hasReturned(id, cy)) continue;
+    box.total++;
+    const m = byId.get(id);
+    if (!m?.active) box.nonActive++;
+    if (hasContinuationTag(id, cy)) {
+      // Precedence mirrors CONTINUATION_TAGS_NAMED; each member counted once.
+      const tags = new Set(m?.tags ?? []);
+      const named = CONTINUATION_TAGS_NAMED.find((t) => tags.has(`${cy} - ${t}`));
+      if (named === "Auto") box.auto++;
+      else if (named === "SEB") box.seb++;
+      else if (named === "EB") box.eb++;
+      else if (named === "Renewed") box.renewed++;
+      // No named tag → qualified on Prepaid/Committed alone (zero today); count
+      // it with the spray-history remainder so the sub-counts always sum.
+      else box.bySprayHistory++;
+    } else {
+      box.bySprayHistory++;
+    }
+  }
+
   return {
-    pairs,
-    lateSeasonCutoff: LATE_SEASON_CUTOFF_LABEL,
-    cohortSize: cohort.length,
-    covered,
-    coveragePct,
-    computing: coveragePct < RETURN_RATE_MIN_COVERAGE_PCT,
+    returnRates: {
+      pairs,
+      lateSeasonCutoff: LATE_SEASON_CUTOFF_LABEL,
+      cohortSize: cohort.length,
+      covered,
+      coveragePct,
+      computing: coveragePct < RETURN_RATE_MIN_COVERAGE_PCT,
+    },
+    returningBox: box,
   };
 }
 
@@ -364,7 +500,7 @@ export async function getSalesTaxonomy(): Promise<SalesTaxonomy> {
   // breakdown always sums to the headline count.
   const unknown = Math.max(0, cancelledAllTime - (cThis + cLast + cEarlier));
 
-  const returnRates = await computeReturnRates();
+  const { returnRates, returningBox } = await computeReturnRatesAndBox();
 
   return {
     year: cy,
@@ -380,6 +516,7 @@ export async function getSalesTaxonomy(): Promise<SalesTaxonomy> {
     missingTagsCount: missingTags.length,
     enrichedNonActive: rows.length,
     returnRates,
+    returningBox,
     asOf: new Date().toISOString(),
   };
 }

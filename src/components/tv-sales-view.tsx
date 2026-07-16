@@ -61,7 +61,10 @@ function TvDashboard({
   summary: SalesSummary;
   taxonomy: SalesTaxonomy | null;
 }) {
-  const { totals, buckets, retainedSubtypes, contractTypeGroups } = summary;
+  const { totals, buckets, contractTypeGroups } = summary;
+  // "Returning" = the taxonomy's returningBox (= the return-rate numerator), not
+  // summary.buckets.RETAINED — see sales-view.tsx / ReturningBox (rev 17).
+  const box = taxonomy?.returningBox;
 
   return (
     <div className="mt-8 flex flex-1 flex-col gap-8 lg:mt-12 lg:gap-12">
@@ -75,10 +78,10 @@ function TvDashboard({
           Buckets
         </div>
         {/*
-          DISPLAY-ONLY relabels (match /sales). Internal bucket keys + logic
-          unchanged; "Returning" maps to RETAINED:
-            NEW→"New", RETURNING→"New – Season Skipped", RETAINED→"Returning",
+          Relabels (match /sales). categorize.ts logic unchanged:
+            NEW→"New", RETURNING→"New – Season Skipped",
             AT_RISK→"Not Renewed", CANCELLED→"Cancelled – All Time".
+          "Returning" is the taxonomy returningBox (rev 17), NOT RETAINED.
           Numbers are high-contrast neutral for glanceability; color is reserved
           for the one bucket that needs attention (Not Renewed → amber).
         */}
@@ -87,8 +90,14 @@ function TvDashboard({
           <BigBucket label="New – Season Skipped" value={buckets.RETURNING} />
           <BigBucket
             label="Returning"
-            value={buckets.RETAINED}
-            hint={`Auto ${retainedSubtypes.auto} · SEB ${retainedSubtypes.seb} · EB ${retainedSubtypes.eb} · Renewed ${retainedSubtypes.renewed}`}
+            value={box ? box.total : "…"}
+            hint={
+              box
+                ? `Auto ${fmt(box.auto)} · SEB ${fmt(box.seb)} · EB ${fmt(box.eb)} · Renewed ${fmt(
+                    box.renewed
+                  )} · by spray history ${fmt(box.bySprayHistory)}`
+                : undefined
+            }
           />
           <BigBucket
             label="Not Renewed"

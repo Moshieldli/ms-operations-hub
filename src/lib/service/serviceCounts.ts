@@ -1,11 +1,11 @@
 /**
  * Resumable scrape job: per-customer-per-year COMPLETED mosquito-family service
  * counts + the earliest/last spray date per year. This is the evidence layer for
- * the ops-canonical return-rate metric (§5.8): a "real year-Y customer" and a
- * "return in year Y" both mean the customer received >= 1 completed mosquito
- * service that year, EXCEPT a late one-off (only spray after LATE_SEASON_CUTOFF,
- * Aug 15 — extended-season sale, not a real customer). The per-year first-spray
- * date makes that carve-out computable.
+ * the ops-canonical return-rate metric (§5.8 rev 17): a "real customer of year Y"
+ * = >= 2 completed mosquito services in Y, OR exactly 1 whose date falls AFTER
+ * LATE_SEASON_CUTOFF (Aug 15) — a late-season signup, who counts. A single
+ * early/mid-season spray does NOT count. The per-year spray count + first-spray
+ * date make that rule computable.
  *
  * Event Spray NEVER counts: it is a separate Pocomos contract and never appears
  * on the mosquito contract's service-history table, so counting Complete rows on
@@ -45,10 +45,18 @@ export function returnRateYears(): number[] {
   return [cy - 2, cy - 1, cy];
 }
 
-interface CohortMember {
+export interface CohortMember {
   id: string;
   name: string;
   active: boolean;
+  /**
+   * The customer's UNIONED year tags (not the per-contract tags used for cohort
+   * membership). Carried here so the return-rate/Returning-box tag path
+   * (§5.8 rule 2 — a current-year continuation tag) can be evaluated without a
+   * second dataset walk. Same source the /sales buckets read: the live dataset
+   * for actives, the enriched `customers` table for everyone else.
+   */
+  tags: string[];
 }
 
 const hasMosquitoYearTag = (
@@ -70,12 +78,22 @@ export async function buildServiceCountCohort(): Promise<CohortMember[]> {
     if (c.status.toLowerCase() !== "active") continue;
     const contracts = c.contracts.map((k) => ({ serviceType: k.serviceType, tags: k.tags }));
     if (hasMosquitoYearTag(contracts, years)) {
-      out.set(String(c.id), { id: String(c.id), name: c.fullName, active: true });
+      out.set(String(c.id), {
+        id: String(c.id),
+        name: c.fullName,
+        active: true,
+        tags: c.tags,
+      });
     }
   }
   const rows = (await sql`
-    SELECT pocomos_id, full_name, contracts FROM customers WHERE lower(status) <> 'active'
-  `) as Array<{ pocomos_id: string; full_name: string; contracts: unknown }>;
+    SELECT pocomos_id, full_name, contracts, tags FROM customers WHERE lower(status) <> 'active'
+  `) as Array<{
+    pocomos_id: string;
+    full_name: string;
+    contracts: unknown;
+    tags: unknown;
+  }>;
   for (const r of rows) {
     const id = String(r.pocomos_id);
     if (out.has(id)) continue;
@@ -83,7 +101,12 @@ export async function buildServiceCountCohort(): Promise<CohortMember[]> {
       ? (r.contracts as Array<{ serviceType?: string | null; tags?: string[] }>)
       : [];
     if (hasMosquitoYearTag(contracts, years)) {
-      out.set(id, { id, name: r.full_name || id, active: false });
+      out.set(id, {
+        id,
+        name: r.full_name || id,
+        active: false,
+        tags: Array.isArray(r.tags) ? (r.tags as string[]) : [],
+      });
     }
   }
   return [...out.values()];
