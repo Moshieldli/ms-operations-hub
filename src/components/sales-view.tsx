@@ -17,6 +17,80 @@ import { cn } from "@/lib/utils";
 
 const POCOMOS_BASE = "https://mypocomos.net";
 
+/**
+ * A list longer than this collapses by default. Short lists stay open — hiding
+ * three rows behind a click is worse than just showing them.
+ */
+const COLLAPSE_OVER_ROWS = 8;
+
+/**
+ * Collapsible section: header row (label + count + chevron), collapsed by
+ * default, click to expand. Built on native <details>/<summary> so keyboard,
+ * screen readers and find-in-page behave without any JS state.
+ *
+ * `defaultOpen` renders it expanded (used when a list is short enough that
+ * collapsing it would just be friction).
+ */
+function CollapsibleSection({
+  label,
+  count,
+  defaultOpen = false,
+  children,
+}: {
+  label: React.ReactNode;
+  count: number;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className="group rounded-md border" open={defaultOpen}>
+      <summary
+        className={cn(
+          "flex cursor-pointer list-none items-center gap-2 rounded-md px-3 py-2",
+          "hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          "[&::-webkit-details-marker]:hidden"
+        )}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+          className="h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-150 group-open:rotate-90"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="m9 18 6-6-6-6" />
+        </svg>
+        <span className="text-sm font-medium">{label}</span>
+        <span className="ml-auto text-sm tabular-nums text-muted-foreground">{fmt(count)}</span>
+      </summary>
+      <div className="border-t px-3 pb-3 pt-2">{children}</div>
+    </details>
+  );
+}
+
+/** Collapse `children` behind a header only when `collapse` is true. */
+function MaybeCollapsible({
+  collapse,
+  label,
+  count,
+  children,
+}: {
+  collapse: boolean;
+  label: React.ReactNode;
+  count: number;
+  children: React.ReactNode;
+}) {
+  if (!collapse) return <>{children}</>;
+  return (
+    <CollapsibleSection label={label} count={count}>
+      {children}
+    </CollapsibleSection>
+  );
+}
+
 function fmt(n: number) {
   return n.toLocaleString("en-US");
 }
@@ -466,18 +540,18 @@ function ReturnRateAnomaliesCard({
               ))}
             </div>
 
-            {an.classes
-              .filter((c) => c.count > 0)
-              .map((c) => (
-                <div key={c.key}>
-                  <h4 className="text-sm font-medium">
-                    {c.label}{" "}
-                    <span className="font-normal text-muted-foreground">({fmt(c.count)})</span>
-                  </h4>
-                  <p className="mt-1 text-xs leading-snug text-muted-foreground">
-                    {c.description} <strong className="font-medium">Fix:</strong> {c.fix}
-                  </p>
-                  <div className="mt-2 overflow-x-auto">
+            {/* One collapsible per class — same pattern for every class, collapsed
+                by default. Zero-count classes have no rows to show, so they stay
+                in the stat header above only. */}
+            <div className="space-y-2">
+              {an.classes
+                .filter((c) => c.count > 0)
+                .map((c) => (
+                  <CollapsibleSection key={c.key} label={c.label} count={c.count}>
+                    <p className="text-xs leading-snug text-muted-foreground">
+                      {c.description} <strong className="font-medium">Fix:</strong> {c.fix}
+                    </p>
+                    <div className="mt-2 overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
@@ -528,11 +602,12 @@ function ReturnRateAnomaliesCard({
                               </td>
                             </tr>
                           ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CollapsibleSection>
+                ))}
+            </div>
           </div>
         )}
       </CardContent>
@@ -636,6 +711,13 @@ function MissingTagsCard({
             None — every active customer carries a {year} tag. 🎉
           </p>
         ) : (
+          // Short list → show it; long list → collapse it (same pattern as the
+          // anomalies card). The stat line in the header stays visible either way.
+          <MaybeCollapsible
+            collapse={rows.length > COLLAPSE_OVER_ROWS}
+            label={`Active customers with no ${year} tag`}
+            count={rows.length}
+          >
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -682,6 +764,7 @@ function MissingTagsCard({
               </tbody>
             </table>
           </div>
+          </MaybeCollapsible>
         )}
       </CardContent>
     </Card>
