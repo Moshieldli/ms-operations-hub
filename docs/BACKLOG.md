@@ -19,36 +19,55 @@
       now completed-service-based ("served in Y, receiving in Y+1"), single rate per pair, no dual
       denominator. On-Hold counts as returned (paused ≠ cancelled). See REFERENCE §5.8 / §9 #8.
 
-## Blocked (waiting on the user)
-- [ ] **Import RealGreen dump → unblock 24→25 return rate.** HISTORY: the company ran **RealGreen
-      before Pocomos; Pocomos data starts 2025**, so 2024 service history does not exist in Pocomos
-      at all — 24→25 is not computable from anything we hold and the card shows "n/a"
-      (`reliable=false`). The user will supply a **RealGreen data dump** of 2024 service history.
-      When it lands: map its customers to `pocomos_id` (name/address/phone match — RealGreen ids
-      won't join), backfill 2024 rows into `mosquito_service_counts` (`service_count`,
-      `first_service_date`, `last_service_date` — the rev-17 rule needs the dates), mark those rows
-      as dump-sourced so the nightly scrape can't prune them (the current prune drops ids outside
-      the live cohort), then flip `reliable` for `fromYear === CY-2`. See REFERENCE §5.8 / §9 #8.
-
 ## Ready to build (unblocked) — accuracy follow-ups
-- [ ] Return-rate full-history source (NOT a 24→25 fix — 2024 is pre-Pocomos, see the RealGreen item
-      above). The Pocomos service-history table renders only the most recent ~30 services (~1 season),
-      so any from-year older than CY-1 collapses even within the Pocomos era. To widen the window:
-      parse the PDF export (/customer/{id}/contract/{cid}/history/download → application/pdf) or find
-      a paginated/date-ranged services endpoint. Probe: scripts/probe-history-window.ts.
-      See REFERENCE §5.8 / §9 #8.
-- [ ] Return-rate coverage gap: 7 customers in the old Returning box have no readable mosquito
-      service history (`table_ok=false` — their default rendered contract isn't the mosquito one), so
-      rule 1 can't confirm them and they fail closed out of the box/denominator. ~0.4% of the box.
-      To fix we'd need to read a NON-default contract's history without switching the customer's
-      active contract (READ-ONLY constraint). Low priority; documented in REFERENCE §5.8.
+- [ ] **Duplicate web records distort the return rate by +3 (≈0.2pp).** Pocomos spawns a NEW customer
+      record on lead conversion instead of reusing the old one, so one human can hold 2+ web ids
+      (113 emails cover 238 records). The bulk export knows them as ONE short id, so its counts land
+      on a single twin (idMap prefers active → most-recently-serviced) and the twin shows a phantom
+      zero. Measured impact: exactly 3 customers are 2025-real non-returners whose TWIN returned
+      (numerator 948 → 951, 77.3% → 77.5%). Fix = a household/identity merge (group web ids by
+      email+address, union their counts+tags before the rule runs). Also inflates the cosmetic
+      "zero-2025" tally (42 → 76). See REFERENCE §5.8 "Known artifact".
+- [ ] **~26 unresolved short ids in `customer_id_map`** — same email AND name across several web
+      records, so every tie-break ties. They fail closed: their jobs are dropped (151 jobs/21 ids in
+      2024, 93/12 in 2025 ≈ 1%), so those customers are missing from the denominator. Fix likely
+      falls out of the identity-merge item above. See REFERENCE §5.9.
+- [ ] Marketing-source analysis now that `realgreen_jobs_2024.SourceCode`/`SourceDescription` are
+      loaded (33 distinct: "Friends & Family", "Direct Contact", "Previous Customer", "Affliate",
+      "Newspaper Insert", …). Pairs with the existing "Top converting lead sources" item.
 
 ## Worklist / cleanup (not code)
 - [ ] Apply a 2026 tag (or confirm cancellation) for the **10 Missing-tag active customers** on
       `/sales` → Missing tags (8 carry a 2025 tag = not renewed; 2 have no prior-year tag at all,
       flagged "no prior tag"). Live roster is on the card (name/id/tags/last service/Profile).
 
+## Recurring (yearly ritual)
+- [ ] **When a season ENDS, move it from scrape to export.** `scrapedYears()` returns `[CY]` only;
+      every older year MUST be export-backed or it silently reverts to the broken contract-scoped
+      scrape. Steps: pull the Pocomos completed-jobs CSV for the whole year (ALL branches —
+      Westchester exists from 2026; 2025 was LI-only because Westchester hadn't started), drop it in
+      `data/`, add a loader branch, run `scripts/load-exports.ts` then `scripts/verify-rev18.ts`.
+      Full ritual + gotchas (\r\r line endings, M/D/YY dates) → REFERENCE §5.9.
+
 ## Done (recent)
+- [x] **Return-rate counts from bulk exports; 24→25 UNBLOCKED (rev 18, 2026-07-16)** — completed
+      seasons now come from authoritative job-level exports (2024 RealGreen dump *received+loaded*,
+      2025 Pocomos completed-jobs); only CY is scraped. Retires BOTH blockers: the pre-Pocomos 2024
+      gap and the scrape's contract-scoped blind spot (Sherly Aminzadeh: scrape 2025 = 0, export = 6).
+      **24→25 = 77.8% (993/1,276) LIVE** (was n/a since rev 15). **25→26 = 77.3% (948/1,227)** vs
+      rev-17 75.9% (976/1,286) = +1.4pp. Returning box 948, still === numerator. New tables
+      `realgreen_jobs_2024`, `completed_jobs_2025`, `customer_id_map` (short↔web built from contact
+      details — Pocomos exposes the short id nowhere; 1,609/~1,635 mapped). New
+      `mosquito_service_counts.source` + invariant "export years hold only export rows" (evicted 28
+      2024 / 96 2025 stale scrape rows). Tag path narrowed to the in-progress season only. RealGreen
+      codes validated empirically (12→Mosquito, 12N→Natural, 24→Mosquito-Weekly, 24N→Natural-Weekly;
+      all mosquito). See §5.9.
+- [x] **Import RealGreen dump → unblock 24→25 return rate** — DONE in rev 18 (above). The dump
+      arrived 2026-07-16 and is loaded; 24→25 is live at 77.8%.
+- [x] Return-rate full-history source / `table_ok=false` coverage gap — OBSOLETE as of rev 18. Both
+      were artifacts of counting completed seasons from the per-customer scrape; the bulk exports are
+      contract-agnostic, so the ~1-season render window and the unreadable-default-table gate no
+      longer affect 2024/2025 at all. The PDF path is dead (ops: never accurate — REFERENCE §5.8).
 - [x] **Return-rate + Returning-box unification (rev 17, 2026-07-16)** — ops-canonical. (1) "Real
       customer of Y" REVERSED from rev 16: ≥2 completed mosquito services in Y, OR exactly 1 dated
       AFTER Aug 15 (late-season signup); a single early/mid-season spray no longer counts. New

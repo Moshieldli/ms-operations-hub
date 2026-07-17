@@ -39,10 +39,25 @@ import { isMosquitoServiceType, renderedTableIsMosquito } from "./mosquito";
 const SCRAPE_CONCURRENCY = 5; // Pocomos hard cap
 const PER_REQUEST_PAUSE_MS = 150;
 
-/** Years the return-rate metric needs counts for: [CY-2, CY-1, CY]. */
+/**
+ * Years the return-rate metric needs counts for: [CY-2, CY-1, CY].
+ * CY-2/CY-1 are filled from the bulk exports (source='export'); only CY is
+ * scraped — see SCRAPED_YEARS.
+ */
 export function returnRateYears(): number[] {
   const cy = Number(CURRENT_YEAR);
   return [cy - 2, cy - 1, cy];
+}
+
+/**
+ * Years the SCRAPE owns (rev 18). Completed seasons come from authoritative bulk
+ * exports (exportLoad.ts) and are stored with source='export'; the scrape must
+ * never write or prune them — the service-history table only renders a
+ * customer's DEFAULT contract, so it under-reports any season that sits on an
+ * older/cancelled contract. Only the in-progress current year is scrape-backed.
+ */
+export function scrapedYears(): number[] {
+  return [Number(CURRENT_YEAR)];
 }
 
 export interface CohortMember {
@@ -154,7 +169,7 @@ export async function refreshServiceCounts(
   const startedAt = new Date().toISOString();
   const budgetMs = options.budgetMs ?? 250_000;
   const maxCustomers = options.maxCustomers ?? 5000;
-  const years = returnRateYears();
+  const scrapeYears = scrapedYears(); // CY only — completed seasons come from exports
   await initSchema();
 
   const cohort = await buildServiceCountCohort();
@@ -167,7 +182,13 @@ export async function refreshServiceCounts(
   const stale = scrapedRows.map((r) => String(r.pocomos_id)).filter((id) => !cohortIds.has(id));
   if (stale.length) {
     await sql`DELETE FROM mosquito_service_scrape WHERE pocomos_id = ANY(${stale})`;
-    await sql`DELETE FROM mosquito_service_counts WHERE pocomos_id = ANY(${stale})`;
+    // Prune ONLY scrape-owned rows: export rows are ground truth for completed
+    // seasons and must survive a customer leaving the current-year cohort (a
+    // churned 2025 customer is exactly who the 25→26 denominator needs).
+    await sql`
+      DELETE FROM mosquito_service_counts
+      WHERE pocomos_id = ANY(${stale}) AND source = 'scrape'
+    `;
   }
 
   const scrapedAt = new Map<string, string>();
@@ -202,19 +223,24 @@ export async function refreshServiceCounts(
     const parsed = parseServiceHistory(html);
     const ok = renderedTableIsMosquito(parsed.tableContractLabel, parsed.selectedContractLabel);
     if (ok) {
-      const summary = summarizeCompletedByYear(parsed.rows, years);
-      await sql`DELETE FROM mosquito_service_counts WHERE pocomos_id = ${m.id}`;
-      for (const y of years) {
+      const summary = summarizeCompletedByYear(parsed.rows, scrapeYears);
+      // Scrape-owned years only — never touch export rows (ground truth).
+      await sql`
+        DELETE FROM mosquito_service_counts
+        WHERE pocomos_id = ${m.id} AND year = ANY(${scrapeYears}) AND source = 'scrape'
+      `;
+      for (const y of scrapeYears) {
         const s = summary[y];
         if (s.count > 0) {
           await sql`
             INSERT INTO mosquito_service_counts
-              (pocomos_id, year, service_count, first_service_date, last_service_date)
-            VALUES (${m.id}, ${y}, ${s.count}, ${s.first}, ${s.last})
+              (pocomos_id, year, service_count, first_service_date, last_service_date, source)
+            VALUES (${m.id}, ${y}, ${s.count}, ${s.first}, ${s.last}, 'scrape')
             ON CONFLICT (pocomos_id, year) DO UPDATE SET
               service_count = EXCLUDED.service_count,
               first_service_date = EXCLUDED.first_service_date,
-              last_service_date = EXCLUDED.last_service_date
+              last_service_date = EXCLUDED.last_service_date,
+              source = 'scrape'
           `;
         }
       }
@@ -265,6 +291,13 @@ export interface ServiceCountsData {
   scraped: Set<string>;
   /** pocomos_ids scraped with table_ok=true (counts are trustworthy). */
   tableOk: Set<string>;
+  /**
+   * Years whose counts came from an authoritative bulk export (rev 18). For
+   * these, absence of a row means a REAL zero (the export covers every customer
+   * and every contract), so the scrape-coverage gate (`tableOk`) must NOT be
+   * applied — it would fail-closed on customers the export knows perfectly well.
+   */
+  exportYears: Set<number>;
 }
 
 /** Coerce a DB DATE (Date | "YYYY-MM-DD..." string) to an ISO "YYYY-MM-DD" or null. */
@@ -284,7 +317,7 @@ function isoDate(v: unknown): string | null {
 export async function getServiceCountsData(): Promise<ServiceCountsData> {
   await initSchema();
   const countRows = (await sql`
-    SELECT pocomos_id, year, service_count, first_service_date, last_service_date
+    SELECT pocomos_id, year, service_count, first_service_date, last_service_date, source
     FROM mosquito_service_counts
   `) as Array<{
     pocomos_id: string;
@@ -292,6 +325,7 @@ export async function getServiceCountsData(): Promise<ServiceCountsData> {
     service_count: number;
     first_service_date: unknown;
     last_service_date: unknown;
+    source: string;
   }>;
   const scrapeRows = (await sql`
     SELECT pocomos_id, table_ok FROM mosquito_service_scrape
@@ -299,9 +333,11 @@ export async function getServiceCountsData(): Promise<ServiceCountsData> {
   const counts = new Map<string, Record<number, number>>();
   const firstDates = new Map<string, Record<number, string>>();
   const lastDates = new Map<string, Record<number, string>>();
+  const exportYears = new Set<number>();
   for (const r of countRows) {
     const id = String(r.pocomos_id);
     const y = Number(r.year);
+    if (r.source === "export") exportYears.add(y);
     const rec = counts.get(id) ?? {};
     rec[y] = Number(r.service_count);
     counts.set(id, rec);
@@ -324,5 +360,5 @@ export async function getServiceCountsData(): Promise<ServiceCountsData> {
     scraped.add(String(r.pocomos_id));
     if (r.table_ok) tableOk.add(String(r.pocomos_id));
   }
-  return { counts, firstDates, lastDates, scraped, tableOk };
+  return { counts, firstDates, lastDates, scraped, tableOk, exportYears };
 }

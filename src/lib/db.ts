@@ -158,6 +158,78 @@ export async function initSchema(): Promise<void> {
   // Cover environments where the table predates these columns.
   await c`ALTER TABLE mosquito_service_counts ADD COLUMN IF NOT EXISTS first_service_date DATE`;
   await c`ALTER TABLE mosquito_service_counts ADD COLUMN IF NOT EXISTS last_service_date DATE`;
+  // Added 2026-07-16 (rev 18): where a year's counts came from.
+  //   'scrape'  = per-customer service-history scrape (the in-progress CY only)
+  //   'export'  = an authoritative bulk export (2025 Pocomos completed-jobs,
+  //               2024 RealGreen). Export rows are GROUND TRUTH and must never be
+  //               pruned or overwritten by the nightly scrape — see
+  //               serviceCounts.ts (it now touches year=CY / source='scrape' only).
+  await c`ALTER TABLE mosquito_service_counts ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'scrape'`;
+
+  // ---- Bulk ground-truth exports (rev 18) ----
+  // Raw-ish landing tables for the two authoritative job exports. Kept beyond the
+  // return-rate rebuild because they carry marketing-source fields we want for
+  // later source analysis. Reloadable: each loader truncates its own table.
+  await c`
+    CREATE TABLE IF NOT EXISTS completed_jobs_2025 (
+      invoice_no TEXT,
+      short_id TEXT NOT NULL,
+      customer_name TEXT,
+      email TEXT,
+      phone TEXT,
+      address TEXT,
+      zip TEXT,
+      job_type TEXT,
+      lot_size TEXT,
+      service_type TEXT,
+      service_frequency TEXT,
+      agreement TEXT,
+      technician TEXT,
+      completed_date DATE,
+      branch TEXT
+    )
+  `;
+  await c`CREATE INDEX IF NOT EXISTS completed_jobs_2025_short_id_idx ON completed_jobs_2025 (short_id)`;
+  await c`
+    CREATE TABLE IF NOT EXISTS realgreen_jobs_2024 (
+      short_id TEXT NOT NULL,
+      customer_name TEXT,
+      first_name TEXT,
+      last_name TEXT,
+      email TEXT,
+      phone TEXT,
+      address TEXT,
+      zip TEXT,
+      done_date DATE,
+      program_or_service_code TEXT,
+      service_code TEXT,
+      program_type TEXT,
+      source_code TEXT,
+      source_description TEXT,
+      route_code TEXT,
+      program_route_code TEXT,
+      since_date DATE,
+      customer_last_service_date DATE,
+      discount_code TEXT,
+      billing_type_description TEXT
+    )
+  `;
+  await c`CREATE INDEX IF NOT EXISTS realgreen_jobs_2024_short_id_idx ON realgreen_jobs_2024 (short_id)`;
+  // short_id (the 6-digit customer number used by BOTH exports) → pocomos web id
+  // (the 7-digit id everything else in this app keys on). Pocomos exposes NO
+  // short id on any API/bulk surface, so this map is built by matching contact
+  // details — see lib/service/idMap.ts.
+  await c`
+    CREATE TABLE IF NOT EXISTS customer_id_map (
+      short_id TEXT PRIMARY KEY,
+      pocomos_id TEXT NOT NULL,
+      match_method TEXT NOT NULL,
+      confidence TEXT NOT NULL,
+      matched_on TEXT,
+      built_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await c`CREATE INDEX IF NOT EXISTS customer_id_map_pocomos_idx ON customer_id_map (pocomos_id)`;
   // Coverage tracker: which cohort members have been scraped, and whether the
   // rendered service-history table was actually their mosquito contract
   // (table_ok=false = add-on customer whose default table isn't mosquito → we

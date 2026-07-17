@@ -49,3 +49,6 @@ docs/active-with-phone.csv
 
 # local Claude Code settings
 .claude/settings.local.json
+
+# Bulk ground-truth exports (large; loaded into Neon, not tracked)
+data/

@@ -312,10 +312,12 @@ function ReturnRateCard({
           too late in the season to have had a second (Event Spray never counts).
           A single early- or mid-season spray is a one-off and doesn&rsquo;t
           count. A customer <strong>returned</strong> if they&rsquo;re a real
-          customer of the next season <em>or</em> they&rsquo;re still active with
-          that season&rsquo;s auto-renew / early-rebook / renewed tag (service
-          rolled over, spray not due yet). The current season is in progress, so
-          its rate climbs as the season runs.
+          customer of the next season — or, for the season still in progress
+          only, if they&rsquo;re active with that season&rsquo;s auto-renew /
+          early-rebook / renewed tag (service rolled over, spray not due yet).
+          Completed seasons don&rsquo;t need that allowance: their spray record is
+          final. The current season is in progress, so its rate climbs as the
+          season runs.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -378,12 +380,13 @@ function ReturnRateCard({
                     .map((p) => `${p.fromYear}→${p.toYear}: ${fmt(p.returnedByTag)} tag, ${fmt(p.returnedBySprayHistory)} sprays`)
                     .join("; ")}. `
                 : ""}
+              Completed seasons come from authoritative bulk job exports (2025
+              Pocomos completed-jobs, 2024 RealGreen — the system used before
+              Pocomos), which count every job on every contract. The in-progress
+              season is still read per-customer:{" "}
               {rr.computing
-                ? `Still computing: ${fmt(rr.covered)} of ${fmt(rr.cohortSize)} customers' histories scraped (${rr.coveragePct}%). Numbers firm up as coverage reaches 100%.`
-                : `Coverage ${rr.coveragePct}% (${fmt(rr.covered)}/${fmt(rr.cohortSize)}).`}{" "}
-              The service-history page only renders the most recent ~season of
-              services, so the current→prior pair is exact but earlier pairs
-              (2024→25) need a full-history source before they&rsquo;re valid.
+                ? `still computing — ${fmt(rr.covered)} of ${fmt(rr.cohortSize)} histories scraped (${rr.coveragePct}%). Numbers firm up as coverage reaches 100%.`
+                : `coverage ${rr.coveragePct}% (${fmt(rr.covered)}/${fmt(rr.cohortSize)}).`}
             </p>
           </div>
         )}

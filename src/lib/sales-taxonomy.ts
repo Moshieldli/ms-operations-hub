@@ -293,20 +293,37 @@ async function computeReturnRatesAndBox(): Promise<{
     buildServiceCountCohort(),
     getServiceCountsData(),
   ]);
-  const cohortIds = cohort.map((m) => m.id);
   const byId = new Map(cohort.map((m) => [m.id, m]));
 
+  // UNIVERSE (rev 18) = the tag-based scrape cohort PLUS every customer the bulk
+  // exports know about. The cohort alone requires a mosquito contract carrying a
+  // {CY-2..CY} tag, which silently drops customers who churned after their
+  // season — exactly the population a return-rate DENOMINATOR is made of.
+  const universe = new Set<string>(cohort.map((m) => m.id));
+  for (const id of data.counts.keys()) universe.add(id);
+  const universeIds = [...universe];
+
   let covered = 0;
-  for (const id of cohortIds) if (data.scraped.has(id)) covered++;
+  for (const m of cohort) if (data.scraped.has(m.id)) covered++;
   const coveragePct = cohort.length ? Math.round((covered / cohort.length) * 1000) / 10 : 0;
 
-  const sprayCount = (id: string, y: number): number =>
-    data.tableOk.has(id) ? data.counts.get(id)?.[y] ?? 0 : 0;
+  /**
+   * Is year Y export-backed (authoritative), or scrape-backed?
+   * Export years need NO scrape-coverage gate: the export covers every customer
+   * and every contract, so a missing row is a true zero. Scrape years keep the
+   * table_ok gate — an unreadable mosquito table means counts are unknown, not
+   * zero, so those customers must fail closed.
+   */
+  const isExportYear = (y: number) => data.exportYears.has(y);
+  const countsKnown = (id: string, y: number): boolean =>
+    isExportYear(y) || data.tableOk.has(id);
 
-  // Rule 1 — real customer of Y by SPRAY HISTORY alone. Requires table_ok (an
-  // unreadable mosquito table means counts are unknown, not zero).
+  const sprayCount = (id: string, y: number): number =>
+    countsKnown(id, y) ? data.counts.get(id)?.[y] ?? 0 : 0;
+
+  // Rule 1 — real customer of Y by SPRAY HISTORY alone.
   const isReal = (id: string, y: number): boolean => {
-    if (!data.tableOk.has(id)) return false;
+    if (!countsKnown(id, y)) return false;
     const count = sprayCount(id, y);
     if (count >= REAL_CUSTOMER_MIN_SERVICES) return true;
     if (count !== 1) return false;
@@ -321,15 +338,28 @@ async function computeReturnRatesAndBox(): Promise<{
   const isLateSignup = (id: string, y: number): boolean =>
     sprayCount(id, y) === 1 && isReal(id, y);
 
-  // Rule 2's tag path — an ACTIVE customer whose service rolled into year Y.
+  /**
+   * Rule 2's tag path — an ACTIVE customer whose service rolled into year Y.
+   *
+   * ONLY applies to the IN-PROGRESS season (rev 18). The tag path exists to
+   * rescue customers whose service has rolled over but who simply haven't been
+   * sprayed YET; that can only be true of the season we're living in. For a
+   * COMPLETED, export-backed season the spray record is final and complete, so a
+   * customer with a continuation tag but no sprays genuinely did not get served
+   * — counting their tag would resurrect the exact stale-tag bug (rev 14) the
+   * active-status check was added to kill.
+   */
+  const tagPathApplies = (y: number) => y === cy && !isExportYear(y);
   const hasContinuationTag = (id: string, y: number): boolean => {
+    if (!tagPathApplies(y)) return false;
     const m = byId.get(id);
     if (!m || !m.active) return false; // stale tag on a cancelled customer ≠ return
     const tags = new Set(m.tags);
     return CONTINUATION_TAGS_ALL.some((t) => tags.has(`${y} - ${t}`));
   };
 
-  // Rule 2 — RETURNED in year Y: real by sprays, OR active with a Y continuation tag.
+  // Rule 2 — RETURNED in year Y: real by sprays, OR (in-progress season only) an
+  // active customer carrying a Y continuation tag.
   const hasReturned = (id: string, y: number): boolean =>
     isReal(id, y) || hasContinuationTag(id, y);
 
@@ -341,7 +371,7 @@ async function computeReturnRatesAndBox(): Promise<{
     let returnedByTag = 0;
     let lateSignupsFrom = 0;
     let lateSignupsTo = 0;
-    for (const id of cohortIds) {
+    for (const id of universeIds) {
       if (isLateSignup(id, fromN)) lateSignupsFrom++;
       if (isLateSignup(id, toN)) lateSignupsTo++;
       if (!isReal(id, fromN)) continue; // denominator = rule 1 only
@@ -361,9 +391,14 @@ async function computeReturnRatesAndBox(): Promise<{
       returnedByTag,
       lateSignupsFrom,
       lateSignupsTo,
-      // Only the prior→current pair is inside the service-history window; older
-      // from-years are truncated (see ReturnRatePair.reliable / §5.8).
-      reliable: fromN >= cy - 1,
+      /**
+       * Reliable once the FROM-year has an authoritative source. Both completed
+       * seasons are now export-backed (2024 RealGreen, 2025 Pocomos), so both
+       * pairs are live — this replaces the rev-17 `fromN >= cy-1` guard, which
+       * existed only because the scrape's service-history window truncated
+       * anything older than ~1 season.
+       */
+      reliable: isExportYear(fromN) || fromN >= cy - 1,
     });
   }
 
@@ -378,7 +413,7 @@ async function computeReturnRatesAndBox(): Promise<{
     priorYearReal: 0,
     nonActive: 0,
   };
-  for (const id of cohortIds) {
+  for (const id of universeIds) {
     if (!isReal(id, cy - 1)) continue;
     box.priorYearReal++;
     if (!hasReturned(id, cy)) continue;
