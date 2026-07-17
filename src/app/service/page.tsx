@@ -36,10 +36,11 @@ const reports: ServiceReport[] = [
     status: "soon",
   },
   {
-    href: "/service/tech-respray",
+    href: "/service/resprays",
     title: "Tech Respray Performance",
-    description: "Respray rate by technician.",
-    status: "soon",
+    description:
+      "Respray rate by technician — a re-service within 10 days of that tech's spray.",
+    status: "live",
   },
 ];
 

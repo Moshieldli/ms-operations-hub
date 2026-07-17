@@ -73,6 +73,24 @@
       instead of needing the pb_contact_id bridge.
 
 ## Done (recent)
+- [x] **NEW `/service/resprays` "Tech Respray Performance" (rev 21, 2026-07-17)** — respray rate by
+      tech from the Pocomos completed-jobs report (Symfony form POST → server-rendered
+      `#results-table`; ONE POST = whole year, 6,246 rows in 3.2s, no per-customer scrape). Ops
+      rules on the card: respray = re-service ≤10d after that customer's prior mosquito application,
+      blamed on that prior spray's tech; 11+d = normal cadence (11–17d), not counted; CY only.
+      **Live: 97 re-service jobs · 69 counted · 28 excluded · 0 unattributed · 5,294 apps · team
+      1.30%.** Only Nicholas Rosales flagged (2.59%, 1.99× team, 1,041 apps; flag = ≥1.5× avg AND
+      ≥30 apps). Cache `respray_jobs` + cron `0 8 * * *` + Refresh-now. Flipped the `/service`
+      "Tech Respray Performance" stub live. See §5.12.
+- [x] **`/leads` "Updated 749h ago" FIXED (rev 21)** — root cause: the close-rate cache had **no
+      cron**; `refreshCloseRate` only ran from the manual Refresh button or on GET when the row was
+      *missing*, so a stale-but-present row survived forever (~31 days). NOT conversion-sweep (that
+      only does PhoneBurner folder moves). Added cron `/api/cron/close-rate` `0 9 * * *` and
+      refreshed (424 leads · 113 conversions · 26.7%). See §5.13.
+- [x] **Leads nav dropdown (rev 21)** — Close rate + Follow-ups; click-driven (works on touch,
+      closes on outside-click/Escape/navigation); Leads tab highlights on any `/leads/*` page.
+      `CollapsibleSection` extracted to `components/ui/collapsible-section.tsx`, shared by /sales +
+      /service/resprays.
 - [x] **NEW `/leads/followup` "Overdue Follow-ups" page (rev 20, 2026-07-17)** — open leads created
       this year (status=Lead + date_added in CY; 288 live), classified by follow-up task state:
       **Overdue 1 · No task 92 · No open task 185 · On track 10**. Nightly cron `0 7 * * *` →

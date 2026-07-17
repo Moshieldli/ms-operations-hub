@@ -166,6 +166,24 @@ export async function initSchema(): Promise<void> {
   //               serviceCounts.ts (it now touches year=CY / source='scrape' only).
   await c`ALTER TABLE mosquito_service_counts ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'scrape'`;
 
+  // ---- /service/resprays cache (rev 21) ----
+  // Every completed MOSQUITO job this year (Initial / Regular / Re-service),
+  // parsed from the Pocomos completed-jobs report. Truncate-and-reload from one
+  // form POST; the page computes attribution on read (cheap — ~5.4k rows).
+  await c`
+    CREATE TABLE IF NOT EXISTS respray_jobs (
+      invoice_no TEXT PRIMARY KEY,
+      customer_id TEXT NOT NULL,
+      customer_name TEXT,
+      technician TEXT,
+      job_type TEXT NOT NULL,
+      service_type TEXT,
+      completed_date DATE NOT NULL
+    )
+  `;
+  await c`CREATE INDEX IF NOT EXISTS respray_jobs_customer_idx ON respray_jobs (customer_id, completed_date)`;
+  await c`CREATE INDEX IF NOT EXISTS respray_jobs_tech_idx ON respray_jobs (technician)`;
+
   // ---- /leads/followup cache (rev 20) ----
   // Open THIS-YEAR leads + their follow-up task state. Filled by the nightly
   // cron (/api/cron/leads-followup) or "Refresh now"; the page only ever reads.

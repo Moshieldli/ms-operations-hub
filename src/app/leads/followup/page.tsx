@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { FollowupView } from "@/components/followup-view";
 import { getFollowupReport, type FollowupReport } from "@/lib/leads/followup";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,19 +33,5 @@ export default async function LeadsFollowupPage() {
     );
   }
 
-  return (
-    <div className="space-y-4">
-      {/* Sub-nav: the Leads section now has more than one report. */}
-      <div className="flex gap-4 text-sm">
-        <Link
-          href="/leads"
-          className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-        >
-          &larr; Close rate
-        </Link>
-        <span className="font-medium">Overdue follow-ups</span>
-      </div>
-      <FollowupView initial={report} />
-    </div>
-  );
+  return <FollowupView initial={report} />;
 }

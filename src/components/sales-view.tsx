@@ -14,6 +14,7 @@ import { useSalesTaxonomy } from "@/components/use-sales-taxonomy";
 import type { SalesSummary } from "@/lib/sales-data";
 import type { SalesTaxonomy } from "@/lib/sales-taxonomy";
 import { cn } from "@/lib/utils";
+import { CollapsibleSection, MaybeCollapsible } from "@/components/ui/collapsible-section";
 
 const POCOMOS_BASE = "https://mypocomos.net";
 
@@ -22,74 +23,6 @@ const POCOMOS_BASE = "https://mypocomos.net";
  * three rows behind a click is worse than just showing them.
  */
 const COLLAPSE_OVER_ROWS = 8;
-
-/**
- * Collapsible section: header row (label + count + chevron), collapsed by
- * default, click to expand. Built on native <details>/<summary> so keyboard,
- * screen readers and find-in-page behave without any JS state.
- *
- * `defaultOpen` renders it expanded (used when a list is short enough that
- * collapsing it would just be friction).
- */
-function CollapsibleSection({
-  label,
-  count,
-  defaultOpen = false,
-  children,
-}: {
-  label: React.ReactNode;
-  count: number;
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <details className="group rounded-md border" open={defaultOpen}>
-      <summary
-        className={cn(
-          "flex cursor-pointer list-none items-center gap-2 rounded-md px-3 py-2",
-          "hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          "[&::-webkit-details-marker]:hidden"
-        )}
-      >
-        <svg
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-          className="h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-150 group-open:rotate-90"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="m9 18 6-6-6-6" />
-        </svg>
-        <span className="text-sm font-medium">{label}</span>
-        <span className="ml-auto text-sm tabular-nums text-muted-foreground">{fmt(count)}</span>
-      </summary>
-      <div className="border-t px-3 pb-3 pt-2">{children}</div>
-    </details>
-  );
-}
-
-/** Collapse `children` behind a header only when `collapse` is true. */
-function MaybeCollapsible({
-  collapse,
-  label,
-  count,
-  children,
-}: {
-  collapse: boolean;
-  label: React.ReactNode;
-  count: number;
-  children: React.ReactNode;
-}) {
-  if (!collapse) return <>{children}</>;
-  return (
-    <CollapsibleSection label={label} count={count}>
-      {children}
-    </CollapsibleSection>
-  );
-}
 
 function fmt(n: number) {
   return n.toLocaleString("en-US");
@@ -547,7 +480,7 @@ function ReturnRateAnomaliesCard({
               {an.classes
                 .filter((c) => c.count > 0)
                 .map((c) => (
-                  <CollapsibleSection key={c.key} label={c.label} count={c.count}>
+                  <CollapsibleSection key={c.key} label={c.label} right={fmt(c.count)}>
                     <p className="text-xs leading-snug text-muted-foreground">
                       {c.description} <strong className="font-medium">Fix:</strong> {c.fix}
                     </p>
@@ -716,7 +649,7 @@ function MissingTagsCard({
           <MaybeCollapsible
             collapse={rows.length > COLLAPSE_OVER_ROWS}
             label={`Active customers with no ${year} tag`}
-            count={rows.length}
+            right={fmt(rows.length)}
           >
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
