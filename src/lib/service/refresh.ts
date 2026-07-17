@@ -37,6 +37,7 @@ import {
 } from "./serviceHistory";
 import { fetchAllCustomersLastService } from "./customersData";
 import { fetchOpenBalances } from "./openBalance";
+import { refreshResprays } from "./resprays";
 import {
   selectEligible,
   computeMosquitoStatus,
@@ -87,6 +88,8 @@ export interface RefreshMeta {
   asapFound: number;
   asapFailed: number;
   asapDurationMs: number;
+  /** True if the completed-jobs cache (respray_jobs) was refreshed this run — feeds sprayed-today. */
+  completedJobsRefreshed: boolean;
   /** Customers found in the unpaid-invoices report (telemetry). */
   balanceCustomers: number;
   /** Sum of all open balances across eligible customers (telemetry). */
@@ -447,6 +450,24 @@ export async function refreshMosquitoStatus(
   const routeDurationMs = Date.now() - routeStart;
   const routesPending = Math.max(0, routeCandidates.length - routesScraped);
 
+  // ---- Completed-jobs phase: refresh the respray_jobs cache (one cheap POST to
+  //      the completed-jobs report, ~3s) so the read side's SPRAYED-TODAY rescue
+  //      reflects TODAY's completions. Without this, a "Refresh now" on
+  //      /service/overdue wouldn't pick up a customer sprayed an hour ago, and
+  //      they'd stay wrongly overdue. Guarded: a completed-jobs hiccup must not
+  //      fail the whole overdue refresh (the sprayed-today rescue just uses
+  //      whatever respray_jobs already holds). Shares the table with
+  //      /service/resprays — both refreshes are idempotent truncate+reloads. ----
+  let completedJobsRefreshed = false;
+  try {
+    await refreshResprays();
+    completedJobsRefreshed = true;
+  } catch (e) {
+    console.error(
+      JSON.stringify({ event: "mosquito.status.completedJobs.error", error: (e as Error).message })
+    );
+  }
+
   // ---- ASAP phase: for CURRENTLY-OVERDUE rows only (keeps it cheap — ~overdue
   //      count, not the whole eligible set), scrape /scheduled-services and flag
   //      rows with an upcoming job on an ASAP route. Those are being caught up,
@@ -503,6 +524,7 @@ export async function refreshMosquitoStatus(
     asapFound,
     asapFailed,
     asapDurationMs,
+    completedJobsRefreshed,
     balanceCustomers: balances.byId.size,
     openBalanceTotal: balances.totalBalance,
     reachedEndOfQueue: !budgetHit && work.length === toScrape.length,
@@ -538,11 +560,26 @@ export interface MosquitoStatusRow {
    * green "Scheduled today" section and excluded from the overdue count.
    */
   scheduled_today: boolean;
+  /**
+   * True when this overdue row got a COMPLETED mosquito service TODAY (Eastern)
+   * per the completed-jobs cache (respray_jobs). Computed at READ time so "today"
+   * tracks the viewing day. Pulled into the green "Sprayed today" section and
+   * excluded from the overdue count — takes precedence over scheduled_today
+   * (the spray is done, not merely booked).
+   */
+  sprayed_today: boolean;
   last_checked_at: string;
 }
 
 export interface OverdueReport {
   overdue: MosquitoStatusRow[];
+  /**
+   * Overdue rows that ALREADY got a completed mosquito service TODAY (Eastern),
+   * per the completed-jobs cache — own section, green, not counted. Catches the
+   * common case the scheduled-today rule misses: a customer sprayed today whose
+   * bulk `next_service_date` is a stale PAST slot Pocomos never advanced.
+   */
+  sprayedToday: MosquitoStatusRow[];
   /** Overdue rows whose next service is today (Eastern) — own section, green, not counted. */
   scheduledToday: MosquitoStatusRow[];
   /** Overdue rows with an upcoming ASAP-route job — own section, not counted. */
@@ -556,6 +593,8 @@ export interface OverdueReport {
     needsCheck: number;
     pausedBalance: number;
     excludedNew: number;
+    /** Overdue rows with a completed mosquito service today — excluded from `overdue`. */
+    sprayedToday: number;
     /** Overdue rows whose next_service_date is today (Eastern) — excluded from `overdue`. */
     scheduledToday: number;
     /** Overdue rows on an ASAP route — excluded from `overdue`. */
@@ -600,6 +639,7 @@ function normalizeRow(r: Record<string, unknown>): MosquitoStatusRow {
     route_code: (r.route_code as string) ?? null,
     asap_route: r.asap_route === true,
     scheduled_today: false, // set at read time in getOverdueReport
+    sprayed_today: false, // set at read time in getOverdueReport
     last_checked_at:
       r.last_checked_at instanceof Date
         ? (r.last_checked_at as Date).toISOString()
@@ -628,16 +668,32 @@ export async function getOverdueReport(): Promise<OverdueReport> {
       return b.days_since - a.days_since;
     });
 
-  // Two read-time rescues pull rows out of the overdue count (both are being
-  // handled): (1) scheduled-today — next service is TODAY (Eastern); (2) ASAP —
-  // an upcoming job is assigned to an ASAP route (asap_route flag, scraped).
-  // Precedence: scheduled-today wins (more immediate), then ASAP, else overdue.
+  // Three read-time rescues pull rows out of the overdue count (all handled):
+  //   (1) sprayed-today — a COMPLETED mosquito service today (respray_jobs); the
+  //       spray is done, so this is the most definitive and wins.
+  //   (2) scheduled-today — next_service_date is TODAY (Eastern); booked.
+  //   (3) ASAP — an upcoming job on an ASAP route (asap_route flag, scraped).
+  // A customer sprayed today often has a STALE PAST next_service_date (Pocomos
+  // doesn't advance the bulk "Next Service" field after a slot passes), so (2)
+  // alone misses them — (1) is what catches the "serviced today but shows
+  // overdue" bug. Precedence: sprayed > scheduled > ASAP > overdue.
   const today = easternTodayIso();
+  const sprayedTodayIds = new Set(
+    (
+      (await sql`
+        SELECT DISTINCT customer_id FROM respray_jobs WHERE completed_date = ${today}
+      `) as Array<{ customer_id: string }>
+    ).map((r) => String(r.customer_id))
+  );
+  const sprayedTodayRows: MosquitoStatusRow[] = [];
   const scheduledTodayRows: MosquitoStatusRow[] = [];
   const asapRows: MosquitoStatusRow[] = [];
   const overdue: MosquitoStatusRow[] = [];
   for (const r of allOverdue) {
-    if (r.next_service_date === today) {
+    if (sprayedTodayIds.has(r.pocomos_id)) {
+      r.sprayed_today = true;
+      sprayedTodayRows.push(r);
+    } else if (r.next_service_date === today) {
       r.scheduled_today = true;
       scheduledTodayRows.push(r);
     } else if (r.asap_route) {
@@ -666,17 +722,19 @@ export async function getOverdueReport(): Promise<OverdueReport> {
 
   return {
     overdue,
+    sprayedToday: sprayedTodayRows,
     scheduledToday: scheduledTodayRows,
     asapRoute: asapRows,
     pausedBalance,
     needsCheck,
     counts: {
-      // Scheduled-today and ASAP rows are in their own arrays/sections — not counted here.
+      // Sprayed-today, scheduled-today and ASAP rows are in their own sections — not counted here.
       overdue: overdue.length,
       current: currentCount,
       needsCheck: needsCheck.length,
       pausedBalance: pausedBalance.length,
       excludedNew: excludedNewCount,
+      sprayedToday: sprayedTodayRows.length,
       scheduledToday: scheduledTodayRows.length,
       asapRoute: asapRows.length,
       total: all.length,

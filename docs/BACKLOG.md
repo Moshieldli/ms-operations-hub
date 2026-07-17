@@ -73,6 +73,14 @@
       instead of needing the pb_contact_id bridge.
 
 ## Done (recent)
+- [x] **`/service/overdue` "sprayed today but shows overdue" FIXED (rev 22, 2026-07-17)** — routes
+      109/209 customers showed overdue on the day they were sprayed. Causes: (1) overdue cache's
+      last-spray lags Pocomos's bulk "Last Service" (tech completions sync hours late); (2) bulk
+      `next_service_date` is a stale PAST slot, so the scheduled-today rule (`next==today`) misses
+      them. Fix: sprayed-today read-time rescue — cross-check `respray_jobs.completed_date =
+      easternToday` (mosquito-only); those rows go green + excluded, precedence sprayed > scheduled
+      > ASAP > overdue. `refreshMosquitoStatus` now refreshes `respray_jobs` so Refresh-now reflects
+      same-day sprays. Verified: 8 overdue rows sprayed 2026-07-17 all moved out, 0 left. See §5.5.
 - [x] **NEW `/service/resprays` "Tech Respray Performance" (rev 21, 2026-07-17)** — respray rate by
       tech from the Pocomos completed-jobs report (Symfony form POST → server-rendered
       `#results-table`; ONE POST = whole year, 6,246 rows in 3.2s, no per-customer scrape). Ops
