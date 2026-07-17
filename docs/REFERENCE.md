@@ -999,13 +999,20 @@ Invariants asserted by `scripts/run-resprays.ts`: per-tech resprays sum === coun
 
 **Public fleet-counts feed** (`lib/service/fleetCounts.ts`). Two public, read-only endpoints, **totals only, no names**, derived live from `mosquito_service_status` (the table the nightly `/api/cron/mosquito-status` job rebuilds — so "cached, refreshed by nightly jobs" with no extra table):
 - **`GET /api/fleet-counts`** → JSON `{ customer_total, service_total, weekly_count, vans_estimate, van_capacity_per_2wk, as_of }`.
-- **`GET /api/fleet-counts.csv`** → `customer_total,service_total\n{n},{n}\n` for Google Sheets.
+- **`GET /api/fleet-counts.csv`** → `customer_total,service_total\n{n},{n}\n` for Google Sheets (header + value row, two adjacent cells).
+- **`GET /api/fleet-counts/customers.csv`** → the customer_total number ALONE (`1156\n` — no header, no second column), for a sheet cell that already has its own header.
+- **`GET /api/fleet-counts/services.csv`** → the service_total number ALONE (`1175\n`).
 
 Definitions: **`customer_total`** = every eligible mosquito customer we service (`COUNT(*)` = the overdue page's "Eligible (mosquito)" total, all statuses). **`service_total`** = properties per TWO-WEEK period — `SUM(CASE WHEN is_weekly THEN 2 ELSE 1 END)`: each customer once, Weekly-cadence contracts (`is_weekly`, agreement/frequency contains "Weekly") **twice**. It is a **van-capacity gauge** (van ≈ 250 properties / 2 weeks), not a services-rendered count. **Live 2026-07-17: customer_total 1,156 · service_total 1,175 (19 weekly) · ≈4.7 vans.** Invariants (verified): `customer_total === getOverdueReport().counts.total`, `service_total === customer_total + weekly_count`.
 
-**Google Sheets formula** (values land in adjacent cells — put in `A1`, headers spill to `A1:B1`, numbers to `A2:B2`):
+**Google Sheets formulas.** Combined (values land in adjacent cells — put in `A1`, headers spill to `A1:B1`, numbers to `A2:B2`):
 ```
 =IMPORTDATA("https://ms-operations-hub.vercel.app/api/fleet-counts.csv")
+```
+Single-value (for cells that already have their own headers — each returns just the number):
+```
+=IMPORTDATA("https://ms-operations-hub.vercel.app/api/fleet-counts/customers.csv")
+=IMPORTDATA("https://ms-operations-hub.vercel.app/api/fleet-counts/services.csv")
 ```
 
 ---
