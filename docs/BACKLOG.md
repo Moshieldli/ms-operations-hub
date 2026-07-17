@@ -78,6 +78,15 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **Respray pack: RESPRAY-RULE-CHANGE + RESPRAY-WEEKLY + RESPRAY-CHAIN (rev 24, 2026-07-17)** —
+      **RESPRAY-RULE-CHANGE:** respray = ANY re-service this year (10-day window dropped); attributed
+      to the most recent prior mosquito job's tech, INCLUDING prior re-services (chain rule).
+      Denominator unchanged. **Team 1.30% → 1.84% (+29 resprays; 99 attributed, 3 chain, 0
+      unattributed)**; only Nicholas Rosales flagged (3.12%, 1.70×). **RESPRAY-WEEKLY:** "This week on
+      the board" leaderboard — current + last full week, per-tech stats, Best/Watch callouts (20+
+      apps), auto-stats (streaks, most-improved, perfect week). **RESPRAY-CHAIN:** chain badge in
+      drill-down rows (blamed prior job was itself a re-service) + "Repeat respray customers" card
+      (2+ resprays this year; 8 live). See §5.12.
 - [x] **Nav dropdowns + `/finance` + public fleet-counts feed (rev 23, 2026-07-17)** — Service and
       Sales became click-driven nav dropdowns (same `NavDropdown` as Leads; Service → Overdue
       sprays / Respray performance, Sales → Sales / Paused—open balance); new Finance tab. New

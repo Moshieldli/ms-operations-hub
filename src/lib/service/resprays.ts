@@ -14,17 +14,20 @@
  * office + start/end dates (**MM/DD/YY**) → parse `#results-table`. READ-ONLY:
  * the form POST is a report render, not a mutation.
  *
- * ATTRIBUTION RULES (ops-defined 2026-07-17 — also stated on the card):
- *  - CURRENT_YEAR only. Prior-year sprays are NEVER used, so a re-service early
- *    in January whose prior spray was last season is "unattributed", not blamed.
- *  - Normal cadence is 11-17 days. A `Re-service` job is a RESPRAY only when it
- *    lands <= RESPRAY_MAX_GAP_DAYS (10) after that customer's most recent prior
- *    completed mosquito APPLICATION this year (Initial/Regular, mosquito-family
- *    service type). It attributes to THAT prior spray's technician.
- *  - Gap >= 11 days → not a respray (that's normal cadence, not the prior tech's
- *    doing) → excluded from respray counts but still shown in the stat boxes.
- *  - No prior application this year → "unattributed" (shown, nobody blamed).
- *  - Rate per tech = attributed resprays ÷ his total mosquito applications YTD.
+ * ATTRIBUTION RULES (ops-canonical, rev 24 — 2026-07-17; supersedes the rev-21
+ * 10-day window, which is GONE):
+ *  - CURRENT_YEAR only. Prior-year jobs are NEVER used.
+ *  - A RESPRAY = ANY completed mosquito `Re-service` job this year. No gap
+ *    criteria at all — every re-service counts.
+ *  - Attribution: blame the technician of the customer's MOST RECENT PRIOR
+ *    completed mosquito job this year, where "prior jobs" INCLUDE both
+ *    Regular/Initial sprays AND prior Re-services (the CHAIN rule: Nick sprays →
+ *    Nathaniel re-services → Daniel re-services again ⇒ Daniel's respray blames
+ *    NATHANIEL, the most recent toucher, not the original sprayer).
+ *  - No prior mosquito job this year → "unattributed" (shown, nobody blamed).
+ *  - Rate per tech = attributed resprays ÷ his total mosquito APPLICATIONS
+ *    (Initial + Regular) YTD. (Denominator unchanged — re-services aren't in it.)
+ *  - Weekly bucketing stays keyed to the BLAMED job's week.
  */
 import { getSyncState, initSchema, setSyncState, sql } from "@/lib/db";
 import { CURRENT_YEAR } from "@/lib/pocomos";
@@ -34,17 +37,14 @@ import { isMosquitoServiceType } from "./mosquito";
 const REPORT_PATH = "/completed-jobs-report";
 const REFRESHED_AT_KEY = "resprays_refreshed_at";
 
-/** A Re-service within this many days of the prior spray is that tech's respray. */
-export const RESPRAY_MAX_GAP_DAYS = 10;
-/** Our normal spray cadence — why 11+ day gaps are NOT resprays. */
-export const CADENCE_MIN_DAYS = 11;
-export const CADENCE_MAX_DAYS = 17;
 /** Job types that count as a mosquito APPLICATION (the rate's denominator). */
 export const APPLICATION_JOB_TYPES = new Set(["initial", "regular"]);
 export const RESPRAY_JOB_TYPE = "re-service";
 /** Flag a tech only with enough volume to be meaningful, and only this far over. */
 export const FLAG_MIN_APPLICATIONS = 30;
 export const FLAG_RATE_MULTIPLE = 1.5;
+/** Minimum applications in a week for a tech to be eligible for a weekly callout. */
+export const WEEKLY_CALLOUT_MIN_APPS = 20;
 
 export interface RespJob {
   invoiceNo: string;
@@ -57,7 +57,7 @@ export interface RespJob {
 }
 
 /**
- * One counted respray, audit-ready: the customer, the tech's prior spray it's
+ * One counted respray, audit-ready: the customer, the prior mosquito job it's
  * blamed on, the re-service that followed, and the gap between them. Lets ops
  * click through to the Pocomos profile and judge whether it was a genuine
  * respray or something else on the account.
@@ -65,14 +65,59 @@ export interface RespJob {
 export interface ResprayDetail {
   customerId: string;
   customerName: string;
-  /** The prior mosquito application BY THIS TECH, ISO date. */
-  priorSprayDate: string;
+  /** The blamed prior mosquito job's date (ISO). */
+  priorJobDate: string;
+  /** The blamed prior job's type ("Regular"/"Initial"/"Re-service"). */
+  priorJobType: string;
+  /** Technician of the blamed prior job (= who this respray is attributed to). */
+  priorTech: string;
   /** The re-service that followed, ISO date. */
   reserviceDate: string;
-  /** Whole days between the two (≤ RESPRAY_MAX_GAP_DAYS by definition). */
+  /** Technician who did the re-service itself. */
+  reserviceTech: string;
+  /** Whole days between the blamed job and the re-service (informational only now). */
   gapDays: number;
+  /** True when the BLAMED prior job was itself a Re-service (a chain respray). */
+  chain: boolean;
   /** Re-service invoice # — a stable key. */
   invoiceNo: string;
+}
+
+/** A customer with 2+ attributed resprays this year. */
+export interface RepeatCustomer {
+  customerId: string;
+  customerName: string;
+  resprays: number;
+  /** How many of those were chain resprays (blamed job was a re-service). */
+  chainResprays: number;
+}
+
+/** Per-tech stats for a single week (weekly leaderboard). */
+export interface WeeklyTechStat {
+  technician: string;
+  applications: number;
+  resprays: number;
+  rate: number;
+}
+
+export interface WeeklyRecap {
+  weekStart: string; // ISO Monday
+  label: string; // "This week" / "Last week"
+  techs: WeeklyTechStat[];
+  totalApps: number;
+  totalResprays: number;
+  teamRate: number;
+  /** Fewest resprays / lowest rate among techs with >= WEEKLY_CALLOUT_MIN_APPS apps. */
+  bestRate: WeeklyTechStat | null;
+  /** Highest rate among techs with >= WEEKLY_CALLOUT_MIN_APPS apps. */
+  needsAttention: WeeklyTechStat | null;
+}
+
+export interface WeeklyLeaderboard {
+  current: WeeklyRecap;
+  lastFull: WeeklyRecap;
+  /** Tasteful auto-stats shown to the team (e.g. zero-respray streaks, most improved). */
+  funStats: string[];
 }
 
 export interface TechWeek {
@@ -102,14 +147,16 @@ export interface RespraysReport {
   asOf: string;
   year: string;
   techs: TechRow[];
+  weekly: WeeklyLeaderboard;
+  repeatCustomers: RepeatCustomer[];
   totals: {
     /** ALL Re-service jobs on mosquito contracts YTD. */
     reserviceJobs: number;
-    /** Re-services within the 10-day window → attributed to a tech. */
+    /** Re-services with a prior mosquito job → attributed to a tech (= every one that isn't unattributed). */
     countedResprays: number;
-    /** Re-services 11+ days after the prior spray → normal cadence, not counted. */
-    excludedGap: number;
-    /** Re-services with no prior mosquito application this year. */
+    /** Of countedResprays, how many were CHAIN resprays (blamed job was a re-service). */
+    chainResprays: number;
+    /** Re-services with no prior mosquito job this year. */
     unattributed: number;
     applications: number;
     /** Team rate = countedResprays ÷ applications. */
@@ -212,26 +259,33 @@ const isApplication = (j: RespJob) =>
   APPLICATION_JOB_TYPES.has(j.jobType.trim().toLowerCase()) && isMosquitoServiceType(j.serviceType);
 const isReservice = (j: RespJob) =>
   j.jobType.trim().toLowerCase() === RESPRAY_JOB_TYPE && isMosquitoServiceType(j.serviceType);
+/** Any completed mosquito job — the prior-job pool for the chain rule. */
+const isMosquitoJob = (j: RespJob) => isMosquitoServiceType(j.serviceType);
 
 export interface Attribution {
   job: RespJob;
-  /** "counted" = within the window and blamed on `tech`. */
-  kind: "counted" | "excluded_gap" | "unattributed";
+  /** "counted" = a prior mosquito job exists and the respray is blamed on `tech`. */
+  kind: "counted" | "unattributed";
   tech: string | null;
   gapDays: number | null;
-  /** The prior application this re-service is measured against (null = none). */
+  /** The blamed prior mosquito job (null = none this year). */
   prior: RespJob | null;
+  /** True when `prior` was itself a Re-service (chain respray). */
+  chain: boolean;
 }
 
 /**
- * Attribute every mosquito Re-service to the tech whose spray it followed —
- * but only when it landed inside the window. Carries the prior spray so callers
- * (weekly bucketing, the detail rows) don't recompute it.
+ * Attribute every mosquito Re-service to the tech of the customer's MOST RECENT
+ * PRIOR mosquito job this year — INCLUDING prior re-services (chain rule). No
+ * gap window: every re-service with a prior job counts. Carries the blamed job
+ * so callers (weekly bucketing, detail rows) don't recompute it.
  */
 export function attribute(jobs: RespJob[]): Attribution[] {
+  // Prior-job pool = ALL mosquito jobs (applications AND re-services), so a
+  // re-service can be blamed on the tech who did the previous re-service.
   const byCustomer = new Map<string, RespJob[]>();
   for (const j of jobs) {
-    if (!isApplication(j)) continue;
+    if (!isMosquitoJob(j)) continue;
     byCustomer.set(j.customerId, [...(byCustomer.get(j.customerId) || []), j]);
   }
   for (const list of byCustomer.values()) list.sort((a, b) => a.completedDate.localeCompare(b.completedDate));
@@ -239,15 +293,21 @@ export function attribute(jobs: RespJob[]): Attribution[] {
   const out: Attribution[] = [];
   for (const j of jobs) {
     if (!isReservice(j)) continue;
+    // Most recent mosquito job strictly BEFORE this re-service (any type).
     const prior = (byCustomer.get(j.customerId) || []).filter((a) => a.completedDate < j.completedDate);
     const last = prior[prior.length - 1];
     if (!last) {
-      out.push({ job: j, kind: "unattributed", tech: null, gapDays: null, prior: null });
+      out.push({ job: j, kind: "unattributed", tech: null, gapDays: null, prior: null, chain: false });
       continue;
     }
-    const gap = daysBetween(last.completedDate, j.completedDate);
-    const kind = gap <= RESPRAY_MAX_GAP_DAYS ? "counted" : "excluded_gap";
-    out.push({ job: j, kind, tech: last.technician, gapDays: gap, prior: last });
+    out.push({
+      job: j,
+      kind: "counted",
+      tech: last.technician,
+      gapDays: daysBetween(last.completedDate, j.completedDate),
+      prior: last,
+      chain: isReservice(last),
+    });
   }
   return out;
 }
@@ -257,9 +317,13 @@ function toDetail(a: Attribution): ResprayDetail {
   return {
     customerId: a.job.customerId,
     customerName: a.job.customerName,
-    priorSprayDate: a.prior!.completedDate,
+    priorJobDate: a.prior!.completedDate,
+    priorJobType: a.prior!.jobType,
+    priorTech: a.prior!.technician,
     reserviceDate: a.job.completedDate,
+    reserviceTech: a.job.technician,
     gapDays: a.gapDays!,
+    chain: a.chain,
     invoiceNo: a.job.invoiceNo,
   };
 }
@@ -282,7 +346,9 @@ export function buildReport(jobs: RespJob[], asOf: string): RespraysReport {
     perTech.set(at.tech, e);
   }
 
-  const countedResprays = attributions.filter((a) => a.kind === "counted").length;
+  const counted = attributions.filter((a) => a.kind === "counted");
+  const countedResprays = counted.length;
+  const chainResprays = counted.filter((a) => a.chain).length;
   const totalApps = apps.length;
   const teamRate = totalApps ? (countedResprays / totalApps) * 100 : 0;
 
@@ -330,19 +396,156 @@ export function buildReport(jobs: RespJob[], asOf: string): RespraysReport {
     })
     .sort((a, b) => b.rate - a.rate || b.applications - a.applications);
 
+  // Repeat-respray customers: 2+ attributed resprays this year.
+  const byCust = new Map<string, { name: string; resprays: number; chain: number }>();
+  for (const a of counted) {
+    const e = byCust.get(a.job.customerId) ?? { name: a.job.customerName, resprays: 0, chain: 0 };
+    e.resprays++;
+    if (a.chain) e.chain++;
+    byCust.set(a.job.customerId, e);
+  }
+  const repeatCustomers: RepeatCustomer[] = [...byCust.entries()]
+    .filter(([, e]) => e.resprays >= 2)
+    .map(([customerId, e]) => ({
+      customerId,
+      customerName: e.name,
+      resprays: e.resprays,
+      chainResprays: e.chain,
+    }))
+    .sort((a, b) => b.resprays - a.resprays || a.customerName.localeCompare(b.customerName));
+
+  const weekly = buildWeeklyLeaderboard(techs);
+
   return {
     asOf,
     year: CURRENT_YEAR,
     techs,
+    weekly,
+    repeatCustomers,
     totals: {
       reserviceJobs: attributions.length,
       countedResprays,
-      excludedGap: attributions.filter((a) => a.kind === "excluded_gap").length,
+      chainResprays,
       unattributed: attributions.filter((a) => a.kind === "unattributed").length,
       applications: totalApps,
       teamRate,
     },
   };
+}
+
+// ---------------------------------------------------- weekly leaderboard
+
+/** ISO Monday of the week `weeks` before the week containing `iso`. */
+function shiftWeek(mondayIso: string, weeksBack: number): string {
+  const d = new Date(`${mondayIso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - weeksBack * 7);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Today (UTC) — buildReport runs at read time, so this is the viewing day. */
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** Pull one week's per-tech stats out of the already-computed TechRow.weeks. */
+function weekRecap(techs: TechRow[], targetWeek: string, label: string): WeeklyRecap {
+  const stats: WeeklyTechStat[] = [];
+  for (const t of techs) {
+    const w = t.weeks.find((x) => x.weekStart === targetWeek);
+    if (!w || (w.applications === 0 && w.resprays === 0)) continue;
+    stats.push({
+      technician: t.technician,
+      applications: w.applications,
+      resprays: w.resprays,
+      rate: w.applications ? (w.resprays / w.applications) * 100 : 0,
+    });
+  }
+  stats.sort((a, b) => b.applications - a.applications || a.technician.localeCompare(b.technician));
+  const totalApps = stats.reduce((s, x) => s + x.applications, 0);
+  const totalResprays = stats.reduce((s, x) => s + x.resprays, 0);
+  const eligible = stats.filter((s) => s.applications >= WEEKLY_CALLOUT_MIN_APPS);
+  // Best = lowest rate, tie broken by fewest resprays then most apps.
+  const bestRate =
+    [...eligible].sort(
+      (a, b) => a.rate - b.rate || a.resprays - b.resprays || b.applications - a.applications
+    )[0] ?? null;
+  const needsAttention =
+    [...eligible].sort((a, b) => b.rate - a.rate || b.resprays - a.resprays)[0] ?? null;
+  return {
+    weekStart: targetWeek,
+    label,
+    techs: stats,
+    totalApps,
+    totalResprays,
+    teamRate: totalApps ? (totalResprays / totalApps) * 100 : 0,
+    // Best/attention only meaningful with distinct techs and some spread.
+    bestRate: eligible.length >= 2 ? bestRate : null,
+    needsAttention: eligible.length >= 2 && needsAttention && needsAttention.resprays > 0 ? needsAttention : null,
+  };
+}
+
+/**
+ * Weekly recap in leaderboard style: current week + last full week, plus a
+ * couple of tasteful auto-stats (zero-respray streaks, most-improved).
+ */
+export function buildWeeklyLeaderboard(techs: TechRow[]): WeeklyLeaderboard {
+  const thisWeek = weekStart(todayIso());
+  const lastWeek = shiftWeek(thisWeek, 1);
+  const current = weekRecap(techs, thisWeek, "This week");
+  const lastFull = weekRecap(techs, lastWeek, "Last week");
+
+  const funStats: string[] = [];
+
+  // 1) Longest CURRENT zero-respray streak: consecutive most-recent weeks (with
+  //    apps) and 0 resprays, counting back from last full week.
+  let streakTech = "";
+  let streakLen = 0;
+  for (const t of techs) {
+    let n = 0;
+    for (let k = 1; ; k++) {
+      const wk = shiftWeek(thisWeek, k); // last full week and earlier
+      const w = t.weeks.find((x) => x.weekStart === wk);
+      if (!w || w.applications === 0) break; // streak ends at a week he didn't spray
+      if (w.resprays > 0) break;
+      n++;
+    }
+    if (n > streakLen) {
+      streakLen = n;
+      streakTech = t.technician;
+    }
+  }
+  if (streakLen >= 2) {
+    funStats.push(`🎯 ${streakTech} — ${streakLen} weeks straight with zero resprays.`);
+  }
+
+  // 2) Most improved week-over-week: biggest rate DROP from two weeks ago to
+  //    last full week, both weeks with >= WEEKLY_CALLOUT_MIN_APPS apps.
+  const prevWeek = shiftWeek(thisWeek, 2);
+  let bestDrop = 0;
+  let improvedMsg = "";
+  for (const t of techs) {
+    const a = t.weeks.find((x) => x.weekStart === prevWeek);
+    const b = t.weeks.find((x) => x.weekStart === lastWeek);
+    if (!a || !b || a.applications < WEEKLY_CALLOUT_MIN_APPS || b.applications < WEEKLY_CALLOUT_MIN_APPS) continue;
+    const ra = (a.resprays / a.applications) * 100;
+    const rb = (b.resprays / b.applications) * 100;
+    const drop = ra - rb;
+    if (drop > bestDrop) {
+      bestDrop = drop;
+      improvedMsg = `📈 ${t.technician} — most improved: ${ra.toFixed(1)}% → ${rb.toFixed(1)}% week-over-week.`;
+    }
+  }
+  if (bestDrop >= 1) funStats.push(improvedMsg);
+
+  // 3) Perfect week: someone with a solid week (>= callout apps) and zero resprays last week.
+  const perfect = lastFull.techs
+    .filter((s) => s.applications >= WEEKLY_CALLOUT_MIN_APPS && s.resprays === 0)
+    .sort((a, b) => b.applications - a.applications)[0];
+  if (perfect) {
+    funStats.push(`✨ ${perfect.technician} sprayed ${perfect.applications} last week with zero resprays.`);
+  }
+
+  return { current, lastFull, funStats };
 }
 
 // -------------------------------------------------------------------- refresh

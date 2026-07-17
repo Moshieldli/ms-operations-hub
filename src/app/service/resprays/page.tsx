@@ -1,11 +1,9 @@
 import { RespraysView } from "@/components/resprays-view";
 import {
   getRespraysReport,
-  CADENCE_MAX_DAYS,
-  CADENCE_MIN_DAYS,
   FLAG_MIN_APPLICATIONS,
   FLAG_RATE_MULTIPLE,
-  RESPRAY_MAX_GAP_DAYS,
+  WEEKLY_CALLOUT_MIN_APPS,
   type RespraysReport,
 } from "@/lib/service/resprays";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,11 +40,9 @@ export default async function RespraysPage() {
     <RespraysView
       initial={report}
       rules={{
-        maxGapDays: RESPRAY_MAX_GAP_DAYS,
-        cadenceMin: CADENCE_MIN_DAYS,
-        cadenceMax: CADENCE_MAX_DAYS,
         flagMultiple: FLAG_RATE_MULTIPLE,
         flagMinApplications: FLAG_MIN_APPLICATIONS,
+        weeklyCalloutMinApps: WEEKLY_CALLOUT_MIN_APPS,
       }}
     />
   );

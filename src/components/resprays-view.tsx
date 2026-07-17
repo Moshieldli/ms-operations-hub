@@ -19,11 +19,9 @@ export function RespraysView({
 }: {
   initial: RespraysReport;
   rules: {
-    maxGapDays: number;
-    cadenceMin: number;
-    cadenceMax: number;
     flagMultiple: number;
     flagMinApplications: number;
+    weeklyCalloutMinApps: number;
   };
 }) {
   const [report, setReport] = useState<RespraysReport>(initial);
@@ -58,11 +56,12 @@ export function RespraysView({
               <CardTitle>Tech respray performance</CardTitle>
               {/* The attribution rule, on the label so it's never lost. */}
               <CardDescription>
-                Respray = re-service within {rules.maxGapDays} days of the prior
-                spray; our normal cadence is {rules.cadenceMin}&ndash;
-                {rules.cadenceMax} days; older gaps aren&rsquo;t counted. {report.year}{" "}
-                only — prior-year sprays are never used. A counted respray is
-                blamed on the tech who did <em>that prior spray</em>; rate = his
+                Respray = <strong>any re-service this year</strong>, attributed
+                to the most recent prior tech on that customer —{" "}
+                <strong>including prior re-services</strong> (so a re-service of a
+                re-service blames the last person who touched the account). {report.year}{" "}
+                only; prior-year jobs are never used, and a re-service with no
+                prior {report.year} job is unattributed. Rate = a tech&rsquo;s
                 attributed resprays ÷ his mosquito applications (Initial +
                 Regular) YTD.{" "}
                 {report.stale ? (
@@ -87,20 +86,18 @@ export function RespraysView({
             <Stat
               label={`Re-service jobs ${report.year}`}
               value={fmt(t.reserviceJobs)}
-              def="Every completed mosquito re-service this year, before the window rule."
+              def="Every completed mosquito re-service this year."
             />
             <Stat
-              label={`Counted resprays (≤${rules.maxGapDays}d)`}
+              label="Attributed resprays"
               value={fmt(t.countedResprays)}
-              def="Landed inside the window → attributed to the prior spray's tech."
+              def={`Blamed on the most recent prior tech. ${fmt(t.chainResprays)} were chains (prior job was itself a re-service).`}
               tone="bad"
             />
             <Stat
-              label={`Excluded (${rules.cadenceMin}+d / unattributed)`}
-              value={fmt(t.excludedGap + t.unattributed)}
-              def={`${fmt(t.excludedGap)} were ${rules.cadenceMin}+ days later (normal cadence) · ${fmt(
-                t.unattributed
-              )} had no prior ${report.year} spray.`}
+              label="Unattributed"
+              value={fmt(t.unattributed)}
+              def={`Re-services with no prior ${report.year} mosquito job — nobody blamed.`}
             />
             <Stat
               label="Team avg rate"
@@ -110,6 +107,10 @@ export function RespraysView({
           </div>
         </CardContent>
       </Card>
+
+      <WeeklyLeaderboardCard report={report} minApps={rules.weeklyCalloutMinApps} />
+
+      <RepeatCustomersCard report={report} />
 
       <Card>
         <CardHeader>
@@ -276,7 +277,11 @@ function TechBody({ tech }: { tech: TechRow }) {
   );
 }
 
-/** Audit rows for a set of resprays: customer, both dates, gap, profile link. */
+/**
+ * Audit rows for a set of resprays: customer, the blamed prior job + its type,
+ * the re-service, days between, a CHAIN badge when the blamed job was itself a
+ * re-service, and a Pocomos profile link.
+ */
 function ResprayDetailTable({ details }: { details: ResprayDetail[] }) {
   return (
     <div className="overflow-x-auto">
@@ -284,7 +289,7 @@ function ResprayDetailTable({ details }: { details: ResprayDetail[] }) {
         <thead>
           <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
             <th className="py-1.5 pr-4 font-medium">Customer</th>
-            <th className="py-1.5 pr-4 font-medium">Prior spray</th>
+            <th className="py-1.5 pr-4 font-medium">Prior job</th>
             <th className="py-1.5 pr-4 font-medium">Re-service</th>
             <th className="py-1.5 pr-4 text-right font-medium">Days between</th>
             <th className="py-1.5 pl-4 text-right font-medium">Profile</th>
@@ -293,8 +298,23 @@ function ResprayDetailTable({ details }: { details: ResprayDetail[] }) {
         <tbody>
           {details.map((d) => (
             <tr key={d.invoiceNo} className="border-b last:border-0">
-              <td className="py-1.5 pr-4">{d.customerName}</td>
-              <td className="py-1.5 pr-4 tabular-nums text-muted-foreground">{d.priorSprayDate}</td>
+              <td className="py-1.5 pr-4">
+                <span className="inline-flex items-center gap-1.5">
+                  {d.customerName}
+                  {d.chain ? (
+                    <span
+                      title="The blamed prior job was itself a re-service — a repeat/chain respray."
+                      className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-purple-700 dark:bg-purple-950 dark:text-purple-300"
+                    >
+                      chain
+                    </span>
+                  ) : null}
+                </span>
+              </td>
+              <td className="py-1.5 pr-4 tabular-nums text-muted-foreground">
+                {d.priorJobDate}
+                <span className="ml-1 text-[10px] uppercase tracking-wide">{d.priorJobType}</span>
+              </td>
               <td className="py-1.5 pr-4 tabular-nums text-muted-foreground">{d.reserviceDate}</td>
               <td className="py-1.5 pr-4 text-right tabular-nums font-medium">{fmt(d.gapDays)}</td>
               <td className="py-1.5 pl-4 text-right">
@@ -312,6 +332,165 @@ function ResprayDetailTable({ details }: { details: ResprayDetail[] }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** Weekly leaderboard — current + last full week, callouts, and fun auto-stats. */
+function WeeklyLeaderboardCard({ report, minApps }: { report: RespraysReport; minApps: number }) {
+  const { current, lastFull, funStats } = report.weekly;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">This week on the board 🏆</CardTitle>
+        <CardDescription>
+          Current week and last full week. Callouts need {minApps}+ sprays that
+          week so a light week can&rsquo;t win or lose it.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {funStats.length ? (
+          <div className="flex flex-wrap gap-2">
+            {funStats.map((s, i) => (
+              <span
+                key={i}
+                className="rounded-full border bg-muted/40 px-3 py-1 text-xs font-medium"
+              >
+                {s}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <div className="grid gap-4 md:grid-cols-2">
+          <WeekPanel recap={current} />
+          <WeekPanel recap={lastFull} />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function WeekPanel({ recap }: { recap: import("@/lib/service/resprays").WeeklyRecap }) {
+  return (
+    <div className="rounded-lg border p-3">
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <div className="text-sm font-semibold">
+          {recap.label}{" "}
+          <span className="font-normal text-muted-foreground tabular-nums">
+            (wk of {recap.weekStart})
+          </span>
+        </div>
+        <div className="text-xs text-muted-foreground tabular-nums">
+          {fmt(recap.totalResprays)} / {fmt(recap.totalApps)} · {pct(recap.teamRate)}
+        </div>
+      </div>
+      {recap.techs.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No sprays recorded yet this week.</p>
+      ) : (
+        <>
+          <div className="mb-2 flex flex-wrap gap-2 text-[11px]">
+            {recap.bestRate ? (
+              <span className="rounded bg-emerald-100 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                Best: {recap.bestRate.technician} ({pct(recap.bestRate.rate)}, {fmt(recap.bestRate.resprays)}/{fmt(recap.bestRate.applications)})
+              </span>
+            ) : null}
+            {recap.needsAttention ? (
+              <span className="rounded bg-amber-100 px-2 py-0.5 font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                Watch: {recap.needsAttention.technician} ({pct(recap.needsAttention.rate)})
+              </span>
+            ) : null}
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                <th className="py-1 pr-3 font-medium">Tech</th>
+                <th className="py-1 pr-3 text-right font-medium">Sprays</th>
+                <th className="py-1 pr-3 text-right font-medium">Resprays</th>
+                <th className="py-1 pl-3 text-right font-medium">Rate</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recap.techs.map((s) => (
+                <tr key={s.technician} className="border-b last:border-0">
+                  <td className="py-1 pr-3">{s.technician}</td>
+                  <td className="py-1 pr-3 text-right tabular-nums">{fmt(s.applications)}</td>
+                  <td
+                    className={cn(
+                      "py-1 pr-3 text-right tabular-nums",
+                      s.resprays > 0 && "text-red-600 dark:text-red-400"
+                    )}
+                  >
+                    {fmt(s.resprays)}
+                  </td>
+                  <td className="py-1 pl-3 text-right tabular-nums text-muted-foreground">
+                    {s.resprays > 0 ? pct(s.rate) : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Customers with 2+ resprays this year — repeat-respray watch list. */
+function RepeatCustomersCard({ report }: { report: RespraysReport }) {
+  const rows = report.repeatCustomers;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Repeat respray customers</CardTitle>
+        <CardDescription>
+          Accounts with <strong>2+ resprays</strong> this year — worth a look for
+          a product, access, or account issue rather than a tech one. &ldquo;Chain&rdquo;
+          counts resprays whose prior job was itself a re-service.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No customer has been re-serviced twice this year.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="py-2 pr-4 font-medium">Customer</th>
+                  <th className="py-2 pr-4 text-right font-medium">Resprays</th>
+                  <th className="py-2 pr-4 text-right font-medium">Chain</th>
+                  <th className="py-2 pl-4 text-right font-medium">Profile</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((c) => (
+                  <tr key={c.customerId} className="border-b last:border-0">
+                    <td className="py-2 pr-4 font-medium">{c.customerName}</td>
+                    <td className="py-2 pr-4 text-right tabular-nums font-semibold text-red-600 dark:text-red-400">
+                      {fmt(c.resprays)}
+                    </td>
+                    <td className="py-2 pr-4 text-right tabular-nums text-muted-foreground">
+                      {c.chainResprays > 0 ? fmt(c.chainResprays) : "—"}
+                    </td>
+                    <td className="py-2 pl-4 text-right">
+                      <a
+                        href={profileUrl(c.customerId)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary underline-offset-4 hover:underline"
+                      >
+                        Profile
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
