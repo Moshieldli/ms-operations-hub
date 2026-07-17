@@ -165,26 +165,27 @@ function SalesDashboard({
   taxonomy: SalesTaxonomy | null;
   taxLoading: boolean;
 }) {
-  const { totals, buckets, debug, year } = summary;
+  const { totals, debug, year } = summary;
   const prevYear = parseInt(year, 10) - 1;
 
-  // "Returning" now comes from the TAXONOMY (rev 17), not summary.buckets.RETAINED:
-  // it is the return-rate numerator set — prior-year real customers who returned
-  // (see ReturningBox). summary.retainedSubtypes / buckets.RETAINED remain the
-  // tag-only series and still feed the snapshots table; they are NOT displayed.
+  // All three season tiles come from the TAXONOMY (rev 19), not categorize.ts's
+  // tag-only buckets: they're defined by service evidence (was the customer real
+  // last season?) which summarize() can't see. summary.buckets / retainedSubtypes
+  // remain the tag-only series feeding the snapshots table; NOT displayed.
   const box = taxonomy?.returningBox;
+  const sb = taxonomy?.seasonBuckets;
   const returningHint = box
     ? `Auto ${fmt(box.auto)} · SEB ${fmt(box.seb)} · EB ${fmt(box.eb)} · Renewed ${fmt(
         box.renewed
-      )} · by spray history ${fmt(box.bySprayHistory)}`
+      )} · New Sale ${fmt(box.newSale)}${
+        box.churnedReturners ? ` · ${fmt(box.churnedReturners)} sprayed-then-churned` : ""
+      }`
     : undefined;
 
-  // Reconciliation (synchronous, from summary): Active Customers is the tag-gated
-  // count; the remaining active-status customers are off-bucket (the
-  // Not-Renewed-active + Issues that the taxonomy details). NOTE: this no longer
-  // equals NEW + RETURNING + Returning — the Returning tile is now a
-  // service-evidence population, not the tag-based RETAINED bucket.
-  const taggedActive = totals.activeCustomers;
+  // Reconciliation: the three season tiles PARTITION the tag-gated Active
+  // Customers roster (rev 19 restored this identity). The Returning tile also
+  // counts returners who were sprayed this season and have since churned — they
+  // aren't in the active roster, so they're called out as a separate term.
   const offBucket = Math.max(0, debug.activeAllStatuses - totals.activeCustomers);
 
   const taxNum = (n: number | undefined) =>
@@ -221,25 +222,40 @@ function SalesDashboard({
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
           <Tile
             label="New"
-            value={buckets.NEW}
-            def="Brand-new this year, no prior-year history."
+            value={taxNum(sb?.newCount)}
+            def={`Signed up for ${year} with no history at all — no prior-year tag and no prior mosquito service.`}
           />
           <Tile
             label="New – Season Skipped"
-            value={buckets.RETURNING}
-            def="Was a customer before, skipped one or more full seasons, signed up new again this year."
+            value={taxNum(sb?.seasonSkipped)}
+            def={`Signed up for ${year} and has history with us, but wasn't a real ${prevYear} customer — they sat out last season.`}
           />
           <Tile
             label="Returning"
             value={taxNum(box?.total)}
             hint={returningHint}
-            def={`Real ${prevYear} customers who came back: they've had a real ${year} season (2+ mosquito services, or one late signup) or their service rolled over on a ${year} auto-renew / early-rebook / renewed tag. Same population as the Return rate card's ${prevYear} → ${year} numerator.`}
+            def={`Real ${prevYear} customers who came back: they're active with any ${year} tag (signed up — sprays not required), or they've met the ${year} spray rule regardless of current status. Same population as the Return rate card's ${prevYear} → ${year} numerator.`}
           />
         </div>
-        <p className="text-xs text-muted-foreground">
-          {fmt(taggedActive)} tagged active + {fmt(offBucket)} off-bucket
-          (not-renewed / issues) = {fmt(debug.activeAllStatuses)} active customers
-        </p>
+        {sb ? (
+          <p className="text-xs text-muted-foreground">
+            {fmt(sb.newCount)} New + {fmt(sb.seasonSkipped)} Season-Skipped +{" "}
+            {fmt(sb.returningActive)} Returning = {fmt(sb.activeTagged)} Active
+            Customers
+            {sb.churnedReturners ? (
+              <>
+                {" "}
+                · Returning shows {fmt(sb.returningTotal)} because{" "}
+                {fmt(sb.churnedReturners)} returner
+                {sb.churnedReturners === 1 ? " was" : "s were"} sprayed this season
+                then churned (counted as returned, no longer active)
+              </>
+            ) : null}
+            {" · "}
+            {fmt(offBucket)} more active in Pocomos are off-bucket (no {year} tag —
+            see Missing tags)
+          </p>
+        ) : null}
       </div>
 
       {/* Year-relative cancelled taxonomy */}
@@ -277,6 +293,8 @@ function SalesDashboard({
 
       <ReturnRateCard taxonomy={taxonomy} loading={taxLoading} />
 
+      <ReturnRateAnomaliesCard taxonomy={taxonomy} loading={taxLoading} />
+
       <MissingTagsCard taxonomy={taxonomy} loading={taxLoading} year={year} prevYear={prevYear} />
 
       <ContractTypeCard summary={summary} />
@@ -311,13 +329,12 @@ function ReturnRateCard({
           <strong>exactly one, after {cutoff}</strong>, which means they signed up
           too late in the season to have had a second (Event Spray never counts).
           A single early- or mid-season spray is a one-off and doesn&rsquo;t
-          count. A customer <strong>returned</strong> if they&rsquo;re a real
-          customer of the next season — or, for the season still in progress
-          only, if they&rsquo;re active with that season&rsquo;s auto-renew /
-          early-rebook / renewed tag (service rolled over, spray not due yet).
-          Completed seasons don&rsquo;t need that allowance: their spray record is
-          final. The current season is in progress, so its rate climbs as the
-          season runs.
+          count. A customer <strong>returned</strong> the next season if
+          they&rsquo;re <strong>active with any tag for that season</strong> —
+          signing up counts, sprays not required — <em>or</em> they meet that
+          season&rsquo;s spray rule whatever their status now, which credits
+          someone who was sprayed and later churned. The current season is in
+          progress, so its rate climbs as the season runs.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -366,8 +383,9 @@ function ReturnRateCard({
             <p className="mt-3 text-[11px] leading-snug text-muted-foreground">
               &ldquo;Real&rdquo; = 2+ completed mosquito-family services that
               calendar year, or exactly one after {cutoff} (a late-season signup);
-              Event Spray never counts. &ldquo;Returned&rdquo; = real the next
-              season, or still active on that season&rsquo;s continuation tag.{" "}
+              Event Spray never counts. &ldquo;Returned&rdquo; = active with any
+              tag for the next season, or meeting its spray rule regardless of
+              status.{" "}
               {rr.pairs.some((p) => p.reliable && p.lateSignupsFrom + p.lateSignupsTo > 0)
                 ? `Late-season signups counted as real — ${rr.pairs
                     .filter((p) => p.reliable)
@@ -388,6 +406,133 @@ function ReturnRateCard({
                 ? `still computing — ${fmt(rr.covered)} of ${fmt(rr.cohortSize)} histories scraped (${rr.coveragePct}%). Numbers firm up as coverage reaches 100%.`
                 : `coverage ${rr.coveragePct}% (${fmt(rr.covered)}/${fmt(rr.cohortSize)}).`}
             </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Return-rate anomalies — records we can't measure cleanly. Self-clearing: the
+ * roster is recomputed live on every refresh, so fixing a record in Pocomos
+ * drops it off. Classes come from the taxonomy (lib/sales-anomalies.ts); empty
+ * classes are hidden, so adding a class needs no change here.
+ */
+function ReturnRateAnomaliesCard({
+  taxonomy,
+  loading,
+}: {
+  taxonomy: SalesTaxonomy | null;
+  loading: boolean;
+}) {
+  const an = taxonomy?.anomalies;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          Return-rate anomalies
+          {an ? (
+            <span className="ml-2 text-xs font-normal text-muted-foreground">
+              {fmt(an.total)} record{an.total === 1 ? "" : "s"}
+            </span>
+          ) : null}
+        </CardTitle>
+        <CardDescription>
+          Records we can&rsquo;t measure cleanly — each one is a customer the
+          return rate has to guess about or drop. Fix these in Pocomos and they
+          drop off automatically on the next refresh. (Tag hygiene lives in the
+          Missing tags card below; this card is measurement faults.)
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {!an ? (
+          <p className="text-sm text-muted-foreground">
+            {loading ? "Loading…" : "Couldn’t load anomalies."}
+          </p>
+        ) : an.total === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Nothing to fix — every record is measurable. 🎉
+          </p>
+        ) : (
+          <div className="space-y-6">
+            {/* Stat header: count per class */}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {an.classes.map((c) => (
+                <div key={c.key} className="rounded-md border p-3">
+                  <div className="text-2xl font-semibold tabular-nums">{fmt(c.count)}</div>
+                  <div className="mt-1 text-xs leading-snug text-muted-foreground">{c.label}</div>
+                </div>
+              ))}
+            </div>
+
+            {an.classes
+              .filter((c) => c.count > 0)
+              .map((c) => (
+                <div key={c.key}>
+                  <h4 className="text-sm font-medium">
+                    {c.label}{" "}
+                    <span className="font-normal text-muted-foreground">({fmt(c.count)})</span>
+                  </h4>
+                  <p className="mt-1 text-xs leading-snug text-muted-foreground">
+                    {c.description} <strong className="font-medium">Fix:</strong> {c.fix}
+                  </p>
+                  <div className="mt-2 overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+                          <th className="py-2 pr-4 font-medium">Customer</th>
+                          <th className="py-2 pr-4 font-medium">Why it can&rsquo;t be measured</th>
+                          <th className="py-2 pl-4 text-right font-medium">Open</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {an.items
+                          .filter((i) => i.classKey === c.key)
+                          .map((i) => (
+                            <tr key={`${i.classKey}-${i.id}`} className="border-b last:border-0 align-top">
+                              <td className="py-2 pr-4">
+                                <div className="font-medium">{i.name}</div>
+                                <div className="text-xs tabular-nums text-muted-foreground">
+                                  {i.id}
+                                  {i.contact ? ` · ${i.contact}` : ""}
+                                </div>
+                              </td>
+                              <td className="py-2 pr-4 text-xs leading-snug text-muted-foreground">
+                                {i.reason}
+                              </td>
+                              <td className="py-2 pl-4 text-right">
+                                {i.profileUrl ? (
+                                  <a
+                                    href={i.profileUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-primary underline-offset-4 hover:underline"
+                                  >
+                                    Profile
+                                  </a>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">no record</span>
+                                )}
+                                {i.related?.map((r) => (
+                                  <a
+                                    key={r.id}
+                                    href={r.profileUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="ml-2 text-primary underline-offset-4 hover:underline"
+                                  >
+                                    Twin {r.id}
+                                  </a>
+                                ))}
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
           </div>
         )}
       </CardContent>

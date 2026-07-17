@@ -2,6 +2,7 @@ import { getDataset } from "@/lib/pocomos";
 import { CURRENT_YEAR } from "@/lib/pocomos";
 import { initSchema, sql } from "@/lib/db";
 import { buildServiceCountCohort, getServiceCountsData } from "@/lib/service/serviceCounts";
+import { buildReturnRateAnomalies, type ReturnRateAnomalies } from "@/lib/sales-anomalies";
 
 /**
  * Year-relative cancelled taxonomy + "customers with issues" roster for /sales.
@@ -75,9 +76,9 @@ export interface MissingTagCustomer {
  * accepted a single early one. Ops confirmed the opposite is the real signal:
  * lateness EXPLAINS a low spray count rather than discrediting it.
  *
- * This rule alone defines the return-rate DENOMINATOR (real customers of Y).
- * The NUMERATOR and the /sales "Returning" box additionally accept a
- * continuation-tag path — see `hasContinuationTag` / `computeReturnRatesAndBox`.
+ * This rule alone defines the return-rate DENOMINATOR (real customers of Y) —
+ * no tag path, in any year. The NUMERATOR and the /sales "Returning" box also
+ * accept a tag path — see `hasYearTagActive` / `computeReturnRatesAndBox`.
  *
  * Counts + the per-year first-spray date come from the service-count cache
  * (lib/service/serviceCounts.ts), which reads each customer's mosquito
@@ -91,18 +92,15 @@ export const LATE_SEASON_CUTOFF_LABEL = "Aug 15";
 export const REAL_CUSTOMER_MIN_SERVICES = 2;
 
 /**
- * Continuation tags that mark a customer's service as having rolled into year Y
- * (ops list: Auto / SEB / EB / Renewed). `Prepaid` / `Committed` are also
- * continuation tags in categorize.ts's bucket logic and are accepted here so the
- * two never silently disagree — as of 2026-07-16 ZERO customers carry either
- * without also carrying one of the four named tags, so including them changes no
- * count today (probe: scripts/probe-return-unification.ts).
+ * The named continuation tags (ops list: Auto / SEB / EB / Renewed).
  *
- * The four NAMED tags drive the Returning box's sub-counts, in this precedence
- * order (a customer can hold several; each is counted once).
+ * These NO LONGER gate the return test — as of rev 19 ANY `{Y} -` tag on an
+ * active customer counts as a return ("signed up = returned"), including
+ * `{Y} - New Sale` re-signups and `Prepaid` / `Committed`. This list survives
+ * only to drive the Returning box's SUB-COUNTS, in this precedence order (a
+ * customer can hold several tags; each is counted once).
  */
 export const CONTINUATION_TAGS_NAMED = ["Auto", "SEB", "EB", "Renewed"] as const;
-const CONTINUATION_TAGS_ALL = [...CONTINUATION_TAGS_NAMED, "Prepaid", "Committed"] as const;
 
 /**
  * Is an earliest-spray ISO date ("YYYY-MM-DD") strictly after LATE_SEASON_CUTOFF
@@ -156,8 +154,8 @@ export interface ReturnRatePair {
  * The /sales "Returning" box (rev 17) — UNIFIED with the return-rate numerator.
  *
  * Members = real customers of PRIOR_YEAR (rule 1) who RETURNED into CURRENT_YEAR
- * (rule 2: real customer of CY by spray history, OR an active customer holding a
- * CY continuation tag). This is EXACTLY the CY-1 → CY numerator set, so the two
+ * (rule 2, rev 19: active with ANY CY tag, OR meeting the CY spray rule whatever
+ * their status now). This is EXACTLY the CY-1 → CY numerator set, so the two
  * cards on /sales can never disagree: `total` === that pair's `returned`.
  *
  * Before rev 17 this box was a pure tag count (active + any CY continuation tag,
@@ -168,6 +166,38 @@ export interface ReturnRatePair {
  * its highest-precedence named tag; a member who qualified only through spray
  * history falls into `bySprayHistory`.
  */
+/** One customer's identity/tag facts, merged from the live dataset + enrichment. */
+export interface Person {
+  id: string;
+  name: string;
+  /** Lowercased Pocomos status. */
+  status: string;
+  active: boolean;
+  tags: string[];
+  email: string;
+}
+
+/**
+ * The ACTIVE, {CY}-tagged roster partitioned three ways (rev 19). Restores the
+ * /sales identity `New + New–Season-Skipped + Returning = Active Customers`,
+ * which rev 17 broke when the Returning tile stopped being the tag-only RETAINED
+ * bucket. Computed from service evidence + tags, NOT from categorize.ts.
+ */
+export interface SeasonBuckets {
+  /** Active customers carrying any {CY} tag — the /sales "Active Customers" gate. */
+  activeTagged: number;
+  /** Active+{CY}-tagged, NOT a real CY-1 customer, no prior history at all. */
+  newCount: number;
+  /** Active+{CY}-tagged, NOT a real CY-1 customer, but has prior history. */
+  seasonSkipped: number;
+  /** Active+{CY}-tagged AND a real CY-1 customer who returned. */
+  returningActive: number;
+  /** Returners NOT in the active roster (sprayed this year, then churned). */
+  churnedReturners: number;
+  /** returningActive + churnedReturners === the Returning box / CY numerator. */
+  returningTotal: number;
+}
+
 export interface ReturningBox {
   /** Prior-year real customers who returned. === the CY-1→CY pair's `returned`. */
   total: number;
@@ -175,7 +205,9 @@ export interface ReturningBox {
   seb: number;
   eb: number;
   renewed: number;
-  /** Qualified via CY spray history with NO continuation tag. */
+  /** Re-signed with a `{CY} - New Sale` tag (counted as a return from rev 19). */
+  newSale: number;
+  /** Qualified via CY spray history with NO {CY} tag (incl. sprayed-then-churned). */
   bySprayHistory: number;
   /**
    * Denominator context: real customers of PRIOR_YEAR (the box's universe).
@@ -184,6 +216,10 @@ export interface ReturningBox {
   priorYearReal: number;
   /** Members NOT currently Active in Pocomos (qualified purely on CY sprays). */
   nonActive: number;
+  /** Members who are active AND carry a {CY} tag (the partition's Returning term). */
+  activeTagged: number;
+  /** Members qualifying on sprays alone — sprayed then churned / untagged. */
+  churnedReturners: number;
 }
 
 export interface ReturnRates {
@@ -232,6 +268,10 @@ export interface SalesTaxonomy {
   returnRates: ReturnRates;
   /** The /sales "Returning" box — unified with the CY-1→CY numerator (rev 17). */
   returningBox: ReturningBox;
+  /** New / Season-Skipped / Returning partition of the active roster (rev 19). */
+  seasonBuckets: SeasonBuckets;
+  /** Records we can't measure cleanly — the anomalies card (rev 19). */
+  anomalies: ReturnRateAnomalies;
   asOf: string;
 }
 
@@ -263,13 +303,14 @@ function isoDateOnly(raw: string | null | undefined): string | null {
  *   exactly 1 whose date is AFTER LATE_SEASON_CUTOFF (a late-season signup).
  *   Event Spray never counts (separate contract, never on the mosquito table).
  *
- * NUMERATOR — returned in Y+1 (rule 2, the COMBINED definition):
- *   a real customer of Y+1 by rule 1, OR an ACTIVE customer carrying a Y+1
- *   continuation tag (Auto/SEB/EB/Renewed). The tag path catches customers whose
- *   service has rolled into the new season but who haven't been sprayed yet —
- *   without it, an in-progress season understates returns. The tag path requires
- *   ACTIVE status so a cancelled customer's stale auto-renew tag can't count as a
- *   return (the rev-14 bug).
+ * NUMERATOR — returned in Y+1 (rule 2, rev 19, the COMBINED definition):
+ *   ACTIVE now with ANY `{Y+1} -` tag — signing up IS returning, sprays not
+ *   required (this includes `{Y+1} - New Sale` re-signups, which rev 17/18
+ *   missed by only accepting continuation tags) — OR meeting the Y+1 spray rule
+ *   (rule 1) REGARDLESS of current status, which credits a customer who was
+ *   sprayed and later churned. The tag path requires ACTIVE status so a
+ *   cancelled customer's stale tag can't count as a return (the rev-14 bug);
+ *   the spray path deliberately ignores status because the sprays happened.
  *
  * RETURNING BOX = the numerator set itself (see `ReturningBox`), so the /sales
  * "Returning" tile and the return-rate card are the same population by
@@ -284,16 +325,16 @@ function isoDateOnly(raw: string | null | undefined): string | null {
  * NOTE the CURRENT year (CY) is an in-progress season, so its numerator grows as
  * the season runs. READ-ONLY.
  */
-async function computeReturnRatesAndBox(): Promise<{
+async function computeReturnRatesAndBox(people: Map<string, Person>): Promise<{
   returnRates: ReturnRates;
   returningBox: ReturningBox;
+  seasonBuckets: SeasonBuckets;
 }> {
   const cy = Number(CURRENT_YEAR);
   const [cohort, data] = await Promise.all([
     buildServiceCountCohort(),
     getServiceCountsData(),
   ]);
-  const byId = new Map(cohort.map((m) => [m.id, m]));
 
   // UNIVERSE (rev 18) = the tag-based scrape cohort PLUS every customer the bulk
   // exports know about. The cohort alone requires a mosquito contract carrying a
@@ -339,29 +380,32 @@ async function computeReturnRatesAndBox(): Promise<{
     sprayCount(id, y) === 1 && isReal(id, y);
 
   /**
-   * Rule 2's tag path — an ACTIVE customer whose service rolled into year Y.
+   * Rule 2's TAG path (rev 19) — currently ACTIVE and carrying ANY {Y} tag.
    *
-   * ONLY applies to the IN-PROGRESS season (rev 18). The tag path exists to
-   * rescue customers whose service has rolled over but who simply haven't been
-   * sprayed YET; that can only be true of the season we're living in. For a
-   * COMPLETED, export-backed season the spray record is final and complete, so a
-   * customer with a continuation tag but no sprays genuinely did not get served
-   * — counting their tag would resurrect the exact stale-tag bug (rev 14) the
-   * active-status check was added to kill.
+   * "Signed up = returned": a tag for year Y means the customer committed to
+   * that season, so they count whether or not a spray has landed. ANY {Y} tag
+   * qualifies, not just continuation tags — a `{Y} - New Sale` re-signup is a
+   * return too (rev 17/18 counted only Auto/SEB/EB/Renewed and so missed them).
+   * Status must be ACTIVE now: a cancelled customer's stale tag is not a return
+   * (the rev-14 bug).
+   *
+   * Applies to BOTH pairs (rev 18 restricted this to the in-progress season;
+   * rev 19 lifts that per ops — signing up counts in any year).
    */
-  const tagPathApplies = (y: number) => y === cy && !isExportYear(y);
-  const hasContinuationTag = (id: string, y: number): boolean => {
-    if (!tagPathApplies(y)) return false;
-    const m = byId.get(id);
-    if (!m || !m.active) return false; // stale tag on a cancelled customer ≠ return
-    const tags = new Set(m.tags);
-    return CONTINUATION_TAGS_ALL.some((t) => tags.has(`${y} - ${t}`));
+  const hasYearTagActive = (id: string, y: number): boolean => {
+    const p = people.get(id);
+    if (!p || !p.active) return false;
+    return p.tags.some((t) => String(t).trim().startsWith(`${y} -`));
   };
 
-  // Rule 2 — RETURNED in year Y: real by sprays, OR (in-progress season only) an
-  // active customer carrying a Y continuation tag.
+  /**
+   * Rule 2 — RETURNED in year Y (rev 19):
+   *   active now with ANY {Y} tag (signed up — sprays not required), OR
+   *   meets the Y spray rule regardless of current status (credits a customer
+   *   who was sprayed and later churned).
+   */
   const hasReturned = (id: string, y: number): boolean =>
-    isReal(id, y) || hasContinuationTag(id, y);
+    hasYearTagActive(id, y) || isReal(id, y);
 
   const pairs: ReturnRatePair[] = [];
   for (const [fromN, toN] of [[cy - 2, cy - 1], [cy - 1, cy]] as const) {
@@ -378,7 +422,9 @@ async function computeReturnRatesAndBox(): Promise<{
       realFrom++;
       if (!hasReturned(id, toN)) continue;
       returned++;
-      if (hasContinuationTag(id, toN)) returnedByTag++;
+      // Tag path reported first: it's the "signed up" signal. A member can
+      // satisfy both; count each once.
+      if (hasYearTagActive(id, toN)) returnedByTag++;
       else returnedBySprayHistory++;
     }
     pairs.push({
@@ -409,31 +455,83 @@ async function computeReturnRatesAndBox(): Promise<{
     seb: 0,
     eb: 0,
     renewed: 0,
+    newSale: 0,
     bySprayHistory: 0,
     priorYearReal: 0,
     nonActive: 0,
+    activeTagged: 0,
+    churnedReturners: 0,
   };
+  const returningIds = new Set<string>();
   for (const id of universeIds) {
     if (!isReal(id, cy - 1)) continue;
     box.priorYearReal++;
     if (!hasReturned(id, cy)) continue;
     box.total++;
-    const m = byId.get(id);
-    if (!m?.active) box.nonActive++;
-    if (hasContinuationTag(id, cy)) {
-      // Precedence mirrors CONTINUATION_TAGS_NAMED; each member counted once.
-      const tags = new Set(m?.tags ?? []);
+    returningIds.add(id);
+    const p = people.get(id);
+    if (!p?.active) box.nonActive++;
+    if (hasYearTagActive(id, cy)) {
+      box.activeTagged++;
+      // Sub-count by the CY tag they carry. Precedence: the named continuation
+      // tags first, then New Sale (a re-signup — new in rev 19), then anything
+      // else tagged for the year lands in the spray/other remainder so the
+      // sub-counts always sum to `total`.
+      const tags = new Set(p?.tags ?? []);
       const named = CONTINUATION_TAGS_NAMED.find((t) => tags.has(`${cy} - ${t}`));
       if (named === "Auto") box.auto++;
       else if (named === "SEB") box.seb++;
       else if (named === "EB") box.eb++;
       else if (named === "Renewed") box.renewed++;
-      // No named tag → qualified on Prepaid/Committed alone (zero today); count
-      // it with the spray-history remainder so the sub-counts always sum.
+      else if (tags.has(`${cy} - New Sale`)) box.newSale++;
       else box.bySprayHistory++;
     } else {
+      // Qualified on sprays alone → sprayed then churned (or tagless).
       box.bySprayHistory++;
+      box.churnedReturners++;
     }
+  }
+
+  /**
+   * SEASON BUCKETS (rev 19) — a clean partition of the ACTIVE, {CY}-tagged
+   * roster (= the /sales "Active Customers" headline gate):
+   *
+   *   real CY-1 customer         → Returning   (they're in the box above)
+   *   not real CY-1, prior history → New – Season Skipped
+   *   not real CY-1, no history    → New
+   *
+   * so New + Season-Skipped + Returning(active) === Active Customers.
+   *
+   * "Prior history" = any pre-CY year tag OR any pre-CY mosquito spray. Spray
+   * evidence is included because a customer can have been served in a prior year
+   * without carrying that year's tag (tag hygiene is imperfect — see the
+   * anomalies card), and history is history.
+   */
+  const seasonBuckets: SeasonBuckets = {
+    activeTagged: 0,
+    newCount: 0,
+    seasonSkipped: 0,
+    returningActive: 0,
+    churnedReturners: box.churnedReturners,
+    returningTotal: box.total,
+  };
+  for (const p of people.values()) {
+    if (!p.active) continue;
+    if (!p.tags.some((t) => String(t).trim().startsWith(`${cy} -`))) continue;
+    seasonBuckets.activeTagged++;
+    if (returningIds.has(p.id)) {
+      seasonBuckets.returningActive++;
+      continue;
+    }
+    const priorTag = p.tags.some((t) => {
+      const m = String(t).match(/^(\d{4}) -/);
+      return m != null && Number(m[1]) < cy;
+    });
+    const priorSprays = Object.entries(data.counts.get(p.id) ?? {}).some(
+      ([y, n]) => Number(y) < cy && Number(n) > 0
+    );
+    if (priorTag || priorSprays) seasonBuckets.seasonSkipped++;
+    else seasonBuckets.newCount++;
   }
 
   return {
@@ -446,6 +544,7 @@ async function computeReturnRatesAndBox(): Promise<{
       computing: coveragePct < RETURN_RATE_MIN_COVERAGE_PCT,
     },
     returningBox: box,
+    seasonBuckets,
   };
 }
 
@@ -493,7 +592,7 @@ export async function getSalesTaxonomy(): Promise<SalesTaxonomy> {
 
   // ---- Non-active side (enriched tags from the customers table) ----
   const rows = (await sql`
-    SELECT pocomos_id, status, tags, contracts, last_service_date
+    SELECT pocomos_id, status, tags, contracts, last_service_date, full_name, email
     FROM customers WHERE lower(status) <> 'active'
   `) as Array<{
     pocomos_id: string;
@@ -501,7 +600,50 @@ export async function getSalesTaxonomy(): Promise<SalesTaxonomy> {
     tags: unknown;
     contracts: unknown;
     last_service_date: string | null;
+    full_name: string | null;
+    email: string | null;
   }>;
+
+  /**
+   * Every customer we know, merged: the live dataset carries name/status/email
+   * for all and TAGS for actives; the enriched `customers` table supplies tags
+   * for non-actives (the live path returns a slim record for those). Feeds the
+   * return-rate tag path, the season-bucket partition and the anomalies card.
+   */
+  const people = new Map<string, Person>();
+  for (const c of ds.customers) {
+    const id = String(c.id);
+    const status = c.status.toLowerCase();
+    people.set(id, {
+      id,
+      name: c.fullName,
+      status,
+      active: status === "active",
+      tags: c.tags ?? [],
+      email: String(c.email ?? "").trim().toLowerCase(),
+    });
+  }
+  for (const r of rows) {
+    const id = String(r.pocomos_id);
+    const tags = Array.isArray(r.tags) ? (r.tags as string[]) : [];
+    const prev = people.get(id);
+    if (prev) {
+      // Non-actives come back slim from the live path (tags: []) — take the
+      // enriched tags/email instead of the empty ones.
+      if (!prev.tags.length && tags.length) prev.tags = tags;
+      if (!prev.email && r.email) prev.email = String(r.email).trim().toLowerCase();
+    } else {
+      const status = String(r.status || "").toLowerCase();
+      people.set(id, {
+        id,
+        name: r.full_name || id,
+        status,
+        active: status === "active",
+        tags,
+        email: String(r.email ?? "").trim().toLowerCase(),
+      });
+    }
+  }
 
   let notRenewedNonActive = 0;
   let notRenewedInactiveStatus = 0;
@@ -535,7 +677,8 @@ export async function getSalesTaxonomy(): Promise<SalesTaxonomy> {
   // breakdown always sums to the headline count.
   const unknown = Math.max(0, cancelledAllTime - (cThis + cLast + cEarlier));
 
-  const { returnRates, returningBox } = await computeReturnRatesAndBox();
+  const { returnRates, returningBox, seasonBuckets } = await computeReturnRatesAndBox(people);
+  const anomalies = await buildReturnRateAnomalies({ people });
 
   return {
     year: cy,
@@ -552,6 +695,8 @@ export async function getSalesTaxonomy(): Promise<SalesTaxonomy> {
     enrichedNonActive: rows.length,
     returnRates,
     returningBox,
+    seasonBuckets,
+    anomalies,
     asOf: new Date().toISOString(),
   };
 }

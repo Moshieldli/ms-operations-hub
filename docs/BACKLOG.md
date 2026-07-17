@@ -19,6 +19,14 @@
       now completed-service-based ("served in Y, receiving in Y+1"), single rate per pair, no dual
       denominator. On-Hold counts as returned (paused ≠ cancelled). See REFERENCE §5.8 / §9 #8.
 
+## Worklist / cleanup (not code) — surfaced live on /sales → Return-rate anomalies
+- [ ] **117 anomaly records to fix in Pocomos** (self-clearing — each drops off the card on the next
+      refresh once fixed). **83 duplicate customer records** (merge the twins; keep the one with the
+      live contract) · **26 export customers with no confident match** (give the duplicates distinct
+      emails, or merge) · **8 unreadable mosquito histories** (make the mosquito contract the
+      customer's active/default contract) · **0 sprayed-without-a-tag**. Live roster with reasons +
+      profile links is on the card itself. See REFERENCE §5.10.
+
 ## Ready to build (unblocked) — accuracy follow-ups
 - [ ] **Duplicate web records distort the return rate by +3 (≈0.2pp).** Pocomos spawns a NEW customer
       record on lead conversion instead of reusing the old one, so one human can hold 2+ web ids
@@ -50,6 +58,17 @@
       Full ritual + gotchas (\r\r line endings, M/D/YY dates) → REFERENCE §5.9.
 
 ## Done (recent)
+- [x] **"Returned" rule widened + buckets partition again + anomalies card (rev 19, 2026-07-17)** —
+      returned in Y+1 = active now with ANY {Y+1} tag (signing up = returning, sprays not required,
+      New Sale re-signups included) OR meets the Y+1 spray rule regardless of status (credits
+      sprayed-then-churned); applies to BOTH pairs (rev 18's in-progress-only tag path lifted).
+      Denominator unchanged. **24→25 = 78.8% (1,006/1,276)** (was 77.8%, +1.0pp; 808 tag/198 sprays).
+      **25→26 = 77.3% (949/1,227)** (was 948; +4 New Sale, 3 moved spray→tag). Returning box 949.
+      Season buckets partition restored: **New 150 + Season-Skipped 86 + Returning(active) 932 =
+      1,168 = Active Customers**; all three tiles now taxonomy-driven (not categorize.ts); the 17
+      sprayed-then-churned returners are named in the reconciliation line. New **Return-rate
+      anomalies card** (§5.10, `lib/sales-anomalies.ts`) — live/self-clearing, 4 classes, 117
+      records. See §5.8 / §5.10.
 - [x] **Return-rate counts from bulk exports; 24→25 UNBLOCKED (rev 18, 2026-07-16)** — completed
       seasons now come from authoritative job-level exports (2024 RealGreen dump *received+loaded*,
       2025 Pocomos completed-jobs); only CY is scraped. Retires BOTH blockers: the pre-Pocomos 2024

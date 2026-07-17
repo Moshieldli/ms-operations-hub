@@ -61,10 +61,11 @@ function TvDashboard({
   summary: SalesSummary;
   taxonomy: SalesTaxonomy | null;
 }) {
-  const { totals, buckets, contractTypeGroups } = summary;
-  // "Returning" = the taxonomy's returningBox (= the return-rate numerator), not
-  // summary.buckets.RETAINED — see sales-view.tsx / ReturningBox (rev 17).
+  const { totals, contractTypeGroups } = summary;
+  // All three season tiles come from the taxonomy (rev 19), not categorize.ts —
+  // they're defined by service evidence. See sales-view.tsx / SeasonBuckets.
   const box = taxonomy?.returningBox;
+  const sb = taxonomy?.seasonBuckets;
 
   return (
     <div className="mt-8 flex flex-1 flex-col gap-8 lg:mt-12 lg:gap-12">
@@ -86,8 +87,8 @@ function TvDashboard({
           for the one bucket that needs attention (Not Renewed → amber).
         */}
         <div className="grid flex-1 grid-cols-2 gap-4 lg:grid-cols-5 lg:gap-6">
-          <BigBucket label="New" value={buckets.NEW} />
-          <BigBucket label="New – Season Skipped" value={buckets.RETURNING} />
+          <BigBucket label="New" value={sb ? sb.newCount : "…"} />
+          <BigBucket label="New – Season Skipped" value={sb ? sb.seasonSkipped : "…"} />
           <BigBucket
             label="Returning"
             value={box ? box.total : "…"}
@@ -95,7 +96,7 @@ function TvDashboard({
               box
                 ? `Auto ${fmt(box.auto)} · SEB ${fmt(box.seb)} · EB ${fmt(box.eb)} · Renewed ${fmt(
                     box.renewed
-                  )} · by spray history ${fmt(box.bySprayHistory)}`
+                  )} · New Sale ${fmt(box.newSale)}`
                 : undefined
             }
           />
