@@ -14,6 +14,12 @@
 - [ ] Marketing source breakdown: Long Island vs Westchester
 
 ## Needs a human decision
+- [ ] **`/leads/followup`: should "No open task" (185 leads) count as Overdue?** The spec asked for
+      Overdue / No task / On track, but 185 of the 288 open 2026 leads have a COMPLETED task and
+      nothing rescheduled — they fit none of the three, so a 4th bucket was added rather than lose
+      them. The team completes tasks instead of letting them lapse, so Overdue is nearly empty (1)
+      while 277/288 open leads have no next step. Decide whether "No open task" is a crack (fold
+      into Overdue / make it the headline) or expected (a parked lead). See REFERENCE §5.11.
 - [ ] "Real lead" definition for close rate — pending Rivka & Leon (drops into isRealLead() hook).
 - [~] Return-rate mid-season-cancel decision — RESOLVED by the 2026-07-07 ops override: metric is
       now completed-service-based ("served in Y, receiving in Y+1"), single rate per pair, no dual
@@ -57,7 +63,24 @@
       `data/`, add a loader branch, run `scripts/load-exports.ts` then `scripts/verify-rev18.ts`.
       Full ritual + gotchas (\r\r line endings, M/D/YY dates) → REFERENCE §5.9.
 
+## Ready to build (unblocked) — accuracy follow-ups
+- [ ] **PhoneBurner call coverage is thin for the follow-up cross-ref.** `webhook_log` holds only
+      293 recent disposition rows and its `pocomos_id` is NULL on every row (must bridge via
+      `pb_contact_id → phoneburner_contacts`). Only 5 of 288 scope leads have any call event, though
+      136/288 are synced to PB. To make the "PB calls" column meaningful we'd need to backfill call
+      history from the PhoneBurner API rather than rely on webhooks only. See REFERENCE §5.11.
+- [ ] Fix `webhook_log.pocomos_id` at write time (webhookProcessor) so future rows join directly
+      instead of needing the pb_contact_id bridge.
+
 ## Done (recent)
+- [x] **NEW `/leads/followup` "Overdue Follow-ups" page (rev 20, 2026-07-17)** — open leads created
+      this year (status=Lead + date_added in CY; 288 live), classified by follow-up task state:
+      **Overdue 1 · No task 92 · No open task 185 · On track 10**. Nightly cron `0 7 * * *` →
+      `leads_followup` + Refresh-now button; page reads cache only. Probe: `/leads/data` already
+      carries status + reason + marketing type (no per-lead lead-information scrape); tasks are
+      server-rendered on `/lead/{id}/message-board`; comment timestamps need `/message/todo/{id}/show`.
+      Cost ~416 GETs / ~229s, 0 failures. PB cross-ref via the pb_contact_id bridge (sparse — 5/288).
+      See §5.11.
 - [x] **"Returned" rule widened + buckets partition again + anomalies card (rev 19, 2026-07-17)** —
       returned in Y+1 = active now with ANY {Y+1} tag (signing up = returning, sprays not required,
       New Sale re-signups included) OR meets the Y+1 spray rule regardless of status (credits

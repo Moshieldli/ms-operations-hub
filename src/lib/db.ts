@@ -166,6 +166,34 @@ export async function initSchema(): Promise<void> {
   //               serviceCounts.ts (it now touches year=CY / source='scrape' only).
   await c`ALTER TABLE mosquito_service_counts ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'scrape'`;
 
+  // ---- /leads/followup cache (rev 20) ----
+  // Open THIS-YEAR leads + their follow-up task state. Filled by the nightly
+  // cron (/api/cron/leads-followup) or "Refresh now"; the page only ever reads.
+  // Truncate-and-reload, same pattern as mosquito_service_status.
+  await c`
+    CREATE TABLE IF NOT EXISTS leads_followup (
+      lead_id TEXT PRIMARY KEY,
+      name TEXT,
+      created_date DATE,
+      salesperson TEXT,
+      marketing_type TEXT,
+      phone TEXT,
+      email TEXT,
+      bucket TEXT NOT NULL,
+      touches INTEGER NOT NULL DEFAULT 0,
+      last_touch_at TIMESTAMPTZ,
+      task_due_at TIMESTAMPTZ,
+      days_overdue INTEGER,
+      task_status TEXT,
+      task_description TEXT,
+      open_task_count INTEGER NOT NULL DEFAULT 0,
+      archived_task_count INTEGER NOT NULL DEFAULT 0,
+      pb_calls INTEGER NOT NULL DEFAULT 0,
+      pb_last_call_at TIMESTAMPTZ
+    )
+  `;
+  await c`CREATE INDEX IF NOT EXISTS leads_followup_bucket_idx ON leads_followup (bucket)`;
+
   // ---- Bulk ground-truth exports (rev 18) ----
   // Raw-ish landing tables for the two authoritative job exports. Kept beyond the
   // return-rate rebuild because they carry marketing-source fields we want for
