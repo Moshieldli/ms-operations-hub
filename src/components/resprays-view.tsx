@@ -1,15 +1,17 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { Fragment, useCallback, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshedAt } from "@/components/refreshed-at";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
-import type { RespraysReport } from "@/lib/service/resprays";
+import type { ResprayDetail, RespraysReport, TechRow } from "@/lib/service/resprays";
 import { cn } from "@/lib/utils";
 
+const POCOMOS_BASE = "https://mypocomos.net";
 const fmt = (n: number) => n.toLocaleString("en-US");
 const pct = (n: number) => `${n.toFixed(2)}%`;
+const profileUrl = (id: string) => `${POCOMOS_BASE}/customer/${id}/service-information`;
 
 export function RespraysView({
   initial,
@@ -157,52 +159,158 @@ export function RespraysView({
                     </span>
                   }
                 >
-                  {tech.weeks.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No weeks with applications.</p>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
-                            <th className="py-2 pr-4 font-medium">Week of</th>
-                            <th className="py-2 pr-4 text-right font-medium">Sprays</th>
-                            <th className="py-2 pr-4 text-right font-medium">Resprays</th>
-                            <th className="py-2 pl-4 text-right font-medium">Rate</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {tech.weeks.map((w) => (
-                            <tr key={w.weekStart} className="border-b last:border-0">
-                              <td className="py-1.5 pr-4 tabular-nums">{w.weekStart}</td>
-                              <td className="py-1.5 pr-4 text-right tabular-nums">{fmt(w.applications)}</td>
-                              <td
-                                className={cn(
-                                  "py-1.5 pr-4 text-right tabular-nums",
-                                  w.resprays > 0 && "text-red-600 dark:text-red-400"
-                                )}
-                              >
-                                {fmt(w.resprays)}
-                              </td>
-                              <td className="py-1.5 pl-4 text-right tabular-nums text-muted-foreground">
-                                {w.resprays > 0 ? pct(w.rate) : "—"}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
-                        A respray is counted in the week of the <em>spray it followed</em>, not the
-                        week the re-service happened — so the weekly rate always reads against the
-                        sprays that caused it.
-                      </p>
-                    </div>
-                  )}
+                  <TechBody tech={tech} />
+
                 </CollapsibleSection>
               ))}
             </div>
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/**
+ * A tech's expanded body: an "All resprays" section (full YTD list) above the
+ * weekly table, whose Resprays cell expands per-week to the same detail rows.
+ * Client state (which weeks are open) lives here so each tech is independent.
+ */
+function TechBody({ tech }: { tech: TechRow }) {
+  const [openWeeks, setOpenWeeks] = useState<Set<string>>(new Set());
+  const toggle = (w: string) =>
+    setOpenWeeks((s) => {
+      const n = new Set(s);
+      if (n.has(w)) n.delete(w);
+      else n.add(w);
+      return n;
+    });
+
+  if (tech.weeks.length === 0) {
+    return <p className="text-xs text-muted-foreground">No weeks with applications.</p>;
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Full YTD list — so you don't have to hunt week by week. */}
+      {tech.allResprays.length > 0 ? (
+        <CollapsibleSection
+          label="All resprays (YTD)"
+          right={`${fmt(tech.allResprays.length)} attributed`}
+        >
+          <ResprayDetailTable details={tech.allResprays} />
+        </CollapsibleSection>
+      ) : null}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+              <th className="py-2 pr-4 font-medium">Week of</th>
+              <th className="py-2 pr-4 text-right font-medium">Sprays</th>
+              <th className="py-2 pr-4 text-right font-medium">Resprays</th>
+              <th className="py-2 pl-4 text-right font-medium">Rate</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tech.weeks.map((w) => {
+              const open = openWeeks.has(w.weekStart);
+              const hasResprays = w.resprays > 0;
+              return (
+                <Fragment key={w.weekStart}>
+                  <tr className={cn("border-b", open && "border-b-0")}>
+                    <td className="py-1.5 pr-4 tabular-nums">{w.weekStart}</td>
+                    <td className="py-1.5 pr-4 text-right tabular-nums">{fmt(w.applications)}</td>
+                    <td className="py-1.5 pr-4 text-right tabular-nums">
+                      {hasResprays ? (
+                        <button
+                          type="button"
+                          onClick={() => toggle(w.weekStart)}
+                          aria-expanded={open}
+                          className="inline-flex items-center gap-1 font-medium text-red-600 underline-offset-4 hover:underline dark:text-red-400"
+                          title="Show the resprays counted this week"
+                        >
+                          <svg
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                            className={cn(
+                              "h-3.5 w-3.5 transition-transform duration-150",
+                              open && "rotate-90"
+                            )}
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="m9 18 6-6-6-6" />
+                          </svg>
+                          {fmt(w.resprays)}
+                        </button>
+                      ) : (
+                        <span className="tabular-nums">0</span>
+                      )}
+                    </td>
+                    <td className="py-1.5 pl-4 text-right tabular-nums text-muted-foreground">
+                      {hasResprays ? pct(w.rate) : "—"}
+                    </td>
+                  </tr>
+                  {open ? (
+                    <tr className="border-b">
+                      <td colSpan={4} className="bg-muted/30 px-3 py-2">
+                        <ResprayDetailTable details={w.resprayDetails} />
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+        <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
+          A respray is counted in the week of the <em>spray it followed</em>, not the week the
+          re-service happened — so the weekly rate always reads against the sprays that caused it.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** Audit rows for a set of resprays: customer, both dates, gap, profile link. */
+function ResprayDetailTable({ details }: { details: ResprayDetail[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+            <th className="py-1.5 pr-4 font-medium">Customer</th>
+            <th className="py-1.5 pr-4 font-medium">Prior spray</th>
+            <th className="py-1.5 pr-4 font-medium">Re-service</th>
+            <th className="py-1.5 pr-4 text-right font-medium">Days between</th>
+            <th className="py-1.5 pl-4 text-right font-medium">Profile</th>
+          </tr>
+        </thead>
+        <tbody>
+          {details.map((d) => (
+            <tr key={d.invoiceNo} className="border-b last:border-0">
+              <td className="py-1.5 pr-4">{d.customerName}</td>
+              <td className="py-1.5 pr-4 tabular-nums text-muted-foreground">{d.priorSprayDate}</td>
+              <td className="py-1.5 pr-4 tabular-nums text-muted-foreground">{d.reserviceDate}</td>
+              <td className="py-1.5 pr-4 text-right tabular-nums font-medium">{fmt(d.gapDays)}</td>
+              <td className="py-1.5 pl-4 text-right">
+                <a
+                  href={profileUrl(d.customerId)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary underline-offset-4 hover:underline"
+                >
+                  Audit
+                </a>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

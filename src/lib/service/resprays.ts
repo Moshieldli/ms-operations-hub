@@ -56,11 +56,32 @@ export interface RespJob {
   completedDate: string; // ISO YYYY-MM-DD
 }
 
+/**
+ * One counted respray, audit-ready: the customer, the tech's prior spray it's
+ * blamed on, the re-service that followed, and the gap between them. Lets ops
+ * click through to the Pocomos profile and judge whether it was a genuine
+ * respray or something else on the account.
+ */
+export interface ResprayDetail {
+  customerId: string;
+  customerName: string;
+  /** The prior mosquito application BY THIS TECH, ISO date. */
+  priorSprayDate: string;
+  /** The re-service that followed, ISO date. */
+  reserviceDate: string;
+  /** Whole days between the two (≤ RESPRAY_MAX_GAP_DAYS by definition). */
+  gapDays: number;
+  /** Re-service invoice # — a stable key. */
+  invoiceNo: string;
+}
+
 export interface TechWeek {
   weekStart: string; // ISO Monday
   applications: number;
   resprays: number;
   rate: number;
+  /** The counted resprays bucketed into this week (newest re-service first). */
+  resprayDetails: ResprayDetail[];
 }
 
 export interface TechRow {
@@ -73,6 +94,8 @@ export interface TechRow {
   /** True when rate >= FLAG_RATE_MULTIPLE × team avg AND applications >= FLAG_MIN_APPLICATIONS. */
   flagged: boolean;
   weeks: TechWeek[];
+  /** Full YTD respray list, newest re-service first — the "All resprays" view. */
+  allResprays: ResprayDetail[];
 }
 
 export interface RespraysReport {
@@ -196,11 +219,14 @@ export interface Attribution {
   kind: "counted" | "excluded_gap" | "unattributed";
   tech: string | null;
   gapDays: number | null;
+  /** The prior application this re-service is measured against (null = none). */
+  prior: RespJob | null;
 }
 
 /**
  * Attribute every mosquito Re-service to the tech whose spray it followed —
- * but only when it landed inside the window.
+ * but only when it landed inside the window. Carries the prior spray so callers
+ * (weekly bucketing, the detail rows) don't recompute it.
  */
 export function attribute(jobs: RespJob[]): Attribution[] {
   const byCustomer = new Map<string, RespJob[]>();
@@ -216,14 +242,26 @@ export function attribute(jobs: RespJob[]): Attribution[] {
     const prior = (byCustomer.get(j.customerId) || []).filter((a) => a.completedDate < j.completedDate);
     const last = prior[prior.length - 1];
     if (!last) {
-      out.push({ job: j, kind: "unattributed", tech: null, gapDays: null });
+      out.push({ job: j, kind: "unattributed", tech: null, gapDays: null, prior: null });
       continue;
     }
     const gap = daysBetween(last.completedDate, j.completedDate);
-    if (gap <= RESPRAY_MAX_GAP_DAYS) out.push({ job: j, kind: "counted", tech: last.technician, gapDays: gap });
-    else out.push({ job: j, kind: "excluded_gap", tech: last.technician, gapDays: gap });
+    const kind = gap <= RESPRAY_MAX_GAP_DAYS ? "counted" : "excluded_gap";
+    out.push({ job: j, kind, tech: last.technician, gapDays: gap, prior: last });
   }
   return out;
+}
+
+/** An attribution → an audit-ready detail row. */
+function toDetail(a: Attribution): ResprayDetail {
+  return {
+    customerId: a.job.customerId,
+    customerName: a.job.customerName,
+    priorSprayDate: a.prior!.completedDate,
+    reserviceDate: a.job.completedDate,
+    gapDays: a.gapDays!,
+    invoiceNo: a.job.invoiceNo,
+  };
 }
 
 /** Build the report from stored jobs. */
@@ -254,25 +292,31 @@ export function buildReport(jobs: RespJob[], asOf: string): RespraysReport {
       // Weekly breakdown: every week the tech sprayed, plus any week he was
       // blamed for a respray.
       const weeks = new Map<string, TechWeek>();
-      const bump = (w: string, k: "applications" | "resprays") => {
-        const row = weeks.get(w) ?? { weekStart: w, applications: 0, resprays: 0, rate: 0 };
-        row[k]++;
+      const week = (w: string): TechWeek => {
+        const row = weeks.get(w) ?? { weekStart: w, applications: 0, resprays: 0, rate: 0, resprayDetails: [] };
         weeks.set(w, row);
+        return row;
       };
-      for (const a of e.apps) bump(weekStart(a.completedDate), "applications");
+      for (const a of e.apps) week(weekStart(a.completedDate)).applications++;
       // A respray belongs to the week of the SPRAY it's blamed on, not its own
       // week — otherwise a Monday respray of a Friday spray lands in the wrong
-      // bucket and the weekly rate can exceed 100%.
+      // bucket and the weekly rate can exceed 100%. `prior` is carried on the
+      // attribution, so no re-lookup here.
       for (const r of e.resprays) {
-        const prior = jobs
-          .filter((j) => isApplication(j) && j.customerId === r.job.customerId && j.completedDate < r.job.completedDate)
-          .sort((a, b) => a.completedDate.localeCompare(b.completedDate))
-          .pop();
-        bump(weekStart(prior?.completedDate ?? r.job.completedDate), "resprays");
+        const row = week(weekStart(r.prior?.completedDate ?? r.job.completedDate));
+        row.resprays++;
+        row.resprayDetails.push(toDetail(r));
       }
       const weekList = [...weeks.values()]
-        .map((w) => ({ ...w, rate: w.applications ? (w.resprays / w.applications) * 100 : 0 }))
+        .map((w) => ({
+          ...w,
+          rate: w.applications ? (w.resprays / w.applications) * 100 : 0,
+          resprayDetails: w.resprayDetails.sort((a, b) => b.reserviceDate.localeCompare(a.reserviceDate)),
+        }))
         .sort((a, b) => b.weekStart.localeCompare(a.weekStart));
+      const allResprays = e.resprays
+        .map(toDetail)
+        .sort((a, b) => b.reserviceDate.localeCompare(a.reserviceDate));
       return {
         technician,
         applications: e.apps.length,
@@ -281,6 +325,7 @@ export function buildReport(jobs: RespJob[], asOf: string): RespraysReport {
         vsTeam: teamRate ? rate / teamRate : 0,
         flagged: e.apps.length >= FLAG_MIN_APPLICATIONS && teamRate > 0 && rate >= teamRate * FLAG_RATE_MULTIPLE,
         weeks: weekList,
+        allResprays,
       };
     })
     .sort((a, b) => b.rate - a.rate || b.applications - a.applications);
