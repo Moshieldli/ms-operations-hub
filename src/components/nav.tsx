@@ -13,7 +13,14 @@ interface NavLink {
 }
 
 const links: NavLink[] = [
-  { href: "/sales", label: "Sales" },
+  {
+    href: "/sales",
+    label: "Sales",
+    children: [
+      { href: "/sales", label: "Sales" },
+      { href: "/finance", label: "Paused — open balance" },
+    ],
+  },
   {
     href: "/leads",
     label: "Leads",
@@ -24,7 +31,15 @@ const links: NavLink[] = [
   },
   { href: "/calling", label: "Calling" },
   { href: "/combined", label: "Combined" },
-  { href: "/service", label: "Service" },
+  {
+    href: "/service",
+    label: "Service",
+    children: [
+      { href: "/service/overdue", label: "Overdue sprays" },
+      { href: "/service/resprays", label: "Respray performance" },
+    ],
+  },
+  { href: "/finance", label: "Finance" },
   { href: "/texting", label: "Texting" },
 ];
 

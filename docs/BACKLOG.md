@@ -72,7 +72,20 @@
 - [ ] Fix `webhook_log.pocomos_id` at write time (webhookProcessor) so future rows join directly
       instead of needing the pb_contact_id bridge.
 
+## Ready to build (unblocked)
+- [ ] **`/finance` payment-retry review** — the Finance page is scaffolded (currently hosts the
+      shared paused-balance roster). Next tenant: review/queue failed-payment retries so paused
+      accounts get unblocked. See REFERENCE §5.14.
+
 ## Done (recent)
+- [x] **Nav dropdowns + `/finance` + public fleet-counts feed (rev 23, 2026-07-17)** — Service and
+      Sales became click-driven nav dropdowns (same `NavDropdown` as Leads; Service → Overdue
+      sprays / Respray performance, Sales → Sales / Paused—open balance); new Finance tab. New
+      `/finance` page renders the shared `PausedBalanceCard` (extracted with `RowTable` into
+      `components/service-rows.tsx`; `/service/overdue` uses the same component — no copied code).
+      Public `/api/fleet-counts` (JSON) + `/api/fleet-counts.csv` (Sheets), totals only, from the
+      nightly `mosquito_service_status` table: **customer_total 1,156 · service_total 1,175** (19
+      weekly counted twice; van gauge ≈4.7 @ 250/2wk). See §5.14.
 - [x] **`/service/overdue` "sprayed today but shows overdue" FIXED (rev 22, 2026-07-17)** — routes
       109/209 customers showed overdue on the day they were sprayed. Causes: (1) overdue cache's
       last-spray lags Pocomos's bulk "Last Service" (tech completions sync hours late); (2) bulk
