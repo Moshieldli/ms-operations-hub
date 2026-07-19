@@ -80,6 +80,13 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **Spray week → SUNDAY–FRIDAY (rev 36, 2026-07-19)** — ops: the crew sprays Sun–Fri, never Sat.
+      `weekStart()` now returns the ISO Sunday; tech board (landscape + tall), resprays weekly
+      leaderboard, Most Improved and all bucketing moved together. Bucket is Sun–Sat (Saturday
+      structurally empty, kept so stray Saturday jobs can't vanish); displays Sun–Fri. **Board rolls
+      over on Saturday** = the most recent Sun–Fri week that has fully ended. Tie-out verified against
+      the LIVE Pocomos report: Nathaniel Jul 12–17 → 146 rows = 115 counted + 31 excluded, exact.
+      New `scripts/verify-week-tieout.ts`. See §5.16.
 - [x] **TV emoji → inline SVG icons (rev 35, 2026-07-19)** — Yodeck's Linux browser has no
       color-emoji font, so every award/weather glyph was an empty box on the real screens. New
       `components/tv-icons.tsx` (lucide): per-award accent colors in gradient badge discs with a soft

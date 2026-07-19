@@ -12,7 +12,10 @@
  *     Probed 2026-07-19: 617/619 of the week's jobs join to a route (99.7%),
  *     44 distinct routes. The id spaces match — NO short/web id conversion needed.
  *
- * THE BOARD WEEK IS THE LAST **COMPLETED** MON–SUN WEEK, never the in-progress one.
+ * THE BOARD WEEK IS THE LAST FULLY-ENDED **SUN–FRI** WEEK, never the in-progress one.
+ * The crew's week runs Sunday through Friday (they sometimes spray Sunday, never
+ * Saturday), so the bucket is Sun–Sat with a structurally empty Saturday and the
+ * board **rolls over on Saturday** — see `boardWeekStart` (rev 36).
  * Probed 2026-07-19: the current week had 609 sprays and **0** resprays, because a
  * respray is bucketed to the week of the spray it is blamed on and re-services
  * arrive days later. Running the awards on the live week makes Iron Wall,
@@ -123,9 +126,9 @@ export interface AwardWinner {
 }
 
 export interface TechBoard {
-  /** ISO Monday of the board week (the last COMPLETED week). */
+  /** ISO SUNDAY of the board week (the last fully-ended Sun-Fri week). */
   weekStart: string;
-  /** ISO Sunday of the board week. */
+  /** ISO FRIDAY of the board week — the crew's last working day (never Saturday). */
   weekEnd: string;
   year: string;
   asOf: string;
@@ -148,9 +151,9 @@ export interface TechBoard {
 const isApplication = (j: RespJob) =>
   APPLICATION_JOB_TYPES.has(j.jobType.trim().toLowerCase()) && isMosquitoServiceType(j.serviceType);
 
-/** ISO Monday `n` weeks before `mondayIso`. */
-function shiftWeek(mondayIso: string, weeksBack: number): string {
-  const d = new Date(`${mondayIso}T00:00:00Z`);
+/** ISO Sunday `n` weeks before `sundayIso`. */
+function shiftWeek(sundayIso: string, weeksBack: number): string {
+  const d = new Date(`${sundayIso}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() - weeksBack * 7);
   return d.toISOString().slice(0, 10);
 }
@@ -162,11 +165,28 @@ const addDays = (iso: string, n: number) => {
 };
 
 /**
- * The board week = the last COMPLETED Mon–Sun week. See the file header for why
- * the in-progress week is never used.
+ * The board week = the most recent **Sun–Fri** week that has FULLY ENDED
+ * (rev 36). See the file header for why the in-progress week is never used.
+ *
+ * THE ROLLOVER RULE: **the board flips on SATURDAY.** The crew's last working
+ * day is Friday, so the moment Saturday starts, the week that just ran is
+ * complete and becomes the board week — it then holds until the next Saturday.
+ *
+ *   Fri Jul 17 → board = Jul 5    (Jul 12 week still in progress)
+ *   Sat Jul 18 → board = Jul 12   ← flips here, the day after its Friday ended
+ *   Sun Jul 19 → board = Jul 12
+ *   Fri Jul 24 → board = Jul 12
+ *   Sat Jul 25 → board = Jul 19
+ *
+ * Saturday (not Sunday) is the clean choice: waiting for Sunday would leave
+ * Saturday showing a week that ended eight days earlier, for no gain — nothing
+ * can land in a Sun–Fri week after its Friday, so there is nothing to wait for.
  */
 export function boardWeekStart(todayIso: string): string {
-  return shiftWeek(weekStart(todayIso), 1);
+  const cur = weekStart(todayIso); // Sunday of the week containing today
+  const isSaturday = new Date(`${todayIso}T00:00:00Z`).getUTCDay() === 6;
+  // On Saturday the current bucket's work week (Sun–Fri) is already over.
+  return isSaturday ? cur : shiftWeek(cur, 1);
 }
 
 // ------------------------------------------------------------------ stats
@@ -439,7 +459,10 @@ export async function getTechBoard(): Promise<TechBoard> {
 
   return {
     weekStart: board,
-    weekEnd: addDays(board, 6),
+    // FRIDAY, not Saturday: the bucket is Sun–Sat but the crew never works
+    // Saturday, so showing "Jul 12 – Jul 18" would advertise a day nobody
+    // sprayed. The bucket still spans 7 days so nothing can fall through.
+    weekEnd: addDays(board, 5),
     year: CURRENT_YEAR,
     asOf: new Date().toISOString(),
     winners,

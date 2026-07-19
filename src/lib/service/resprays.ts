@@ -101,7 +101,7 @@ export interface WeeklyTechStat {
 }
 
 export interface WeeklyRecap {
-  weekStart: string; // ISO Monday
+  weekStart: string; // ISO Sunday (spray week Sun-Fri)
   label: string; // "This week" / "Last week"
   techs: WeeklyTechStat[];
   totalApps: number;
@@ -121,7 +121,7 @@ export interface WeeklyLeaderboard {
 }
 
 export interface TechWeek {
-  weekStart: string; // ISO Monday
+  weekStart: string; // ISO Sunday (spray week Sun-Fri)
   applications: number;
   resprays: number;
   rate: number;
@@ -189,11 +189,23 @@ const toReportDate = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(8, 10)}/${
 const daysBetween = (a: string, b: string) =>
   Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
 
-/** ISO Monday of that date's week. */
+/**
+ * ISO **SUNDAY** of that date's week — the spray week (rev 36, ops).
+ *
+ * The crew's week runs **Sunday through Friday**: they sometimes spray Sunday
+ * and never spray Saturday. So the bucket is Sun–Sat and its Saturday slot is
+ * structurally empty. It is kept as a full 7-day bucket deliberately: bucketing
+ * Sun–Fri only would make a stray Saturday job (an exception, a data-entry
+ * date) fall through the gaps and vanish from every weekly total. Displays say
+ * Sun–Fri (see `TechBoard.weekEnd`); the bucket still catches everything.
+ *
+ * ⚠️ NOT the same week as `categorize.ts::startOfSaturdayWeek`, which is a
+ * Sat–Fri week used by the SALES snapshot convention. Different domain, left
+ * alone on purpose.
+ */
 export function weekStart(iso: string): string {
   const d = new Date(`${iso}T00:00:00Z`);
-  const dow = (d.getUTCDay() + 6) % 7; // Mon=0
-  d.setUTCDate(d.getUTCDate() - dow);
+  d.setUTCDate(d.getUTCDate() - d.getUTCDay()); // Sun=0 → already the start
   return d.toISOString().slice(0, 10);
 }
 
@@ -365,7 +377,7 @@ export function buildReport(jobs: RespJob[], asOf: string): RespraysReport {
       };
       for (const a of e.apps) week(weekStart(a.completedDate)).applications++;
       // A respray belongs to the week of the SPRAY it's blamed on, not its own
-      // week — otherwise a Monday respray of a Friday spray lands in the wrong
+      // week — otherwise a Sunday/Monday respray of a Friday spray lands in the wrong
       // bucket and the weekly rate can exceed 100%. `prior` is carried on the
       // attribution, so no re-lookup here.
       for (const r of e.resprays) {
@@ -435,9 +447,9 @@ export function buildReport(jobs: RespJob[], asOf: string): RespraysReport {
 
 // ---------------------------------------------------- weekly leaderboard
 
-/** ISO Monday of the week `weeks` before the week containing `iso`. */
-function shiftWeek(mondayIso: string, weeksBack: number): string {
-  const d = new Date(`${mondayIso}T00:00:00Z`);
+/** ISO Sunday of the week `weeks` before the week starting `sundayIso`. */
+function shiftWeek(sundayIso: string, weeksBack: number): string {
+  const d = new Date(`${sundayIso}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() - weeksBack * 7);
   return d.toISOString().slice(0, 10);
 }
