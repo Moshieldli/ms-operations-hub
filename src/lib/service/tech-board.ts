@@ -241,7 +241,9 @@ export function buildWeekStats(
   volumeWeek: string,
   maturedWeek: string,
   routeByCustomer: Map<string, string>,
-  todayIso: string
+  todayIso: string,
+  /** Customers with a re-service ON THE BOOKS but not yet performed (rev 39). */
+  pendingReservice: Set<string> = new Set()
 ): TechWeekStat[] {
   const priorMatured = shiftWeek(maturedWeek, 1);
   const counted = attribute(jobs).filter((a) => a.kind === "counted" && a.prior);
@@ -254,13 +256,25 @@ export function buildWeekStats(
   // every number; they are filtered out only when AWARDS are handed out.
   const apps = jobs.filter(isApplication);
 
+  /**
+   * PROVEN CLEAN (rev 39) needs all three: aged past MATURITY_DAYS, not blamed
+   * for a completed respray, and no re-service sitting on the books for that
+   * customer. The third clause is the one that isn't computable from job history
+   * — a booking made on day 9 can be performed on day 15, so "10 days quiet"
+   * alone would credit a streak that is already broken.
+   */
+  const isProven = (j: RespJob) =>
+    isMatured(j.completedDate, todayIso) && !pendingReservice.has(j.customerId);
+
   const byTech = new Map<string, RespJob[]>();
   for (const a of apps) byTech.set(a.technician, [...(byTech.get(a.technician) || []), a]);
 
   const stats: TechWeekStat[] = [];
   for (const [technician, list] of byTech) {
     const inWeek = list.filter((j) => weekStart(j.completedDate) === volumeWeek);
-    const inMatured = list.filter((j) => weekStart(j.completedDate) === maturedWeek);
+    // Only PROVEN sprays count toward a matured-week rate — a spray awaiting a
+    // booked re-service has no verdict yet and would understate the rate.
+    const inMatured = list.filter((j) => weekStart(j.completedDate) === maturedWeek && isProven(j));
     // On the board if he worked EITHER clock's week — the volume week drives the
     // table, the matured week drives the rate awards, and they differ.
     if (inWeek.length === 0 && inMatured.length === 0) continue;
@@ -272,7 +286,7 @@ export function buildWeekStats(
     const maturedResprays = inMatured.filter((j) => blamedInvoices.has(j.invoiceNo)).length;
     const maturedRate = inMatured.length ? (maturedResprays / inMatured.length) * 100 : 0;
 
-    const inPrior = list.filter((j) => weekStart(j.completedDate) === priorMatured);
+    const inPrior = list.filter((j) => weekStart(j.completedDate) === priorMatured && isProven(j));
     const priorResprays = inPrior.filter((j) => blamedInvoices.has(j.invoiceNo)).length;
     const priorMaturedRate =
       inPrior.length >= MIN_SPRAYS_FOR_QUALITY_AWARD ? (priorResprays / inPrior.length) * 100 : null;
@@ -282,7 +296,7 @@ export function buildWeekStats(
     // an immature spray has no verdict yet, and counting it would inflate the
     // streak of whoever sprayed most recently, then silently revise it later.
     const chrono = [...list]
-      .filter((j) => isMatured(j.completedDate, todayIso))
+      .filter(isProven)
       .sort((a, b) => a.completedDate.localeCompare(b.completedDate));
     let cleanStreak = 0;
     for (let i = chrono.length - 1; i >= 0; i--) {
@@ -557,7 +571,11 @@ export async function getTechBoard(): Promise<TechBoard> {
   const routeByCustomer = new Map(routeRows.map((r) => [r.pocomos_id, r.route_code]));
 
   const matured = maturedWeekStart(today);
-  const stats = buildWeekStats(jobs, board, matured, routeByCustomer, today);
+  const pendingRows = (await sql`
+    SELECT pocomos_id FROM mosquito_service_status WHERE pending_reservice = TRUE
+  `) as Array<{ pocomos_id: string }>;
+  const pendingReservice = new Set(pendingRows.map((r) => String(r.pocomos_id)));
+  const stats = buildWeekStats(jobs, board, matured, routeByCustomer, today, pendingReservice);
   const lastWeek = await readLastWeekAwards(shiftWeek(board, 1));
   // EXCLUSION IS AWARDS-ONLY (rev 38). Cesar (head tech, sporadic schedule) and
   // the Z-* route placeholders never win an award, but their sprays and

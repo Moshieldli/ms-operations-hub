@@ -56,14 +56,15 @@ export function RespraysView({
               <CardTitle>Tech respray performance</CardTitle>
               {/* The attribution rule, on the label so it's never lost. */}
               <CardDescription>
-                Respray = a re-service <strong>within 9 days</strong> of the
-                customer&rsquo;s prior spray, attributed to that spray&rsquo;s
-                tech — <strong>including prior re-services</strong> (so a
-                re-service of a re-service blames the last person who touched the
-                account). Past 9 days it can&rsquo;t be a respray of that spray
-                (ops pull the next Regular earlier instead), so it counts in the
-                total but blames nobody — see the anomalies card. {report.year}{" "}
-                only; prior-year jobs are never used. Rate = a tech&rsquo;s
+                Respray = <strong>any completed re-service</strong> with a prior
+                spray, attributed to that spray&rsquo;s tech —{" "}
+                <strong>including prior re-services</strong> (so a re-service of a
+                re-service blames the last person who touched the account).
+                Resprays are <strong>booked</strong> within ~9 days of a spray,
+                but the <strong>visit can complete later</strong> (rain,
+                capacity), so a long gap is normal and never excludes a job — it
+                just gets a marker. {report.year} only; prior-year jobs are never
+                used. Rate = a tech&rsquo;s
                 attributed resprays ÷ his mosquito applications (Initial +
                 Regular) YTD. <strong>Every tech counts here</strong>, including
                 Cesar and route placeholders — the awards board is the only place
@@ -104,10 +105,9 @@ export function RespraysView({
               def={`Re-services with no prior ${report.year} mosquito job — nobody blamed.`}
             />
             <Stat
-              label="Outside window"
-              value={fmt(t.anomalyResprays)}
-              def="Re-services more than 9 days after any prior spray — a data anomaly, counted in the total but blamed on nobody."
-              tone={t.anomalyResprays > 0 ? "bad" : undefined}
+              label="Long-gap visits"
+              value={fmt(t.longGapResprays)}
+              def="Counted resprays whose VISIT landed more than 9 days after the spray — normal (rain/capacity push the booking out), shown for visibility only."
             />
             <Stat
               label="Team avg rate"
@@ -122,7 +122,7 @@ export function RespraysView({
 
       <CadenceHealthCard report={report} />
 
-      <AnomaliesCard report={report} />
+      <LongGapCard report={report} />
 
       <WeeklyLeaderboardCard report={report} minApps={rules.weeklyCalloutMinApps} />
 
@@ -332,7 +332,20 @@ function ResprayDetailTable({ details }: { details: ResprayDetail[] }) {
                 <span className="ml-1 text-[10px] uppercase tracking-wide">{d.priorJobType}</span>
               </td>
               <td className="py-1.5 pr-4 tabular-nums text-muted-foreground">{d.reserviceDate}</td>
-              <td className="py-1.5 pr-4 text-right tabular-nums font-medium">{fmt(d.gapDays)}</td>
+              {/* Gap is informational. A long gap gets a subtle marker (the
+                  visit ran late) — it never changes attribution, because the
+                  ~9-day rule applies at BOOKING, not completion. */}
+              <td className="py-1.5 pr-4 text-right tabular-nums font-medium">
+                {fmt(d.gapDays)}
+                {d.gapDays > 9 ? (
+                  <span
+                    className="ml-1 text-[10px] font-normal text-muted-foreground"
+                    title="Booked within ~9 days; the visit completed later (rain/capacity). Fully counted."
+                  >
+                    late visit
+                  </span>
+                ) : null}
+              </td>
               <td className="py-1.5 pl-4 text-right">
                 <a
                   href={profileUrl(d.customerId)}
@@ -390,71 +403,69 @@ function SeasonPaceCard({ report }: { report: RespraysReport }) {
 }
 
 /**
- * Re-services that fall OUTSIDE the respray window (rev 38) — counted in the
- * re-service total, blamed on nobody, listed here so ops can fix the record.
+ * Counted resprays whose VISIT ran long (rev 39) — informational only.
+ *
+ * These are NOT excluded: the ~9-day rule governs when the office BOOKS a
+ * re-service, not when the crew gets there. Rain and capacity routinely push the
+ * visit out. Rev 38 wrongly dropped these 39 jobs as "anomalies"; this card
+ * exists so a long gap stays visible without changing anybody's rate.
  */
-function AnomaliesCard({ report }: { report: RespraysReport }) {
-  const rows = report.anomalies ?? [];
+function LongGapCard({ report }: { report: RespraysReport }) {
+  const rows = report.longGaps ?? [];
+  if (rows.length === 0) return null;
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-base">
-          Re-services outside the window{rows.length ? ` (${fmt(rows.length)})` : ""}
+          Long-gap visits ({fmt(rows.length)})
         </CardTitle>
         <CardDescription>
-          Ops rule: a re-service only ever follows a spray within{" "}
-          <strong>9 days</strong> — past that the next scheduled Regular is pulled
-          earlier instead. So these can&rsquo;t be a respray of the spray before
-          them: they&rsquo;re a <strong>data anomaly</strong> (mis-keyed date or
-          mis-typed job). They still count in the re-service total, but{" "}
-          <strong>nobody is blamed</strong> for them. Fix the record in Pocomos
-          and they drop off.
+          Resprays whose <strong>visit</strong> completed more than 9 days after
+          the spray they&rsquo;re blamed on. The 9-day rule is a{" "}
+          <strong>booking</strong> rule — the office applies it when scheduling,
+          and weather or capacity can push the actual visit later. These are{" "}
+          <strong>fully counted</strong> and attributed; the list is here for
+          visibility, not for correction.
         </CardDescription>
       </CardHeader>
       <CardContent>
-        {rows.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            None — every re-service this season followed a spray within 9 days.
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="py-2 pr-4 font-medium">Customer</th>
-                  <th className="py-2 pr-4 font-medium">Prior spray</th>
-                  <th className="py-2 pr-4 text-right font-medium">Gap</th>
-                  <th className="py-2 pr-4 font-medium">Re-service</th>
-                  <th className="py-2 font-medium">Did the re-service</th>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+                <th className="py-2 pr-4 font-medium">Customer</th>
+                <th className="py-2 pr-4 font-medium">Spray blamed</th>
+                <th className="py-2 pr-4 text-right font-medium">Gap</th>
+                <th className="py-2 pr-4 font-medium">Re-service</th>
+                <th className="py-2 font-medium">Did the re-service</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r: ResprayDetail) => (
+                <tr key={r.invoiceNo} className="border-b last:border-0">
+                  <td className="py-2 pr-4">
+                    <a
+                      href={profileUrl(r.customerId)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline underline-offset-2"
+                    >
+                      {r.customerName}
+                    </a>
+                  </td>
+                  <td className="py-2 pr-4 tabular-nums text-muted-foreground">
+                    {r.priorJobDate} · {r.priorJobType} · {r.priorTech}
+                  </td>
+                  <td className="py-2 pr-4 text-right font-semibold tabular-nums text-muted-foreground">
+                    {r.gapDays}d
+                  </td>
+                  <td className="py-2 pr-4 tabular-nums">{r.reserviceDate}</td>
+                  <td className="py-2">{r.reserviceTech}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.invoiceNo} className="border-b last:border-0">
-                    <td className="py-2 pr-4">
-                      <a
-                        href={profileUrl(r.customerId)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="underline underline-offset-2"
-                      >
-                        {r.customerName}
-                      </a>
-                    </td>
-                    <td className="py-2 pr-4 tabular-nums text-muted-foreground">
-                      {r.priorJobDate} · {r.priorJobType}
-                    </td>
-                    <td className="py-2 pr-4 text-right font-semibold tabular-nums text-amber-700 dark:text-amber-400">
-                      {r.gapDays}d
-                    </td>
-                    <td className="py-2 pr-4 tabular-nums">{r.reserviceDate}</td>
-                    <td className="py-2">{r.reserviceTech}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+              ))}
+            </tbody>
+          </table>
+        </div>
       </CardContent>
     </Card>
   );

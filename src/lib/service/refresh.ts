@@ -33,6 +33,7 @@ import {
   parseRouteCode,
   parseScheduledServices,
   hasAsapUpcomingJob,
+  hasPendingReservice,
   looksLikeLoginPage,
 } from "./serviceHistory";
 import { fetchAllCustomersLastService } from "./customersData";
@@ -88,6 +89,11 @@ export interface RefreshMeta {
   asapFound: number;
   asapFailed: number;
   asapDurationMs: number;
+  /** Pending-re-service phase (rev 39) — customers sprayed 8-21 days ago. */
+  pendingScraped: number;
+  pendingFound: number;
+  pendingFailed: number;
+  pendingDurationMs: number;
   /** True if the completed-jobs cache (respray_jobs) was refreshed this run — feeds sprayed-today. */
   completedJobsRefreshed: boolean;
   /** Customers found in the unpaid-invoices report (telemetry). */
@@ -546,6 +552,53 @@ export async function refreshMosquitoStatus(
   const asapFailed = asapResult.failures.length;
   const asapDurationMs = Date.now() - asapStart;
 
+  // ---- PENDING RE-SERVICE phase (rev 39). A re-service is BOOKED within ~9
+  //      days of a spray but the visit can land much later, so a spray is not
+  //      "proven clean" while one is on the books. Same GET as the ASAP phase,
+  //      different predicate.
+  //
+  //      SCOPE = customers whose MOST RECENT spray is 8-21 days old — the
+  //      booking + completion window. Measured 2026-07-19: 518 customers at
+  //      ~363ms each ≈ 3.1 min. Scoping on the whole recently-sprayed set
+  //      (1,030) would have cost ~6.2 min for no extra signal, since a spray
+  //      under 8 days old is immature anyway and one over 21 days has no open
+  //      booking left. Budget-capped like every other phase: if we run out, the
+  //      previous flag stands and the next run retries. ----
+  const pendingStart = Date.now();
+  const pendingRows = (await sql`
+    WITH last AS (
+      SELECT customer_id, MAX(completed_date) AS d FROM respray_jobs GROUP BY 1
+    )
+    SELECT l.customer_id AS pocomos_id
+    FROM last l
+    JOIN mosquito_service_status m ON m.pocomos_id = l.customer_id
+    WHERE (CURRENT_DATE - l.d) BETWEEN 8 AND 21
+  `) as Array<{ pocomos_id: string }>;
+  // Clear flags outside the scope so a completed/cancelled booking can't stick.
+  await sql`UPDATE mosquito_service_status SET pending_reservice = FALSE WHERE pending_reservice = TRUE`;
+  let pendingScraped = 0;
+  let pendingFound = 0;
+  const scrapePending = async (id: string): Promise<void> => {
+    if (Date.now() - t0 > budgetMs) return;
+    await sleep(PER_REQUEST_PAUSE_MS);
+    const html = await getSessionedHtml(`/customer/${id}/scheduled-services`);
+    if (looksLikeLoginPage(html)) throw new Error("login page returned (session)");
+    const pending = hasPendingReservice(parseScheduledServices(html), todayIso);
+    if (pending) pendingFound++;
+    await sql`
+      UPDATE mosquito_service_status
+      SET pending_reservice = ${pending}, pending_checked_at = NOW()
+      WHERE pocomos_id = ${id}`;
+    pendingScraped++;
+  };
+  const pendingResult = await fetchPooled(
+    pendingRows.map((r) => String(r.pocomos_id)),
+    scrapePending,
+    { concurrency: SCRAPE_CONCURRENCY }
+  );
+  const pendingFailed = pendingResult.failures.length;
+  const pendingDurationMs = Date.now() - pendingStart;
+
   const meta: RefreshMeta = {
     startedAt,
     finishedAt: new Date().toISOString(),
@@ -570,6 +623,10 @@ export async function refreshMosquitoStatus(
     asapFound,
     asapFailed,
     asapDurationMs,
+    pendingScraped,
+    pendingFound,
+    pendingFailed,
+    pendingDurationMs,
     completedJobsRefreshed,
     balanceCustomers: balances.byId.size,
     openBalanceTotal: balances.totalBalance,

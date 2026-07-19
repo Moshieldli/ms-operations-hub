@@ -219,8 +219,8 @@ export function TvTechsTallView({
 
       {/* 5. Rule footer — the definition behind every rate on this board. */}
       <div className="shrink-0 pt-[0.5vmin] text-center text-[clamp(7px,1.9vmin,13px)] leading-tight text-slate-600">
-        Resprays counted when a re-service follows a spray within{" "}
-        {board.resprayWindowDays} days; attributed to that spray&rsquo;s tech.
+        Resprays are booked within ~{board.resprayWindowDays} days of a spray;
+        visits may complete later. Attributed to that spray&rsquo;s tech.
       </div>
     </div>
   );

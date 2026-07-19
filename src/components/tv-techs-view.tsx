@@ -142,8 +142,8 @@ export function TvTechsView({ board }: { board: TechBoard }) {
 
           {/* Rule footer — the definition behind every rate on this board. */}
           <div className="mt-4 text-center text-lg text-slate-600">
-            Resprays counted when a re-service follows a spray within{" "}
-            {board.resprayWindowDays} days; attributed to that spray&rsquo;s tech.
+            Resprays are booked within ~{board.resprayWindowDays} days of a
+            spray; visits may complete later. Attributed to that spray&rsquo;s tech.
           </div>
         </>
       )}

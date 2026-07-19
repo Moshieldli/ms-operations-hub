@@ -17,15 +17,15 @@
  * ATTRIBUTION RULES (ops-canonical, rev 38 — 2026-07-19; supersedes the rev-24
  * WINDOWLESS rule, which is GONE):
  *  - CURRENT_YEAR only. Prior-year jobs are NEVER used.
- *  - A RESPRAY = a completed mosquito `Re-service` within RESPRAY_WINDOW_DAYS (9)
- *    of the customer's prior mosquito job. Ops: re-services only ever happen
- *    inside ~9 days; past that the next scheduled Regular is pulled earlier.
+ *  - A RESPRAY = ANY completed mosquito `Re-service` with a prior mosquito job.
+ *    The ~9-day window governs when a re-service is BOOKED, not when the visit
+ *    happens (rev 39): rain and capacity push visits later, and the office
+ *    already applies the <=9-10 day test at booking time. So a long completion
+ *    gap is normal, NOT an anomaly — it is shown as a marker, never excluded.
  *  - Attribution: blame the technician of that prior job, where "prior jobs"
  *    INCLUDE both Regular/Initial sprays AND prior Re-services (the CHAIN rule:
  *    Nick sprays → Nathaniel re-services → Daniel re-services again ⇒ Daniel's
  *    respray blames NATHANIEL, the most recent toucher, not the original sprayer).
- *  - Prior job MORE than the window away → "anomaly": counted in the re-service
- *    total, blamed on NOBODY, and listed on the page for ops to fix.
  *  - No prior mosquito job this year at all → "unattributed".
  *  - Rate per tech = attributed resprays ÷ his total mosquito APPLICATIONS
  *    (Initial + Regular) YTD. (Denominator unchanged — re-services aren't in it.)
@@ -47,28 +47,36 @@ export const APPLICATION_JOB_TYPES = new Set(["initial", "regular"]);
 export const RESPRAY_JOB_TYPE = "re-service";
 
 /**
- * RESPRAY WINDOW (rev 38, ops-confirmed) — a re-service counts as a respray only
- * within this many days of the customer's prior spray.
+ * BOOKING window (rev 39, ops-clarified) — the office books a re-service within
+ * ~9 days of the spray. It is NOT a completion window.
  *
- * WHY: ops confirmed re-services only ever happen inside ~9 days of a spray;
- * past that the crew pulls the customer's NEXT scheduled Regular earlier instead
- * of booking a re-service. So a "re-service" dated 10+ days after any prior
- * spray is not a respray of that spray — it's a data anomaly (mis-keyed date,
- * mis-typed job) and blaming a tech for it would be wrong.
+ * ⚠️ REV-38 GOT THIS WRONG and excluded 39 re-services (39%!) as "anomalies"
+ * because they COMPLETED more than 9 days after the spray. Ops clarified: rain
+ * and capacity routinely push the visit later, and the <=9-10 day test is
+ * already applied at booking. So every completed re-service with a prior spray
+ * is a legitimate respray no matter how long the visit took.
  *
- * This SUPERSEDES the rev-24 windowless rule ("any re-service this year counts").
+ * This constant now only drives the LONG-GAP MARKER (informational) and the
+ * wording of the rule text. It never excludes anything.
  */
 export const RESPRAY_WINDOW_DAYS = 9;
 
+/** Completion gaps beyond this get a subtle marker in drill-downs. Display only. */
+export const LONG_GAP_DAYS = 9;
+
 /**
- * MATURITY (rev 38) — a spray is "proven clean" once this many days have passed
- * with no re-service against it. Until then its outcome is still pending, so
- * counting it would report a rate that later gets revised downward.
+ * MATURITY (rev 39) — a spray is PROVEN CLEAN only when ALL THREE hold:
+ *   (a) at least MATURITY_DAYS have passed,
+ *   (b) no completed re-service is blamed on it, and
+ *   (c) the customer has no SCHEDULED/pending re-service outstanding.
  *
- * Same number as the respray window by construction: once the window has closed,
- * no respray can still arrive for that spray.
+ * (c) is the rev-39 addition and it matters because bookings and visits are
+ * decoupled: a re-service booked on day 9 may not be performed until day 15+, so
+ * "10 days clean" alone can credit a streak that is already broken on the books.
+ * The pending flag comes from `mosquito_service_status.pending_reservice`
+ * (nightly scrape — see refresh.ts).
  */
-export const MATURITY_DAYS = 9;
+export const MATURITY_DAYS = 10;
 /** Flag a tech only with enough volume to be meaningful, and only this far over. */
 export const FLAG_MIN_APPLICATIONS = 30;
 export const FLAG_RATE_MULTIPLE = 1.5;
@@ -190,8 +198,8 @@ export interface RespraysReport {
   techs: TechRow[];
   weekly: WeeklyLeaderboard;
   repeatCustomers: RepeatCustomer[];
-  /** Re-services outside the respray window — for ops review, nobody blamed. */
-  anomalies: ResprayDetail[];
+  /** Counted resprays whose VISIT ran long — informational marker list. */
+  longGaps: ResprayDetail[];
   /** YTD sprays now vs the same calendar date last season. */
   seasonPace?: SeasonPace;
   /**
@@ -209,10 +217,11 @@ export interface RespraysReport {
     /** Re-services with no prior mosquito job this year. */
     unattributed: number;
     /**
-     * Re-services whose nearest prior spray is MORE than RESPRAY_WINDOW_DAYS
-     * away — counted in `reserviceJobs`, blamed on nobody. See `anomalies`.
+     * Of `countedResprays`, how many COMPLETED more than LONG_GAP_DAYS after the
+     * spray they're blamed on. Informational — booking, not completion, is what
+     * the 9-day rule governs. These are fully counted.
      */
-    anomalyResprays: number;
+    longGapResprays: number;
     applications: number;
     /** Team rate = countedResprays ÷ applications. */
     teamRate: number;
@@ -395,13 +404,11 @@ const isMosquitoJob = (j: RespJob) => isMosquitoServiceType(j.serviceType);
 export interface Attribution {
   job: RespJob;
   /**
-   * "counted"      — prior mosquito job within RESPRAY_WINDOW_DAYS; blamed on `tech`.
-   * "anomaly"      — a prior job exists but is MORE than the window away. Ops says
-   *                  this can't be a real respray of it, so nobody is blamed. Still
-   *                  counted in the re-service total, and listed for review.
+   * "counted"      — a prior mosquito job exists; blamed on `tech`. Every
+   *                  completed re-service with a prior spray lands here (rev 39).
    * "unattributed" — no prior mosquito job this year at all.
    */
-  kind: "counted" | "unattributed" | "anomaly";
+  kind: "counted" | "unattributed";
   tech: string | null;
   gapDays: number | null;
   /** The blamed prior mosquito job (null = none this year). */
@@ -444,13 +451,8 @@ export function attribute(jobs: RespJob[]): Attribution[] {
       out.push({ job: j, kind: "unattributed", tech: null, gapDays: null, prior: null, chain: false });
       continue;
     }
+    // No gap test (rev 39): the window is a BOOKING rule, not a completion rule.
     const gapDays = daysBetween(last.completedDate, j.completedDate);
-    if (gapDays > RESPRAY_WINDOW_DAYS) {
-      // Outside the window → nobody is blamed, but keep the prior job + gap so
-      // the review list can show exactly what looks wrong.
-      out.push({ job: j, kind: "anomaly", tech: null, gapDays, prior: last, chain: isReservice(last) });
-      continue;
-    }
     out.push({
       job: j,
       kind: "counted",
@@ -498,10 +500,12 @@ export function buildReport(jobs: RespJob[], asOf: string): RespraysReport {
   }
 
   const counted = attributions.filter((a) => a.kind === "counted");
-  const anomalyAttrs = attributions.filter((a) => a.kind === "anomaly");
-  const anomalies = anomalyAttrs
+  // LONG-GAP list (rev 39): informational only. These ARE counted resprays —
+  // they're surfaced purely so ops can eyeball unusually delayed visits.
+  const longGaps = counted
+    .filter((a) => (a.gapDays ?? 0) > LONG_GAP_DAYS)
     .map(toDetail)
-    .sort((a, b) => b.reserviceDate.localeCompare(a.reserviceDate));
+    .sort((a, b) => b.gapDays - a.gapDays);
   const countedResprays = counted.length;
   const chainResprays = counted.filter((a) => a.chain).length;
   const totalApps = apps.length;
@@ -577,13 +581,13 @@ export function buildReport(jobs: RespJob[], asOf: string): RespraysReport {
     techs,
     weekly,
     repeatCustomers,
-    anomalies,
+    longGaps,
     totals: {
       reserviceJobs: attributions.length,
       countedResprays,
       chainResprays,
       unattributed: attributions.filter((a) => a.kind === "unattributed").length,
-      anomalyResprays: anomalies.length,
+      longGapResprays: longGaps.length,
       applications: totalApps,
       teamRate,
     },

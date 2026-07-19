@@ -135,6 +135,12 @@ export async function initSchema(): Promise<void> {
   // assigned to the "Z-ASAP" route is being caught up — excluded from the count).
   // Scraped from /customer/{id}/scheduled-services for currently-overdue rows only.
   await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS asap_route BOOLEAN NOT NULL DEFAULT FALSE`;
+  // rev 39 — a re-service is BOOKED within ~9 days of a spray but may be
+  // performed much later, so a spray isn't "proven clean" while one is pending.
+  // Filled by the nightly refresh, scoped to customers whose most recent spray
+  // is 8-21 days old (the booking + completion window).
+  await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS pending_reservice BOOLEAN NOT NULL DEFAULT FALSE`;
+  await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS pending_checked_at TIMESTAMPTZ`;
 
   // Per-customer-per-year COMPLETED mosquito-family service counts (Event Spray
   // excluded — it's a separate contract, never on the mosquito service-history

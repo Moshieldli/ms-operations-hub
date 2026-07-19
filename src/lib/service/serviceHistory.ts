@@ -165,6 +165,23 @@ export function hasAsapUpcomingJob(rows: ScheduledRow[], todayIso: string): bool
 }
 
 /**
+ * True when the customer has an UPCOMING (date >= today) scheduled job whose
+ * TYPE is a re-service (rev 39).
+ *
+ * Probed live 2026-07-19 over 166 customers: the scheduled table's Type column
+ * carries "Regular" (2,163), "Re-service" (1), "Initial" (1), "Inspection" (1),
+ * and Status is "Pending" / "Re-scheduled" — so a booked-but-not-yet-performed
+ * re-service IS visible here (found: customer 1302338, 2026-07-21, Pending).
+ * It is RARE (~1 in 166), which is exactly why it can't be inferred and has to
+ * be read.
+ */
+export function hasPendingReservice(rows: ScheduledRow[], todayIso: string): boolean {
+  return rows.some(
+    (r) => r.date != null && r.date >= todayIso && /re-?service/i.test(r.type)
+  );
+}
+
+/**
  * Count COMPLETED mosquito services per calendar year from parsed
  * service-history rows. Only Status="Complete" rows with a parseable date are
  * counted; every completed service type on the mosquito contract's table counts

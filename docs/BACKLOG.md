@@ -14,13 +14,9 @@
 - [ ] Marketing source breakdown: Long Island vs Westchester
 
 ## Needs a human decision
-- [ ] **Is the 9-day respray window right? 39% of re-services now land outside it.** Implemented as
-      ops specified, but the gap data shows no clean cliff: mode at 8-9 days with a real, continuous
-      tail out to 20 days (10d ×11, 11d ×7, 12d ×5, 13d ×5, 15d ×4, 16d ×3, 17d ×2, 20d ×1).
-      Coverage by window: ≤9d **61%** · ≤10d 72% · ≤11d 79% · ≤12d **84%** · ≤14d 90% · ≤17d 99%.
-      Either those 39 really are mis-keyed records (then the anomalies card is the worklist to fix
-      them), or the window should widen. `RESPRAY_WINDOW_DAYS` in `lib/service/resprays.ts` is a
-      one-constant change. See §5.12.
+- [x] ~~**Is the 9-day respray window right?**~~ RESOLVED by ops (rev 39): the window governs when a
+      re-service is **booked**, not when it completes — rain/capacity push visits later. All 39
+      "outside window" jobs are legitimate resprays again; the gap is now an informational marker.
 - [ ] **Return rate has fallen every season for five seasons (−5.0pp: 82.3 → 77.3%)** — surfaced by
       the rev-33 trend (§5.17). The denominator grew over the same span, so this is retention, not
       sample size. Worth an ops conversation on cause before building more measurement: the data now
@@ -87,6 +83,14 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **Respray rule corrected + pending-re-service maturity (rev 39, 2026-07-19)** — the ~9-day
+      window is a **booking** rule, not a completion rule (rev 38 had it wrong and dropped 39 jobs):
+      **resprays 60 → 99, team rate 1.11% → 1.84%**, long gaps now just carry a "late visit" marker.
+      Proven-clean now also requires **no re-service on the books**; detection probed on
+      `/scheduled-services` (Type="Re-service", Status="Pending", ~1 in 166), **385 ms/customer,
+      pooling doesn't help**, scoped to most-recent-spray 8-21d = **514 customers / 198 s** as a
+      nightly cron phase. Matured clock → Jun 28-Jul 3. Cesar 500/9 = 1.80%; ticker 5,393 · 1.84%.
+      See §5.12.
 - [x] **Respray window + maturity + two clocks + awards-only exclusion (rev 38, 2026-07-19)** —
       respray = re-service **within 9 days** of the prior spray (supersedes the rev-24 windowless
       rule); beyond that = anomaly, counted but unattributed and listed for review. **Attributed

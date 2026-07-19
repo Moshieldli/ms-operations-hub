@@ -10,18 +10,18 @@ import { boardWeekStart } from "../src/lib/service/tech-board";
   const today = new Date().toISOString().slice(0, 10);
   console.log(`today ${today}`);
   console.log(`VOLUME clock  (last completed Sun-Fri): ${boardWeekStart(today)}`);
-  console.log(`MATURED clock (all sprays >=9d old):    ${maturedWeekStart(today)}`);
+  console.log(`MATURED clock (all sprays proven)   :    ${maturedWeekStart(today)}`);
 
   const r = await getRespraysReport();
   const t = r.totals;
   console.log(`\n=== TOTALS (window ${RESPRAY_WINDOW_DAYS}d) ===`);
   console.log(`  re-service jobs      ${t.reserviceJobs}`);
   console.log(`  attributed resprays  ${t.countedResprays}  (chains ${t.chainResprays})`);
-  console.log(`  outside window       ${t.anomalyResprays}`);
+  console.log(`  long-gap visits      ${t.longGapResprays}`);
   console.log(`  unattributed         ${t.unattributed}`);
   console.log(`  applications YTD     ${t.applications}`);
   console.log(`  team rate            ${t.teamRate.toFixed(2)}%`);
-  console.log(`  check: ${t.countedResprays}+${t.anomalyResprays}+${t.unattributed} = ${t.countedResprays+t.anomalyResprays+t.unattributed} vs ${t.reserviceJobs}`);
+  console.log(`  check: ${t.countedResprays}+${t.unattributed} = ${t.countedResprays+t.unattributed} vs ${t.reserviceJobs}`);
 
   if (r.seasonPace) {
     const p = r.seasonPace;
@@ -34,8 +34,8 @@ import { boardWeekStart } from "../src/lib/service/tech-board";
     console.log(`  ${x.technician.padEnd(24)}${String(x.applications).padStart(4)}${String(x.resprays).padStart(6)}  ${x.rate.toFixed(2)}%${x.flagged?"  FLAGGED":""}`);
   }
 
-  console.log(`\n=== ANOMALIES (>${RESPRAY_WINDOW_DAYS}d, nobody blamed) — ${r.anomalies.length} ===`);
-  for (const a of r.anomalies) {
+  console.log(`\n=== LONG-GAP VISITS (>${RESPRAY_WINDOW_DAYS}d, still counted) — ${r.longGaps.length} ===`);
+  for (const a of r.longGaps) {
     console.log(`  ${a.reserviceDate}  gap ${String(a.gapDays).padStart(3)}d  ${a.customerName} (prior ${a.priorJobDate} ${a.priorJobType} by ${a.priorTech}) re-serviced by ${a.reserviceTech}`);
   }
 
