@@ -23,7 +23,12 @@
  * week (463 sprays / 10 resprays) is mature and has real spread.
  *
  * SCREEN RULES (product, not incidental):
- *  - Cesar Barrerra is the head tech and is EXCLUDED from every award and table.
+ *  - Cesar Barrerra is the head tech and is EXCLUDED FROM AWARDS ONLY (rev 38 —
+ *    sporadic schedule, not comparable). His sprays and resprays COUNT in the
+ *    YTD ticker, the team rate, the weekly table and everything on
+ *    /service/resprays. Same for the Z-* route placeholders, whose jobs are real
+ *    completed sprays (probed: Z-ASAP 01 = 1 Regular inside a normal cadence
+ *    sequence; Z-RLW 01 = 1 genuine re-service 2 days after a Regular).
  *  - NO negative callouts, ever. This screen never ranks anybody last.
  *  - Route-fair: volume never judges performance. Sprays-per-week is its own
  *    positive award (Workhorse) and is NOT mixed into any quality award.
@@ -36,6 +41,10 @@ import { CURRENT_YEAR } from "@/lib/pocomos";
 import {
   APPLICATION_JOB_TYPES,
   attribute,
+  isMatured,
+  maturedWeekStart,
+  MATURITY_DAYS,
+  RESPRAY_WINDOW_DAYS,
   weekStart,
   type RespJob,
 } from "./resprays";
@@ -48,12 +57,13 @@ export const MIN_CLEAN_STREAK = 20;
 export const MIN_ROUTES = 3;
 
 /**
- * Never shown on the board. Cesar is the head tech (ops decision — he covers
- * odd jobs and rescues, so his mix isn't comparable). The rest are Pocomos
- * placeholders, not people.
+ * Never given an AWARD (rev 38) — but never removed from a number. Cesar is the
+ * head tech (ops decision — he covers odd jobs and rescues, so his mix isn't
+ * comparable); the rest are Pocomos route placeholders, not people. Their jobs
+ * are real work and count everywhere numeric.
  */
 export const EXCLUDED_TECHS = new Set(
-  ["Cesar Barrerra", "Z-ASAP 01", "(unassigned)"].map((n) => n.toLowerCase())
+  ["Cesar Barrerra", "Z-ASAP 01", "Z-RLW 01", "(unassigned)"].map((n) => n.toLowerCase())
 );
 
 export const isExcludedTech = (name: string) => EXCLUDED_TECHS.has(name.trim().toLowerCase());
@@ -104,18 +114,30 @@ export const AWARDS: AwardDef[] = [
 
 // ------------------------------------------------------------------ shapes
 
-/** One tech's numbers for the board week. */
+/**
+ * One tech's numbers, across BOTH clocks (rev 38).
+ *
+ * VOLUME fields describe the last completed Sun-Fri week — final at Friday
+ * close. MATURED fields describe the most recent week whose sprays have all
+ * passed the 9-day respray window, so those rates are exact and never revised.
+ * The two are usually different weeks; each award prints its own range.
+ */
 export interface TechWeekStat {
   technician: string;
+  /** VOLUME clock: sprays in the last completed week. */
   sprays: number;
-  resprays: number;
-  rate: number;
-  /** Distinct route codes touched in the board week. */
+  /** VOLUME clock: distinct routes touched in the last completed week. */
   routes: number;
-  /** Current running streak of consecutive sprays with no respray (YTD). */
+  /** MATURED clock: sprays in the fully-proven week. */
+  maturedSprays: number;
+  /** MATURED clock: resprays blamed on those sprays. */
+  maturedResprays: number;
+  /** MATURED clock: maturedResprays / maturedSprays, percent. */
+  maturedRate: number;
+  /** MATURED clock: rate the week before (null = too few sprays to qualify). */
+  priorMaturedRate: number | null;
+  /** Season-to-date streak of PROVEN-clean sprays (immature sprays excluded). */
   cleanStreak: number;
-  /** Respray rate the week before the board week (null = didn't qualify). */
-  priorRate: number | null;
 }
 
 export interface AwardWinner {
@@ -123,6 +145,15 @@ export interface AwardWinner {
   technician: string;
   /** The headline number, pre-formatted (e.g. "0.0%", "101", "16 routes"). */
   stat: string;
+  /**
+   * WHAT this award measures and OVER WHAT PERIOD, with real dates (rev 38).
+   * Required because the two clocks mean adjacent tiles legitimately describe
+   * DIFFERENT weeks — without the period a viewer would assume one week and
+   * read the board wrong.
+   */
+  period: string;
+  /** Abbreviated period for the narrow board, where the full line won't fit. */
+  periodShort: string;
 }
 
 export interface TechBoard {
@@ -130,6 +161,14 @@ export interface TechBoard {
   weekStart: string;
   /** ISO FRIDAY of the board week — the crew's last working day (never Saturday). */
   weekEnd: string;
+  /** MATURED clock: Sunday of the most recent fully-proven week. */
+  maturedWeekStart: string;
+  /** MATURED clock: Friday of that week. */
+  maturedWeekEnd: string;
+  /** Days within which a re-service counts as a respray (for the footer line). */
+  resprayWindowDays: number;
+  /** Days a spray must age before it is proven clean. */
+  maturityDays: number;
   year: string;
   asOf: string;
   winners: AwardWinner[];
@@ -199,43 +238,51 @@ export function boardWeekStart(todayIso: string): string {
  */
 export function buildWeekStats(
   jobs: RespJob[],
-  board: string,
-  routeByCustomer: Map<string, string>
+  volumeWeek: string,
+  maturedWeek: string,
+  routeByCustomer: Map<string, string>,
+  todayIso: string
 ): TechWeekStat[] {
-  const prior = shiftWeek(board, 1);
-  const boardEnd = addDays(board, 6);
+  const priorMatured = shiftWeek(maturedWeek, 1);
   const counted = attribute(jobs).filter((a) => a.kind === "counted" && a.prior);
   // A spray is "blamed" if it is the prior job of a counted respray — that's what
-  // breaks a clean streak, and what the week's respray count is keyed to.
+  // breaks a clean streak, and what a week's respray count is keyed to. Anomaly
+  // re-services (outside the 9-day window) blame nobody, so they never appear here.
   const blamedInvoices = new Set(counted.map((a) => a.prior!.invoiceNo));
 
-  const apps = jobs.filter(isApplication).filter((j) => !isExcludedTech(j.technician));
+  // NO tech exclusion here (rev 38). Cesar and the Z-* placeholders must count in
+  // every number; they are filtered out only when AWARDS are handed out.
+  const apps = jobs.filter(isApplication);
 
   const byTech = new Map<string, RespJob[]>();
   for (const a of apps) byTech.set(a.technician, [...(byTech.get(a.technician) || []), a]);
 
   const stats: TechWeekStat[] = [];
   for (const [technician, list] of byTech) {
-    const inWeek = list.filter((j) => weekStart(j.completedDate) === board);
-    if (inWeek.length === 0) continue; // didn't work the board week → not on the board
+    const inWeek = list.filter((j) => weekStart(j.completedDate) === volumeWeek);
+    const inMatured = list.filter((j) => weekStart(j.completedDate) === maturedWeek);
+    // On the board if he worked EITHER clock's week — the volume week drives the
+    // table, the matured week drives the rate awards, and they differ.
+    if (inWeek.length === 0 && inMatured.length === 0) continue;
 
-    const resprays = inWeek.filter((j) => blamedInvoices.has(j.invoiceNo)).length;
     const routes = new Set(
       inWeek.map((j) => (routeByCustomer.get(j.customerId) || "").trim()).filter(Boolean)
     ).size;
 
-    const inPrior = list.filter((j) => weekStart(j.completedDate) === prior);
+    const maturedResprays = inMatured.filter((j) => blamedInvoices.has(j.invoiceNo)).length;
+    const maturedRate = inMatured.length ? (maturedResprays / inMatured.length) * 100 : 0;
+
+    const inPrior = list.filter((j) => weekStart(j.completedDate) === priorMatured);
     const priorResprays = inPrior.filter((j) => blamedInvoices.has(j.invoiceNo)).length;
-    const priorRate =
+    const priorMaturedRate =
       inPrior.length >= MIN_SPRAYS_FOR_QUALITY_AWARD ? (priorResprays / inPrior.length) * 100 : null;
 
-    // Clean streak: walk his sprays newest-first, counting until one was blamed.
-    // Capped at the END OF THE BOARD WEEK — sprays after it belong to the live
-    // week, whose resprays haven't arrived yet, so counting them would inflate
-    // the streak of whoever sprayed most recently and could hand the award to
-    // the tech with the week's WORST rate. Same maturity rule as every other award.
+    // Clean streak: walk his PROVEN sprays newest-first, counting until one was
+    // blamed. Only sprays whose 9-day respray window has closed are proven —
+    // an immature spray has no verdict yet, and counting it would inflate the
+    // streak of whoever sprayed most recently, then silently revise it later.
     const chrono = [...list]
-      .filter((j) => j.completedDate <= boardEnd)
+      .filter((j) => isMatured(j.completedDate, todayIso))
       .sort((a, b) => a.completedDate.localeCompare(b.completedDate));
     let cleanStreak = 0;
     for (let i = chrono.length - 1; i >= 0; i--) {
@@ -246,14 +293,66 @@ export function buildWeekStats(
     stats.push({
       technician,
       sprays: inWeek.length,
-      resprays,
-      rate: (resprays / inWeek.length) * 100,
       routes,
+      maturedSprays: inMatured.length,
+      maturedResprays,
+      maturedRate,
+      priorMaturedRate,
       cleanStreak,
-      priorRate,
     });
   }
   return stats.sort((a, b) => b.sprays - a.sprays || a.technician.localeCompare(b.technician));
+}
+
+/** "2026-07-12","2026-07-17" → "Jul 12–17"; crosses months → "Jul 28–Aug 2". */
+export function fmtRange(startIso: string, endIso: string): string {
+  const m = (iso: string) =>
+    new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", timeZone: "UTC" });
+  const d = (iso: string) => String(Number(iso.slice(8, 10)));
+  return m(startIso) === m(endIso)
+    ? `${m(startIso)} ${d(startIso)}–${d(endIso)}`
+    : `${m(startIso)} ${d(startIso)}–${m(endIso)} ${d(endIso)}`;
+}
+
+/**
+ * The sub-line for each award: what it measures, over which dates.
+ *
+ * VOLUME awards (Workhorse, Road Warrior) cite the last completed week.
+ * RATE awards (Iron Wall, Perfect Week, Most Improved) cite the matured week —
+ * usually an earlier one. Clean Streak is season-to-date over proven sprays.
+ */
+function awardPeriod(
+  awardId: string,
+  volume: { start: string; end: string },
+  matured: { start: string; end: string }
+): { period: string; periodShort: string } {
+  const v = fmtRange(volume.start, volume.end);
+  const mt = fmtRange(matured.start, matured.end);
+  switch (awardId) {
+    case "clean-streak":
+      return {
+        period: "consecutive proven-clean sprays — season to date",
+        periodShort: "season to date",
+      };
+    case "iron-wall":
+      return {
+        period: `lowest respray rate (week of ${mt}, min ${MIN_SPRAYS_FOR_QUALITY_AWARD} sprays)`,
+        periodShort: `wk ${mt} · rate`,
+      };
+    case "workhorse":
+      return { period: `most properties sprayed (week of ${v})`, periodShort: `wk ${v}` };
+    case "road-warrior":
+      return { period: `most routes covered (week of ${v})`, periodShort: `wk ${v}` };
+    case "most-improved":
+      return {
+        period: `respray rate vs prior matured week (week of ${mt})`,
+        periodShort: `wk ${mt} vs prior`,
+      };
+    case "perfect-week":
+      return { period: `zero resprays (week of ${mt})`, periodShort: `wk ${mt}` };
+    default:
+      return { period: "", periodShort: "" };
+  }
 }
 
 // ------------------------------------------------------------------ awards
@@ -267,10 +366,13 @@ export function buildWeekStats(
  * which is a backhanded compliment, not a callout.
  */
 function computeCandidates(awardId: string, stats: TechWeekStat[]): Array<{ technician: string; stat: string }> {
-  const qualified = stats.filter((s) => s.sprays >= MIN_SPRAYS_FOR_QUALITY_AWARD);
-  const weekSprays = stats.reduce((n, s) => n + s.sprays, 0);
-  const weekResprays = stats.reduce((n, s) => n + s.resprays, 0);
-  const teamRate = weekSprays ? (weekResprays / weekSprays) * 100 : 0;
+  // Volume-clock qualification (Workhorse) vs matured-clock qualification
+  // (every rate award) — a tech can clear one and not the other.
+  const volumeQualified = stats.filter((s) => s.sprays >= MIN_SPRAYS_FOR_QUALITY_AWARD);
+  const maturedQualified = stats.filter((s) => s.maturedSprays >= MIN_SPRAYS_FOR_QUALITY_AWARD);
+  const mSprays = stats.reduce((n, s) => n + s.maturedSprays, 0);
+  const mResprays = stats.reduce((n, s) => n + s.maturedResprays, 0);
+  const teamMaturedRate = mSprays ? (mResprays / mSprays) * 100 : 0;
   switch (awardId) {
     case "clean-streak":
       return [...stats]
@@ -278,14 +380,14 @@ function computeCandidates(awardId: string, stats: TechWeekStat[]): Array<{ tech
         .sort((a, b) => b.cleanStreak - a.cleanStreak)
         .map((s) => ({ technician: s.technician, stat: `${s.cleanStreak} in a row` }));
     case "iron-wall":
-      // Floored at the team's own week rate — an "Iron Wall" must actually be
+      // Floored at the team's own matured rate — an "Iron Wall" must actually be
       // better than average, even when the matching seats a non-top candidate.
-      return [...qualified]
-        .filter((s) => s.rate <= teamRate)
-        .sort((a, b) => a.rate - b.rate || b.sprays - a.sprays)
-        .map((s) => ({ technician: s.technician, stat: `${s.rate.toFixed(1)}% respray rate` }));
+      return [...maturedQualified]
+        .filter((s) => s.maturedRate <= teamMaturedRate)
+        .sort((a, b) => a.maturedRate - b.maturedRate || b.maturedSprays - a.maturedSprays)
+        .map((s) => ({ technician: s.technician, stat: `${s.maturedRate.toFixed(1)}% respray rate` }));
     case "workhorse":
-      return [...qualified]
+      return [...volumeQualified]
         .sort((a, b) => b.sprays - a.sprays)
         .map((s) => ({ technician: s.technician, stat: `${s.sprays} properties` }));
     case "road-warrior":
@@ -295,18 +397,24 @@ function computeCandidates(awardId: string, stats: TechWeekStat[]): Array<{ tech
         .map((s) => ({ technician: s.technician, stat: `${s.routes} routes` }));
     case "most-improved":
       // Only a genuine improvement (rate went DOWN) is ever shown — never a regression.
-      return [...qualified]
-        .filter((s) => s.priorRate !== null && s.priorRate > s.rate)
-        .sort((a, b) => b.priorRate! - b.rate - (a.priorRate! - a.rate))
+      return [...maturedQualified]
+        .filter((s) => s.priorMaturedRate !== null && s.priorMaturedRate > s.maturedRate)
+        .sort(
+          (a, b) =>
+            b.priorMaturedRate! - b.maturedRate - (a.priorMaturedRate! - a.maturedRate)
+        )
         .map((s) => ({
           technician: s.technician,
-          stat: `${s.priorRate!.toFixed(1)}% → ${s.rate.toFixed(1)}%`,
+          stat: `${s.priorMaturedRate!.toFixed(1)}% → ${s.maturedRate.toFixed(1)}%`,
         }));
     case "perfect-week":
-      return [...qualified]
-        .filter((s) => s.resprays === 0)
-        .sort((a, b) => b.sprays - a.sprays)
-        .map((s) => ({ technician: s.technician, stat: `${s.sprays} sprays, 0 resprays` }));
+      return [...maturedQualified]
+        .filter((s) => s.maturedResprays === 0)
+        .sort((a, b) => b.maturedSprays - a.maturedSprays)
+        .map((s) => ({
+          technician: s.technician,
+          stat: `${s.maturedSprays} sprays, 0 resprays`,
+        }));
     default:
       return [];
   }
@@ -332,10 +440,13 @@ function computeCandidates(awardId: string, stats: TechWeekStat[]): Array<{ tech
  * still appears in the neutral bottom table. Inventing a superlative for him
  * would be worse than silence.
  */
+/** Periods are attached by the caller, which knows both clocks' dates. */
+export type AwardSeat = Omit<AwardWinner, "period" | "periodShort">;
+
 export function assignAwards(
   stats: TechWeekStat[],
   lastWeekByAward: Map<string, string>
-): AwardWinner[] {
+): AwardSeat[] {
   const candidates = new Map(AWARDS.map((a) => [a.id, computeCandidates(a.id, stats)]));
   const rankOf = (awardId: string, tech: string) =>
     candidates.get(awardId)!.findIndex((c) => c.technician === tech);
@@ -445,17 +556,29 @@ export async function getTechBoard(): Promise<TechBoard> {
   `) as Array<Record<string, string>>;
   const routeByCustomer = new Map(routeRows.map((r) => [r.pocomos_id, r.route_code]));
 
-  const stats = buildWeekStats(jobs, board, routeByCustomer);
+  const matured = maturedWeekStart(today);
+  const stats = buildWeekStats(jobs, board, matured, routeByCustomer, today);
   const lastWeek = await readLastWeekAwards(shiftWeek(board, 1));
-  const winners = assignAwards(stats, lastWeek);
+  // EXCLUSION IS AWARDS-ONLY (rev 38). Cesar (head tech, sporadic schedule) and
+  // the Z-* route placeholders never win an award, but their sprays and
+  // resprays count in every number on this page and on /service/resprays.
+  const awardStats = stats.filter((s) => !isExcludedTech(s.technician));
+  const rawWinners = assignAwards(awardStats, lastWeek);
+  const winners: AwardWinner[] = rawWinners.map((w) => ({
+    ...w,
+    ...awardPeriod(
+      w.award.id,
+      { start: board, end: addDays(board, 5) },
+      { start: matured, end: addDays(matured, 5) }
+    ),
+  }));
   if (winners.length > 0) await recordAwards(board, winners);
 
-  // YTD ticker — team totals across every non-excluded tech, plus the best streak.
-  const ytdApps = jobs.filter(isApplication).filter((j) => !isExcludedTech(j.technician));
-  const ytdResprays = attribute(jobs).filter(
-    (a) => a.kind === "counted" && a.tech && !isExcludedTech(a.tech)
-  ).length;
-  const best = [...stats].sort((a, b) => b.cleanStreak - a.cleanStreak)[0];
+  // YTD ticker — WHOLE TEAM, including Cesar and the Z-* placeholders.
+  const ytdApps = jobs.filter(isApplication);
+  const ytdResprays = attribute(jobs).filter((a) => a.kind === "counted" && a.tech).length;
+  // Streak callout still skips excluded techs — it's a recognition line.
+  const best = [...awardStats].sort((a, b) => b.cleanStreak - a.cleanStreak)[0];
 
   return {
     weekStart: board,
@@ -463,10 +586,21 @@ export async function getTechBoard(): Promise<TechBoard> {
     // Saturday, so showing "Jul 12 – Jul 18" would advertise a day nobody
     // sprayed. The bucket still spans 7 days so nothing can fall through.
     weekEnd: addDays(board, 5),
+    maturedWeekStart: matured,
+    maturedWeekEnd: addDays(matured, 5),
+    resprayWindowDays: RESPRAY_WINDOW_DAYS,
+    maturityDays: MATURITY_DAYS,
     year: CURRENT_YEAR,
     asOf: new Date().toISOString(),
     winners,
-    table: stats.map((s) => ({ technician: s.technician, sprays: s.sprays, rate: s.rate })),
+    // Table keeps EVERY tech who worked the VOLUME week — Cesar and the Z-*
+    // placeholders included; it is a numbers table, not an award. Techs with 0
+    // volume-week sprays are dropped rather than printed as "0 sprays, 0.0%",
+    // which reads as a bad week rather than "wasn't on the schedule".
+    // `sprays` = volume week, `rate` = matured week (see the two clocks).
+    table: stats
+      .filter((s) => s.sprays > 0)
+      .map((s) => ({ technician: s.technician, sprays: s.sprays, rate: s.maturedRate })),
     ytd: {
       sprays: ytdApps.length,
       resprays: ytdResprays,

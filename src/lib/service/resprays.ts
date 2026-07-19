@@ -14,25 +14,29 @@
  * office + start/end dates (**MM/DD/YY**) → parse `#results-table`. READ-ONLY:
  * the form POST is a report render, not a mutation.
  *
- * ATTRIBUTION RULES (ops-canonical, rev 24 — 2026-07-17; supersedes the rev-21
- * 10-day window, which is GONE):
+ * ATTRIBUTION RULES (ops-canonical, rev 38 — 2026-07-19; supersedes the rev-24
+ * WINDOWLESS rule, which is GONE):
  *  - CURRENT_YEAR only. Prior-year jobs are NEVER used.
- *  - A RESPRAY = ANY completed mosquito `Re-service` job this year. No gap
- *    criteria at all — every re-service counts.
- *  - Attribution: blame the technician of the customer's MOST RECENT PRIOR
- *    completed mosquito job this year, where "prior jobs" INCLUDE both
- *    Regular/Initial sprays AND prior Re-services (the CHAIN rule: Nick sprays →
- *    Nathaniel re-services → Daniel re-services again ⇒ Daniel's respray blames
- *    NATHANIEL, the most recent toucher, not the original sprayer).
- *  - No prior mosquito job this year → "unattributed" (shown, nobody blamed).
+ *  - A RESPRAY = a completed mosquito `Re-service` within RESPRAY_WINDOW_DAYS (9)
+ *    of the customer's prior mosquito job. Ops: re-services only ever happen
+ *    inside ~9 days; past that the next scheduled Regular is pulled earlier.
+ *  - Attribution: blame the technician of that prior job, where "prior jobs"
+ *    INCLUDE both Regular/Initial sprays AND prior Re-services (the CHAIN rule:
+ *    Nick sprays → Nathaniel re-services → Daniel re-services again ⇒ Daniel's
+ *    respray blames NATHANIEL, the most recent toucher, not the original sprayer).
+ *  - Prior job MORE than the window away → "anomaly": counted in the re-service
+ *    total, blamed on NOBODY, and listed on the page for ops to fix.
+ *  - No prior mosquito job this year at all → "unattributed".
  *  - Rate per tech = attributed resprays ÷ his total mosquito APPLICATIONS
  *    (Initial + Regular) YTD. (Denominator unchanged — re-services aren't in it.)
  *  - Weekly bucketing stays keyed to the BLAMED job's week.
+ *  - EVERY tech counts here, Cesar and the Z-* placeholders included. Exclusion
+ *    is an AWARDS-only rule and lives in tech-board.ts.
  */
 import { getSyncState, initSchema, setSyncState, sql } from "@/lib/db";
 import { CURRENT_YEAR } from "@/lib/pocomos";
 import { getPocomosSession, getSessionedHtml, pocomosWebBase } from "@/lib/pocomos/webSession";
-import { isMosquitoServiceType } from "./mosquito";
+import { isMosquitoServiceType, MOSQUITO_SERVICE_TYPES } from "./mosquito";
 import { cadenceFromJobs, priorSeasonCadence, type CadenceYear } from "./cadence";
 
 const REPORT_PATH = "/completed-jobs-report";
@@ -41,6 +45,30 @@ const REFRESHED_AT_KEY = "resprays_refreshed_at";
 /** Job types that count as a mosquito APPLICATION (the rate's denominator). */
 export const APPLICATION_JOB_TYPES = new Set(["initial", "regular"]);
 export const RESPRAY_JOB_TYPE = "re-service";
+
+/**
+ * RESPRAY WINDOW (rev 38, ops-confirmed) — a re-service counts as a respray only
+ * within this many days of the customer's prior spray.
+ *
+ * WHY: ops confirmed re-services only ever happen inside ~9 days of a spray;
+ * past that the crew pulls the customer's NEXT scheduled Regular earlier instead
+ * of booking a re-service. So a "re-service" dated 10+ days after any prior
+ * spray is not a respray of that spray — it's a data anomaly (mis-keyed date,
+ * mis-typed job) and blaming a tech for it would be wrong.
+ *
+ * This SUPERSEDES the rev-24 windowless rule ("any re-service this year counts").
+ */
+export const RESPRAY_WINDOW_DAYS = 9;
+
+/**
+ * MATURITY (rev 38) — a spray is "proven clean" once this many days have passed
+ * with no re-service against it. Until then its outcome is still pending, so
+ * counting it would report a rate that later gets revised downward.
+ *
+ * Same number as the respray window by construction: once the window has closed,
+ * no respray can still arrive for that spray.
+ */
+export const MATURITY_DAYS = 9;
 /** Flag a tech only with enough volume to be meaningful, and only this far over. */
 export const FLAG_MIN_APPLICATIONS = 30;
 export const FLAG_RATE_MULTIPLE = 1.5;
@@ -144,12 +172,28 @@ export interface TechRow {
   allResprays: ResprayDetail[];
 }
 
+/** YTD sprays this season vs the same calendar date last season. */
+export interface SeasonPace {
+  year: string;
+  sprays: number;
+  priorYear: number;
+  priorSprays: number;
+  /** The cut-off both sides share, ISO — "by this date last year". */
+  asOfDate: string;
+  /** (sprays − priorSprays) / priorSprays, percent. */
+  deltaPct: number;
+}
+
 export interface RespraysReport {
   asOf: string;
   year: string;
   techs: TechRow[];
   weekly: WeeklyLeaderboard;
   repeatCustomers: RepeatCustomer[];
+  /** Re-services outside the respray window — for ops review, nobody blamed. */
+  anomalies: ResprayDetail[];
+  /** YTD sprays now vs the same calendar date last season. */
+  seasonPace?: SeasonPace;
   /**
    * Cadence health per season, oldest first: 2024, 2025, then the LIVE current
    * season. Share of consecutive-service gaps beyond the 11-17 day window.
@@ -164,6 +208,11 @@ export interface RespraysReport {
     chainResprays: number;
     /** Re-services with no prior mosquito job this year. */
     unattributed: number;
+    /**
+     * Re-services whose nearest prior spray is MORE than RESPRAY_WINDOW_DAYS
+     * away — counted in `reserviceJobs`, blamed on nobody. See `anomalies`.
+     */
+    anomalyResprays: number;
     applications: number;
     /** Team rate = countedResprays ÷ applications. */
     teamRate: number;
@@ -213,6 +262,69 @@ export function weekStart(iso: string): string {
   const d = new Date(`${iso}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() - d.getUTCDay()); // Sun=0 → already the start
   return d.toISOString().slice(0, 10);
+}
+
+/**
+ * SEASON PACE (rev 38) — this season's mosquito applications so far vs the same
+ * calendar date last season, from the 2025 Pocomos completed-jobs export.
+ *
+ * Both sides use the SAME job definition (Initial + Regular on a mosquito
+ * agreement) and the same month/day cut-off, so it answers "are we ahead or
+ * behind where we were this time last year" rather than comparing a partial
+ * season against a whole one.
+ */
+export async function getSeasonPace(sprays: number, todayIso: string): Promise<SeasonPace | null> {
+  const priorYear = Number(CURRENT_YEAR) - 1;
+  const cutoff = `${priorYear}${todayIso.slice(4)}`; // same MM-DD, last year
+  const types = [...MOSQUITO_SERVICE_TYPES];
+  const apps = [...APPLICATION_JOB_TYPES];
+  const rows = (await sql`
+    SELECT COUNT(*)::int AS n
+    FROM completed_jobs_2025
+    WHERE LOWER(agreement) = ANY(${types}::text[])
+      AND LOWER(job_type) = ANY(${apps}::text[])
+      AND completed_date >= ${`${priorYear}-01-01`}::date
+      AND completed_date <= ${cutoff}::date
+  `) as Array<{ n: number }>;
+  const priorSprays = rows[0]?.n ?? 0;
+  if (!priorSprays) return null;
+  return {
+    year: CURRENT_YEAR,
+    sprays,
+    priorYear,
+    priorSprays,
+    asOfDate: cutoff,
+    deltaPct: Math.round(((sprays - priorSprays) / priorSprays) * 1000) / 10,
+  };
+}
+
+/** Shift an ISO date by n days. */
+export const addDaysIso = (iso: string, n: number) => {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+
+/** A spray is PROVEN (its respray window has closed) once it's this old. */
+export const isMatured = (sprayIso: string, todayIso: string) =>
+  daysBetween(sprayIso, todayIso) >= MATURITY_DAYS;
+
+/**
+ * THE MATURITY CLOCK (rev 38) — the most recent Sun–Fri week in which EVERY
+ * spray has passed its respray window, so its rate is exact and can never be
+ * revised.
+ *
+ * A week's last working day is its Friday (start + 5). Every spray in it is
+ * proven once `today − (start + 5) >= MATURITY_DAYS`, i.e. `start <= today − 14`.
+ * So the matured week is simply the week containing `today − 14`.
+ *
+ * This runs BEHIND the volume clock (`boardWeekStart`, which only needs the week
+ * to have ended). On Sun 2026-07-19: volume week = Jul 12–17, matured week =
+ * Jul 5–10. That two-week lag is the price of never publishing a rate that
+ * later moves — which is why each award tile prints its own date range.
+ */
+export function maturedWeekStart(todayIso: string): string {
+  return weekStart(addDaysIso(todayIso, -(MATURITY_DAYS + 5)));
 }
 
 /** Parse `#results-table` out of the rendered report. */
@@ -282,8 +394,14 @@ const isMosquitoJob = (j: RespJob) => isMosquitoServiceType(j.serviceType);
 
 export interface Attribution {
   job: RespJob;
-  /** "counted" = a prior mosquito job exists and the respray is blamed on `tech`. */
-  kind: "counted" | "unattributed";
+  /**
+   * "counted"      — prior mosquito job within RESPRAY_WINDOW_DAYS; blamed on `tech`.
+   * "anomaly"      — a prior job exists but is MORE than the window away. Ops says
+   *                  this can't be a real respray of it, so nobody is blamed. Still
+   *                  counted in the re-service total, and listed for review.
+   * "unattributed" — no prior mosquito job this year at all.
+   */
+  kind: "counted" | "unattributed" | "anomaly";
   tech: string | null;
   gapDays: number | null;
   /** The blamed prior mosquito job (null = none this year). */
@@ -294,9 +412,17 @@ export interface Attribution {
 
 /**
  * Attribute every mosquito Re-service to the tech of the customer's MOST RECENT
- * PRIOR mosquito job this year — INCLUDING prior re-services (chain rule). No
- * gap window: every re-service with a prior job counts. Carries the blamed job
- * so callers (weekly bucketing, detail rows) don't recompute it.
+ * PRIOR mosquito job this year — INCLUDING prior re-services (chain rule) —
+ * **but only when that prior job is within `RESPRAY_WINDOW_DAYS`** (rev 38).
+ *
+ * Beyond the window the re-service is an ANOMALY, not a respray: ops confirmed
+ * they pull the next scheduled Regular earlier rather than book a late
+ * re-service, so a 10+ day "re-service" doesn't describe a failed spray. It
+ * still counts in the re-service total (it happened) but blames nobody, and is
+ * surfaced for review.
+ *
+ * Carries the blamed job so callers (weekly bucketing, detail rows) don't
+ * recompute it.
  */
 export function attribute(jobs: RespJob[]): Attribution[] {
   // Prior-job pool = ALL mosquito jobs (applications AND re-services), so a
@@ -318,11 +444,18 @@ export function attribute(jobs: RespJob[]): Attribution[] {
       out.push({ job: j, kind: "unattributed", tech: null, gapDays: null, prior: null, chain: false });
       continue;
     }
+    const gapDays = daysBetween(last.completedDate, j.completedDate);
+    if (gapDays > RESPRAY_WINDOW_DAYS) {
+      // Outside the window → nobody is blamed, but keep the prior job + gap so
+      // the review list can show exactly what looks wrong.
+      out.push({ job: j, kind: "anomaly", tech: null, gapDays, prior: last, chain: isReservice(last) });
+      continue;
+    }
     out.push({
       job: j,
       kind: "counted",
       tech: last.technician,
-      gapDays: daysBetween(last.completedDate, j.completedDate),
+      gapDays,
       prior: last,
       chain: isReservice(last),
     });
@@ -365,6 +498,10 @@ export function buildReport(jobs: RespJob[], asOf: string): RespraysReport {
   }
 
   const counted = attributions.filter((a) => a.kind === "counted");
+  const anomalyAttrs = attributions.filter((a) => a.kind === "anomaly");
+  const anomalies = anomalyAttrs
+    .map(toDetail)
+    .sort((a, b) => b.reserviceDate.localeCompare(a.reserviceDate));
   const countedResprays = counted.length;
   const chainResprays = counted.filter((a) => a.chain).length;
   const totalApps = apps.length;
@@ -440,11 +577,13 @@ export function buildReport(jobs: RespJob[], asOf: string): RespraysReport {
     techs,
     weekly,
     repeatCustomers,
+    anomalies,
     totals: {
       reserviceJobs: attributions.length,
       countedResprays,
       chainResprays,
       unattributed: attributions.filter((a) => a.kind === "unattributed").length,
+      anomalyResprays: anomalies.length,
       applications: totalApps,
       teamRate,
     },
@@ -629,5 +768,9 @@ export async function getRespraysReport(): Promise<RespraysReport> {
   // memory; the two completed seasons are two small LAG aggregates.
   const prior = await priorSeasonCadence();
   const cadence = [...prior, cadenceFromJobs(jobs, Number(CURRENT_YEAR))];
-  return { ...report, cadence, stale: jobs.length === 0 };
+  const seasonPace = await getSeasonPace(
+    report.totals.applications,
+    new Date().toISOString().slice(0, 10)
+  );
+  return { ...report, cadence, seasonPace: seasonPace ?? undefined, stale: jobs.length === 0 };
 }

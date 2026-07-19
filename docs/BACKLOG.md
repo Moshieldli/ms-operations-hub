@@ -14,6 +14,13 @@
 - [ ] Marketing source breakdown: Long Island vs Westchester
 
 ## Needs a human decision
+- [ ] **Is the 9-day respray window right? 39% of re-services now land outside it.** Implemented as
+      ops specified, but the gap data shows no clean cliff: mode at 8-9 days with a real, continuous
+      tail out to 20 days (10d ×11, 11d ×7, 12d ×5, 13d ×5, 15d ×4, 16d ×3, 17d ×2, 20d ×1).
+      Coverage by window: ≤9d **61%** · ≤10d 72% · ≤11d 79% · ≤12d **84%** · ≤14d 90% · ≤17d 99%.
+      Either those 39 really are mis-keyed records (then the anomalies card is the worklist to fix
+      them), or the window should widen. `RESPRAY_WINDOW_DAYS` in `lib/service/resprays.ts` is a
+      one-constant change. See §5.12.
 - [ ] **Return rate has fallen every season for five seasons (−5.0pp: 82.3 → 77.3%)** — surfaced by
       the rev-33 trend (§5.17). The denominator grew over the same span, so this is retention, not
       sample size. Worth an ops conversation on cause before building more measurement: the data now
@@ -80,6 +87,14 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **Respray window + maturity + two clocks + awards-only exclusion (rev 38, 2026-07-19)** —
+      respray = re-service **within 9 days** of the prior spray (supersedes the rev-24 windowless
+      rule); beyond that = anomaly, counted but unattributed and listed for review. **Attributed
+      resprays 99 → 60, team rate 1.84% → 1.11%, 39 anomalies.** Maturity (9d) drives a second clock:
+      VOLUME awards use the last completed week (Jul 12-17), RATE awards the most recent fully-proven
+      week (Jul 5-10); every tile prints its own dates + a rule footer. Cesar and `Z-*` are now
+      excluded from **awards only** — **ticker corrected 4,892 → 5,393 sprays**. New season-pace card
+      (5,393 vs 5,185 by the same date last year, +4.0%). See §5.12.
 - [x] **Cadence health stat card (rev 37, 2026-07-19)** — `/service/resprays` now tracks the share of
       consecutive-service gaps beyond the 11–17 day window, live for the current season:
       **2024 9.1% · 2025 27.8% · 2026 31.1% (live, +22.0pp vs 2024)**. Makes the §5.17 spray-gap

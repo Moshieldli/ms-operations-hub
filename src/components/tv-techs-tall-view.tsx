@@ -71,6 +71,11 @@ function AwardTile({ w, basePx }: { w: AwardWinner; basePx: number }) {
       <div className="max-w-full truncate text-[0.72em] font-bold leading-tight text-emerald-300">
         {w.stat}
       </div>
+      {/* The PERIOD must survive even here: the two clocks mean neighbouring
+          tiles can describe different weeks. Abbreviated, never dropped. */}
+      <div className="max-w-full truncate text-[0.58em] leading-tight text-slate-500">
+        {w.periodShort}
+      </div>
     </div>
   );
 }
@@ -122,9 +127,12 @@ export function TvTechsTallView({
       const tileW = (w - GAP_PX * (c - 1)) / c;
       const tileH = (h - GAP_PX * (rows - 1)) / rows;
       setCols(c);
-      // Height sets the scale (a tile's content is ~4.3em tall); width caps it so
-      // a long stat like "75 sprays, 0 resprays" isn't truncated on a squat tile.
-      setBasePx(Math.max(8, Math.min(34, Math.min(tileH * 0.2, tileW * 0.125))));
+      // Height sets the scale; width caps it so a long stat ("75 sprays, 0
+      // resprays") or period ("wk Jul 5-10 · rate") isn't truncated on a squat
+      // tile. Content grew to ~5.1em in rev 38 (the period sub-line), so the
+      // height factor drops 0.20 → 0.17 to keep the same fill and stay clear of
+      // the tile edge — the per-tile clipping assertion is what polices this.
+      setBasePx(Math.max(7, Math.min(30, Math.min(tileH * 0.17, tileW * 0.108))));
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -207,6 +215,12 @@ export function TvTechsTallView({
           <span className="font-bold text-slate-200">{firstName(board.ytd.longestCleanStreakTech)}</span>{" "}
           {fmt(board.ytd.longestCleanStreak)} in a row
         </span>
+      </div>
+
+      {/* 5. Rule footer — the definition behind every rate on this board. */}
+      <div className="shrink-0 pt-[0.5vmin] text-center text-[clamp(7px,1.9vmin,13px)] leading-tight text-slate-600">
+        Resprays counted when a re-service follows a spray within{" "}
+        {board.resprayWindowDays} days; attributed to that spray&rsquo;s tech.
       </div>
     </div>
   );

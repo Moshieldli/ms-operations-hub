@@ -67,6 +67,7 @@ export function TvTechsView({ board }: { board: TechBoard }) {
                 </div>
                 <div className="text-6xl font-black">{w.technician}</div>
                 <div className="text-3xl font-semibold text-amber-200/90">{w.stat}</div>
+                <div className="mt-1 text-xl text-amber-200/60">{w.period}</div>
               </div>
             </div>
           ))}
@@ -85,7 +86,9 @@ export function TvTechsView({ board }: { board: TechBoard }) {
                 </div>
                 <div className="mt-4 truncate text-5xl font-black">{w.technician}</div>
                 <div className="mt-1 text-3xl font-bold text-emerald-300">{w.stat}</div>
-                <div className="mt-2 text-lg text-slate-500">{w.award.blurb}</div>
+                {/* WHAT + WHEN. The two clocks mean adjacent tiles can describe
+                    different weeks, so every tile states its own period. */}
+                <div className="mt-2 text-lg leading-snug text-slate-500">{w.period}</div>
               </div>
             ))}
           </div>
@@ -135,6 +138,12 @@ export function TvTechsView({ board }: { board: TechBoard }) {
                 </span>
               </div>
             </div>
+          </div>
+
+          {/* Rule footer — the definition behind every rate on this board. */}
+          <div className="mt-4 text-center text-lg text-slate-600">
+            Resprays counted when a re-service follows a spray within{" "}
+            {board.resprayWindowDays} days; attributed to that spray&rsquo;s tech.
           </div>
         </>
       )}

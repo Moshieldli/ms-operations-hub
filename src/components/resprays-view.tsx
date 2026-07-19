@@ -56,14 +56,18 @@ export function RespraysView({
               <CardTitle>Tech respray performance</CardTitle>
               {/* The attribution rule, on the label so it's never lost. */}
               <CardDescription>
-                Respray = <strong>any re-service this year</strong>, attributed
-                to the most recent prior tech on that customer —{" "}
-                <strong>including prior re-services</strong> (so a re-service of a
-                re-service blames the last person who touched the account). {report.year}{" "}
-                only; prior-year jobs are never used, and a re-service with no
-                prior {report.year} job is unattributed. Rate = a tech&rsquo;s
+                Respray = a re-service <strong>within 9 days</strong> of the
+                customer&rsquo;s prior spray, attributed to that spray&rsquo;s
+                tech — <strong>including prior re-services</strong> (so a
+                re-service of a re-service blames the last person who touched the
+                account). Past 9 days it can&rsquo;t be a respray of that spray
+                (ops pull the next Regular earlier instead), so it counts in the
+                total but blames nobody — see the anomalies card. {report.year}{" "}
+                only; prior-year jobs are never used. Rate = a tech&rsquo;s
                 attributed resprays ÷ his mosquito applications (Initial +
-                Regular) YTD.{" "}
+                Regular) YTD. <strong>Every tech counts here</strong>, including
+                Cesar and route placeholders — the awards board is the only place
+                anyone is held out.{" "}
                 {report.stale ? (
                   <span className="text-amber-600 dark:text-amber-400">
                     Cache is empty — hit Refresh now to build it.
@@ -82,7 +86,7 @@ export function RespraysView({
           {note ? <p className="mt-2 text-sm text-amber-600 dark:text-amber-400">{note}</p> : null}
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
             <Stat
               label={`Re-service jobs ${report.year}`}
               value={fmt(t.reserviceJobs)}
@@ -100,6 +104,12 @@ export function RespraysView({
               def={`Re-services with no prior ${report.year} mosquito job — nobody blamed.`}
             />
             <Stat
+              label="Outside window"
+              value={fmt(t.anomalyResprays)}
+              def="Re-services more than 9 days after any prior spray — a data anomaly, counted in the total but blamed on nobody."
+              tone={t.anomalyResprays > 0 ? "bad" : undefined}
+            />
+            <Stat
               label="Team avg rate"
               value={pct(t.teamRate)}
               def={`${fmt(t.countedResprays)} resprays ÷ ${fmt(t.applications)} applications YTD.`}
@@ -108,7 +118,11 @@ export function RespraysView({
         </CardContent>
       </Card>
 
+      <SeasonPaceCard report={report} />
+
       <CadenceHealthCard report={report} />
+
+      <AnomaliesCard report={report} />
 
       <WeeklyLeaderboardCard report={report} minApps={rules.weeklyCalloutMinApps} />
 
@@ -338,6 +352,114 @@ function ResprayDetailTable({ details }: { details: ResprayDetail[] }) {
 }
 
 /** Weekly leaderboard — current + last full week, callouts, and fun auto-stats. */
+/** Season pace (rev 38) — YTD sprays vs the same calendar date last season. */
+function SeasonPaceCard({ report }: { report: RespraysReport }) {
+  const p = report.seasonPace;
+  if (!p) return null;
+  const behind = p.deltaPct < 0;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Season pace</CardTitle>
+        <CardDescription>
+          Mosquito applications (Initial + Regular) completed so far this season
+          against the <strong>same calendar date</strong> last season — a
+          like-for-like read, not a partial year against a whole one.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-lg">
+          <span className="text-3xl font-semibold tabular-nums">{fmt(p.sprays)}</span>
+          <span className="text-muted-foreground">
+            vs <span className="font-semibold tabular-nums">{fmt(p.priorSprays)}</span> by{" "}
+            {p.asOfDate} last year
+          </span>
+          <span
+            className={cn(
+              "text-sm font-semibold tabular-nums",
+              behind ? "text-amber-700 dark:text-amber-400" : "text-emerald-700 dark:text-emerald-400"
+            )}
+          >
+            {p.deltaPct >= 0 ? "+" : ""}
+            {p.deltaPct.toFixed(1)}%
+          </span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Re-services that fall OUTSIDE the respray window (rev 38) — counted in the
+ * re-service total, blamed on nobody, listed here so ops can fix the record.
+ */
+function AnomaliesCard({ report }: { report: RespraysReport }) {
+  const rows = report.anomalies ?? [];
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">
+          Re-services outside the window{rows.length ? ` (${fmt(rows.length)})` : ""}
+        </CardTitle>
+        <CardDescription>
+          Ops rule: a re-service only ever follows a spray within{" "}
+          <strong>9 days</strong> — past that the next scheduled Regular is pulled
+          earlier instead. So these can&rsquo;t be a respray of the spray before
+          them: they&rsquo;re a <strong>data anomaly</strong> (mis-keyed date or
+          mis-typed job). They still count in the re-service total, but{" "}
+          <strong>nobody is blamed</strong> for them. Fix the record in Pocomos
+          and they drop off.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            None — every re-service this season followed a spray within 9 days.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="py-2 pr-4 font-medium">Customer</th>
+                  <th className="py-2 pr-4 font-medium">Prior spray</th>
+                  <th className="py-2 pr-4 text-right font-medium">Gap</th>
+                  <th className="py-2 pr-4 font-medium">Re-service</th>
+                  <th className="py-2 font-medium">Did the re-service</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.invoiceNo} className="border-b last:border-0">
+                    <td className="py-2 pr-4">
+                      <a
+                        href={profileUrl(r.customerId)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline underline-offset-2"
+                      >
+                        {r.customerName}
+                      </a>
+                    </td>
+                    <td className="py-2 pr-4 tabular-nums text-muted-foreground">
+                      {r.priorJobDate} · {r.priorJobType}
+                    </td>
+                    <td className="py-2 pr-4 text-right font-semibold tabular-nums text-amber-700 dark:text-amber-400">
+                      {r.gapDays}d
+                    </td>
+                    <td className="py-2 pr-4 tabular-nums">{r.reserviceDate}</td>
+                    <td className="py-2">{r.reserviceTech}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 /**
  * Cadence health (rev 37) — the share of consecutive-service gaps that ran past
  * the 11-17 day window, this season vs the two completed ones.
