@@ -171,14 +171,19 @@
       Playwright, not curl+regex. See §11.2.
 
 ## Monitor (not blocking)
-- [ ] **`/service/resprays` HTML served a stale snapshot after the rev-37 deploy.** The page is
-      `force-dynamic`, yet its rendered HTML showed cadence 2026 = **31.8% (1,330/4,182 gaps)** while
-      **`GET /api/service/resprays` on the SAME deployment returned 31.1% (1,331/4,282)** — which
-      matches a local computation against the same Neon table exactly. Both figures are internally
-      consistent (1330/4182 = 31.80%, 1331/4282 = 31.09%), so it is a divergent/cached SSR snapshot,
-      not a logic bug; a cache-busting query param did not shift it. 2024/2025 (frozen) matched
-      exactly in both. Re-check after the next deploy; if it persists, suspect edge caching of the
-      `force-dynamic` HTML and compare `cache-control` on the page vs the API response.
+- [ ] **`/service/resprays` SSR HTML consistently disagrees with its own API — REPRODUCED twice.**
+      The page is `force-dynamic`, so both paths call `getRespraysReport()` at request time against
+      the same Neon table, yet they disagree:
+      - rev 37: page cadence 2026 = **31.8% (1,330/4,182 gaps)** vs API **31.1% (1,331/4,282)**
+      - rev 38: page anomalies = **38** vs API **39** (API polled 5× — 39 every time; page stable
+        at 38 across repeated loads, cache-busting query param included)
+      Stable-on-both-sides rules out read-replica jitter or a mid-refresh partial read; each render
+      is internally consistent, so it is a **stale SSR snapshot being served from cache**, not a
+      logic bug. The API is the trustworthy number. Next step: inspect `cache-control` on the page
+      response vs the API response, and check whether Vercel is edge-caching the `force-dynamic`
+      HTML; if so, the page needs an explicit no-store header. Numbers quoted in docs come from the
+      API.
+
 - [~] **Vercel auto-deploy** — VERIFIED WORKING rev 27 (a push produced a git-triggered
       `…-git-main-…` deployment, no CLI). Has flaked before, so keep confirming a fresh deployment
       after each push; if it starts missing again, the dashboard levers are in REFERENCE §11.2.
