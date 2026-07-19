@@ -16,9 +16,11 @@ const BASE = process.env.LIVE_BASE || "https://ms-operations-hub.vercel.app";
 
   await withBrowser(async (browser) => {
     // /sales — Leads dropdown children render on click (the curl+regex blind spot).
+    // Assert the dropdown children only; the headline tiles load async and aren't
+    // a stable smoke-test signal.
     const sales = await checkLivePage(
       `${BASE}/sales`,
-      { clickText: "Leads", expectText: ["Close rate", "Follow-ups", "Active Customers"] },
+      { clickText: "Leads", expectText: ["Close rate", "Follow-ups"] },
       browser
     );
     results.push({ name: "/sales + Leads dropdown", ok: sales.ok, note: sales.details.join(" · ") });

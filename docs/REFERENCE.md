@@ -1380,14 +1380,15 @@ Run it (or `livecheck.ts`) after every deploy — **verify live via a real brows
 **Playwright MCP** — configured in `.mcp.json` (project scope) for interactive UI checks in future
 sessions; `playwright` + Chromium are a devDependency for the scripted path.
 
-**Vercel auto-deploy** — the project IS git-connected (`vercel git connect` confirms "already
-connected", HEAD commits get "Vercel success" statuses), but auto-deploy has been intermittent (a
-push once produced no deployment). The CLI can't expose the "Ignored Build Step" / production-branch
-auto-deploy toggle or the GitHub App's repo-access health — **needs a dashboard check**:
-Vercel → Project → Settings → Git (confirm production branch = `main`, auto-deploy on, Ignored Build
-Step empty); GitHub → org Settings → Applications → Vercel → repository access includes
-`ms-operations-hub`. Until confirmed, always run `npx vercel --prod --scope moshieldlis-projects --yes`
-after pushing.
+**Vercel auto-deploy — WORKS (verified rev 27).** The project is git-connected (`vercel git connect`
+→ "already connected") and a rev-27 push produced a **git-triggered** production deployment ~2 min
+later with the `ms-operations-hub-git-main-…` alias (Vercel's git-deploy marker), with **no CLI
+deploy**. It has flaked before (a push once produced no deployment at all), so the robust habit is:
+**after pushing, confirm a fresh deployment appeared** (`npx vercel ls ms-operations-hub`); if none
+within ~2–3 min, fall back to `npx vercel --prod --scope moshieldlis-projects --yes`. If it starts
+missing again, the dashboard levers are Vercel → Project → Settings → Git (production branch `main`,
+auto-deploy on, Ignored Build Step empty) and GitHub → org Settings → Applications → Vercel → repo
+access includes `ms-operations-hub`.
 
 ---
 

@@ -38,11 +38,12 @@ en-dashes/entities, orders attributes unpredictably, and dropdown/collapsible ch
 **after a click**. Assert on the rendered DOM. (The Playwright MCP is configured in `.mcp.json` for
 interactive use; `scripts/lib/livecheck.ts` is the scripted path.)
 
-## Deploying (auto-deploy is unreliable)
-GitHub → Vercel auto-deploy has flaked (a push produced no deployment). Until confirmed fixed,
-`/ship` runs the manual deploy: `npx vercel --prod --scope moshieldlis-projects --yes`. The repo
-IS git-connected in Vercel; the intermittency needs a dashboard check (Settings → Git → Ignored
-Build Step / production-branch auto-deploy toggle; GitHub → Vercel app repo access).
+## Deploying
+GitHub → Vercel auto-deploy **works** (confirmed rev 27: a push produced a git-triggered
+`…-git-main-…` production deployment ~2 min later, no CLI). It has flaked before (a push once
+produced no deployment), so after pushing, **confirm a fresh deployment exists** — if none appears
+within ~2–3 min, run the manual deploy: `npx vercel --prod --scope moshieldlis-projects --yes`.
+Then verify live (below). `/ship` does this.
 
 ## Long backfills — background/cron-first, never block a session
 A one-off backfill or full re-scrape that runs more than ~a couple of minutes must NOT run inline

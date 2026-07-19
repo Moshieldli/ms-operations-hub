@@ -81,12 +81,10 @@
       Deleted 44 obsolete one-off scripts (71 → 27 + 4 lib). Rule added: verify deployed UI via
       Playwright, not curl+regex. See §11.2.
 
-## Needs a human decision (dashboard access)
-- [ ] **Fix Vercel GitHub auto-deploy** (intermittent — a push once produced no deployment). The repo
-      IS git-connected (CLI confirms) but the CLI can't see the toggle. Check: Vercel → Project →
-      Settings → Git (production branch `main`, auto-deploy ON, Ignored Build Step empty); GitHub →
-      org Settings → Applications → Vercel → repo access includes `ms-operations-hub`. Until fixed,
-      ship with `npx vercel --prod`. See REFERENCE §11.2.
+## Monitor (not blocking)
+- [~] **Vercel auto-deploy** — VERIFIED WORKING rev 27 (a push produced a git-triggered
+      `…-git-main-…` deployment, no CLI). Has flaked before, so keep confirming a fresh deployment
+      after each push; if it starts missing again, the dashboard levers are in REFERENCE §11.2.
 
 ## Done (earlier)
 - [x] **RL-04 follow-up: CLOSED-OUT bucket + collapsible sections (rev 26, 2026-07-19)** — split the
