@@ -124,10 +124,12 @@ export function TvTechsView({ board }: { board: TechBoard }) {
                 <span className="text-emerald-300">{board.ytd.rate.toFixed(1)}%</span> team respray
                 rate
               </div>
-              <div className="mt-1 text-slate-400">
-                🎯 Longest clean streak —{" "}
+              {/* Kept on one line — the longer "sprays in a row" phrasing wrapped
+                  at 1080p and stranded a single word under the ticker. */}
+              <div className="mt-1 text-xl text-slate-400">
+                🎯 Longest streak —{" "}
                 <span className="font-bold text-slate-200">{board.ytd.longestCleanStreakTech}</span>,{" "}
-                {fmt(board.ytd.longestCleanStreak)} sprays in a row
+                {fmt(board.ytd.longestCleanStreak)} in a row
               </div>
             </div>
           </div>
