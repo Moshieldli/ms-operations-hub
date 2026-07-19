@@ -80,6 +80,11 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **Cadence health stat card (rev 37, 2026-07-19)** — `/service/resprays` now tracks the share of
+      consecutive-service gaps beyond the 11–17 day window, live for the current season:
+      **2024 9.1% · 2025 27.8% · 2026 31.1% (live, +22.0pp vs 2024)**. Makes the §5.17 spray-gap
+      finding a watchable leading indicator. ⚠️ counts gaps **strictly >17d** (17 is on target) — the
+      earlier ad-hoc figures (12.3/35.4/38.7%) included exactly-17-day gaps. See §5.12.
 - [x] **Spray week → SUNDAY–FRIDAY (rev 36, 2026-07-19)** — ops: the crew sprays Sun–Fri, never Sat.
       `weekStart()` now returns the ISO Sunday; tech board (landscape + tall), resprays weekly
       leaderboard, Most Improved and all bucketing moved together. Bucket is Sun–Sat (Saturday

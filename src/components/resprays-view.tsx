@@ -108,6 +108,8 @@ export function RespraysView({
         </CardContent>
       </Card>
 
+      <CadenceHealthCard report={report} />
+
       <WeeklyLeaderboardCard report={report} minApps={rules.weeklyCalloutMinApps} />
 
       <RepeatCustomersCard report={report} />
@@ -336,6 +338,92 @@ function ResprayDetailTable({ details }: { details: ResprayDetail[] }) {
 }
 
 /** Weekly leaderboard — current + last full week, callouts, and fun auto-stats. */
+/**
+ * Cadence health (rev 37) — the share of consecutive-service gaps that ran past
+ * the 11-17 day window, this season vs the two completed ones.
+ *
+ * Tone is INVERTED from the rest of the page: here a HIGHER number is worse, so
+ * the current season is tinted amber when it sits above the oldest complete
+ * season. The comparison is the point — a single "31%" means nothing without
+ * "it was 9% two seasons ago".
+ *
+ * Strictly >17 days: 17 is the top of the target window and counts as on-time.
+ */
+function CadenceHealthCard({ report }: { report: RespraysReport }) {
+  const rows = report.cadence ?? [];
+  if (rows.length === 0) return null;
+  const live = rows.find((r) => r.live);
+  const baseline = rows.find((r) => !r.live);
+  const worse = live && baseline ? live.pct > baseline.pct : false;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">
+          Cadence health — share of gaps beyond our 11&ndash;17 day window
+        </CardTitle>
+        <CardDescription>
+          Of every gap between a customer&rsquo;s consecutive mosquito services,
+          how many ran <strong>longer than {17} days</strong>. A 17-day gap is on
+          target and doesn&rsquo;t count. Longer gaps are when mosquitoes come
+          back, so this is a leading indicator for resprays and retention — the
+          current season is live and moves as the season runs.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-4 sm:grid-cols-3">
+          {rows.map((r) => (
+            <div
+              key={r.year}
+              className={cn(
+                "rounded-lg border p-4",
+                r.live && worse && "border-amber-500/60 bg-amber-50/60 dark:bg-amber-950/20"
+              )}
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {r.year}
+                  {r.live ? " · live" : ""}
+                </span>
+                {r.live && baseline ? (
+                  <span
+                    className={cn(
+                      "text-xs font-semibold tabular-nums",
+                      worse ? "text-amber-700 dark:text-amber-400" : "text-emerald-700 dark:text-emerald-400"
+                    )}
+                  >
+                    {r.pct >= baseline.pct ? "+" : ""}
+                    {(r.pct - baseline.pct).toFixed(1)}pp vs {baseline.year}
+                  </span>
+                ) : null}
+              </div>
+              <div
+                className={cn(
+                  "mt-1 text-3xl font-semibold tabular-nums",
+                  r.live && worse && "text-amber-700 dark:text-amber-400"
+                )}
+              >
+                {r.pct.toFixed(1)}%
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground tabular-nums">
+                {fmt(r.beyond)} of {fmt(r.gaps)} gaps
+              </div>
+            </div>
+          ))}
+        </div>
+        <p className="mt-3 text-[11px] leading-snug text-muted-foreground">
+          Gaps are measured per customer within a season, so no cross-year id
+          matching is involved. 2024 comes from the RealGreen export, 2025 from
+          the Pocomos completed-jobs export, and the current season from the same
+          live cache this page already uses. Note this counts gaps{" "}
+          <strong>strictly over 17 days</strong>; an earlier ad-hoc figure that
+          included exactly-17-day gaps read higher (12.3% / 35.4% / 38.7%).
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
 function WeeklyLeaderboardCard({ report, minApps }: { report: RespraysReport; minApps: number }) {
   const { current, lastFull, funStats } = report.weekly;
   return (

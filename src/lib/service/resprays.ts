@@ -33,6 +33,7 @@ import { getSyncState, initSchema, setSyncState, sql } from "@/lib/db";
 import { CURRENT_YEAR } from "@/lib/pocomos";
 import { getPocomosSession, getSessionedHtml, pocomosWebBase } from "@/lib/pocomos/webSession";
 import { isMosquitoServiceType } from "./mosquito";
+import { cadenceFromJobs, priorSeasonCadence, type CadenceYear } from "./cadence";
 
 const REPORT_PATH = "/completed-jobs-report";
 const REFRESHED_AT_KEY = "resprays_refreshed_at";
@@ -149,6 +150,11 @@ export interface RespraysReport {
   techs: TechRow[];
   weekly: WeeklyLeaderboard;
   repeatCustomers: RepeatCustomer[];
+  /**
+   * Cadence health per season, oldest first: 2024, 2025, then the LIVE current
+   * season. Share of consecutive-service gaps beyond the 11-17 day window.
+   */
+  cadence?: CadenceYear[];
   totals: {
     /** ALL Re-service jobs on mosquito contracts YTD. */
     reserviceJobs: number;
@@ -619,5 +625,9 @@ export async function getRespraysReport(): Promise<RespraysReport> {
   }));
   const asOf = (await getSyncState<string>(REFRESHED_AT_KEY)) ?? new Date().toISOString();
   const report = buildReport(jobs, asOf);
-  return { ...report, stale: jobs.length === 0 };
+  // Cadence health: the CURRENT season comes free from the jobs already in
+  // memory; the two completed seasons are two small LAG aggregates.
+  const prior = await priorSeasonCadence();
+  const cadence = [...prior, cadenceFromJobs(jobs, Number(CURRENT_YEAR))];
+  return { ...report, cadence, stale: jobs.length === 0 };
 }
