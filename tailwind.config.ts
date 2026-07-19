@@ -49,6 +49,11 @@ const config: Config = {
           foreground: "hsl(var(--card-foreground))",
         },
       },
+      // For the /tv/techs top-billing trophy award (AwardDef.spin). No award sets
+      // it yet — the deferred referral trophy (TV-TECHS-REFERRAL) will.
+      animation: {
+        "spin-slow": "spin 4s linear infinite",
+      },
       borderRadius: {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",

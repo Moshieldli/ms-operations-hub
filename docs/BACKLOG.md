@@ -75,6 +75,21 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **TV-TECHS — `/tv/techs` shop-TV Tech Board (rev 28, 2026-07-19)** — Yodeck webpage-widget URL
+      `https://ms-operations-hub.vercel.app/tv/techs`. 1080p, self-reloads every 10 min, no
+      interaction. No new scrape/cron — computed on read from `respray_jobs` +
+      `mosquito_service_status` (route join probed at 99.7%). Board week = last COMPLETED week (the
+      live week has 0 mature resprays). Six positive awards, Cesar excluded, every tech guaranteed a
+      callout via maximum bipartite matching. See §5.15.
+
+## Ready to build (unblocked) — /tv/techs follow-ups
+- [ ] **TV-TECHS-REFERRAL** — 🏆 referral trophy as a top-billing award on `/tv/techs` (spinning
+      trophy in the hero slot). **Blocked on the data source**: no referral/lead-attribution feed is
+      wired up yet — Pocomos lead marketing_type is ~93% blank, so referrals credited to a tech will
+      likely have to come from the converted customer's record or a manual sheet. Decide the source,
+      then it's an entry in `AWARDS` (`topBilling: true, spin: true`) + a `computeCandidates` case;
+      the view already renders the hero slot and the spin animation (`animate-spin-slow`). See §5.15.
+
 - [x] **BUILD-SPEEDUP tooling (rev 27, 2026-07-19)** — Playwright MCP in `.mcp.json`; `scripts/lib/`
       (livecheck / pocomos / csv / neon) + `scripts/verify-live.ts`; skills `pocomos-scraping` +
       `dashboard-conventions`; `/ship` command; CLAUDE.md slimmed to identity+rules+pointers.

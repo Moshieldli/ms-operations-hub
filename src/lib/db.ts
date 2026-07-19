@@ -184,6 +184,19 @@ export async function initSchema(): Promise<void> {
   await c`CREATE INDEX IF NOT EXISTS respray_jobs_customer_idx ON respray_jobs (customer_id, completed_date)`;
   await c`CREATE INDEX IF NOT EXISTS respray_jobs_tech_idx ON respray_jobs (technician)`;
 
+  // ---- /tv/techs award history (rev 28) ----
+  // Who won which award in which board week. Written when the board is computed;
+  // read only to avoid handing a tech the same award two weeks running. Tiny
+  // (≤6 rows/week) and purely cosmetic — losing it just relaxes the repeat rule.
+  await c`
+    CREATE TABLE IF NOT EXISTS tv_tech_awards (
+      week_start DATE NOT NULL,
+      award_id TEXT NOT NULL,
+      technician TEXT NOT NULL,
+      PRIMARY KEY (week_start, award_id)
+    )
+  `;
+
   // ---- /leads/followup cache (rev 20) ----
   // Open THIS-YEAR leads + their follow-up task state. Filled by the nightly
   // cron (/api/cron/leads-followup) or "Refresh now"; the page only ever reads.
