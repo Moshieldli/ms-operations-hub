@@ -80,6 +80,17 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **TV emoji → inline SVG icons (rev 35, 2026-07-19)** — Yodeck's Linux browser has no
+      color-emoji font, so every award/weather glyph was an empty box on the real screens. New
+      `components/tv-icons.tsx` (lucide): per-award accent colors in gradient badge discs with a soft
+      glow, tinted weather SVGs, droplet for precip. Emoji fields removed from `AwardDef` /
+      `ForecastDay` so none can come back. `scripts/verify-tv-icons.ts` asserts zero emoji in the
+      rendered DOM at all five sizes. See §5.16.
+- [x] **FIX: fleet-count CSVs 404'd on Vercel (rev 34, 2026-07-19)** — Google Sheets IMPORTDATA was
+      failing with "Resource at url not found". Cause: **an App Router route segment containing a dot
+      404s on Vercel** (serves fine under `next start`) — the platform resolves extension-looking
+      paths against the static filesystem. Handlers moved to dot-free paths + `beforeFiles` rewrites;
+      public `.csv` URLs unchanged, 200 + text/csv, no redirect. See §5.14.
 - [x] **2021-2023 history + 5-season return-rate trend (rev 33, 2026-07-19)** — the return rate is
       now a TREND, not two points: **82.3 → 80.7 → 79.6 → 78.9 → 77.3%**, a **−5.0pp decline every
       single season**, while the real-customer denominator GREW 1,061 → 1,296. That's retention

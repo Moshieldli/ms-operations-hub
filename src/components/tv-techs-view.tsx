@@ -1,6 +1,7 @@
 "use client";
 
 import { TV_REFRESH_MS, useAutoReload } from "@/components/use-auto-reload";
+import { AwardIcon } from "@/components/tv-icons";
 import type { TechBoard } from "@/lib/service/tech-board";
 
 const fmt = (n: number) => n.toLocaleString("en-US");
@@ -57,7 +58,9 @@ export function TvTechsView({ board }: { board: TechBoard }) {
               key={w.award.id}
               className="mt-6 flex items-center gap-8 rounded-3xl border-2 border-amber-400/60 bg-gradient-to-r from-amber-500/20 to-transparent px-10 py-6"
             >
-              <div className={`text-8xl ${w.award.spin ? "animate-spin-slow" : ""}`}>{w.award.emoji}</div>
+              <div className={w.award.spin ? "animate-spin-slow" : ""}>
+                <AwardIcon id={w.award.id} size="6rem" />
+              </div>
               <div>
                 <div className="text-2xl font-bold uppercase tracking-[0.2em] text-amber-300">
                   {w.award.label}
@@ -75,7 +78,7 @@ export function TvTechsView({ board }: { board: TechBoard }) {
                 className="flex flex-col justify-center rounded-3xl border border-slate-700/70 bg-slate-900/70 px-8 py-6"
               >
                 <div className="flex items-center gap-4">
-                  <span className="text-7xl leading-none">{w.award.emoji}</span>
+                  <AwardIcon id={w.award.id} size="4.5rem" />
                   <span className="text-xl font-bold uppercase tracking-[0.18em] text-emerald-400">
                     {w.award.label}
                   </span>
@@ -120,10 +123,16 @@ export function TvTechsView({ board }: { board: TechBoard }) {
               </div>
               {/* Kept on one line — the longer "sprays in a row" phrasing wrapped
                   at 1080p and stranded a single word under the ticker. */}
-              <div className="mt-1 text-xl text-slate-400">
-                🎯 Longest streak —{" "}
-                <span className="font-bold text-slate-200">{board.ytd.longestCleanStreakTech}</span>,{" "}
-                {fmt(board.ytd.longestCleanStreak)} in a row
+              {/* The text is ONE flex item: as separate children, `gap` lands
+                  between every text node and strands the comma off the name
+                  ("Daniel Castelo , 138 in a row"). */}
+              <div className="mt-1 flex items-center gap-2 text-xl text-slate-400">
+                <AwardIcon id="clean-streak" size="1.6rem" />
+                <span>
+                  Longest streak —{" "}
+                  <span className="font-bold text-slate-200">{board.ytd.longestCleanStreakTech}</span>
+                  , {fmt(board.ytd.longestCleanStreak)} in a row
+                </span>
               </div>
             </div>
           </div>

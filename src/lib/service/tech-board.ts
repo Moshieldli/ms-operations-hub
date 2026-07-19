@@ -68,7 +68,12 @@ export const isExcludedTech = (name: string) => EXCLUDED_TECHS.has(name.trim().t
  */
 export interface AwardDef {
   id: string;
-  emoji: string;
+  /**
+   * NO EMOJI FIELD (rev 35). The TV icon is an inline SVG chosen from `id` in
+   * `components/tv-icons.tsx` — Yodeck's Linux browser has no color-emoji font
+   * and rendered the old glyphs as empty boxes. Keeping an emoji here would
+   * invite it straight back onto the screen.
+   */
   label: string;
   /** One short line under the winner — what the award means. Always positive. */
   blurb: string;
@@ -86,12 +91,12 @@ export interface AwardDef {
  * carries the honour; the blurb just says what's being measured.
  */
 export const AWARDS: AwardDef[] = [
-  { id: "clean-streak", emoji: "🎯", label: "Clean Streak", blurb: "Sprays in a row with no respray" },
-  { id: "iron-wall", emoji: "🛡️", label: "Iron Wall", blurb: `Respray rate, min ${MIN_SPRAYS_FOR_QUALITY_AWARD} sprays` },
-  { id: "workhorse", emoji: "⚡", label: "Workhorse", blurb: "Properties serviced this week" },
-  { id: "road-warrior", emoji: "🗺️", label: "Road Warrior", blurb: "Distinct routes covered" },
-  { id: "most-improved", emoji: "📈", label: "Most Improved", blurb: "Respray rate, week over week" },
-  { id: "perfect-week", emoji: "🏅", label: "Perfect Week", blurb: `Zero resprays on ${MIN_SPRAYS_FOR_QUALITY_AWARD}+ sprays` },
+  { id: "clean-streak", label: "Clean Streak", blurb: "Sprays in a row with no respray" },
+  { id: "iron-wall", label: "Iron Wall", blurb: `Respray rate, min ${MIN_SPRAYS_FOR_QUALITY_AWARD} sprays` },
+  { id: "workhorse", label: "Workhorse", blurb: "Properties serviced this week" },
+  { id: "road-warrior", label: "Road Warrior", blurb: "Distinct routes covered" },
+  { id: "most-improved", label: "Most Improved", blurb: "Respray rate, week over week" },
+  { id: "perfect-week", label: "Perfect Week", blurb: `Zero resprays on ${MIN_SPRAYS_FOR_QUALITY_AWARD}+ sprays` },
 ];
 
 // ------------------------------------------------------------------ shapes

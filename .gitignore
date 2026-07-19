@@ -53,3 +53,6 @@ docs/active-with-phone.csv
 # Bulk ground-truth exports (large; loaded into Neon, not tracked)
 data/
 scratch-*.png
+
+# TV icon verification screenshots (scripts/verify-tv-icons.ts)
+scratch-tv-icons/

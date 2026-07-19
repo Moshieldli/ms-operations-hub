@@ -31,7 +31,12 @@ export interface ForecastDay {
   date: string;
   /** "Today", then "Mon"/"Tue"/… */
   label: string;
-  emoji: string;
+  /**
+   * Raw WMO weather code (rev 35). Was an emoji string; the TV renders an
+   * inline SVG chosen from this code in `components/tv-icons.tsx`, because
+   * Yodeck's Linux browser has no color-emoji font and drew empty boxes.
+   */
+  code: number;
   high: number;
   low: number;
   /** Max precipitation probability, percent. */
@@ -40,23 +45,12 @@ export interface ForecastDay {
 
 let memo: { at: number; days: ForecastDay[] } | null = null;
 
-/**
- * WMO weather code → emoji. Grouped to the bands that actually matter to a tech
- * looking at a TV: clear, cloud, fog, drizzle, rain, snow, storm.
+/*
+ * The old WMO-code → emoji map lived here. It's gone (rev 35): the code is now
+ * passed through raw and mapped to an inline SVG in `components/tv-icons.tsx`,
+ * where the same bands (clear, cloud, fog, drizzle, rain, snow, storm) are
+ * preserved. See that file for why emoji can't be used on the shop TVs.
  */
-function codeEmoji(code: number): string {
-  if (code === 0) return "☀️";
-  if (code === 1 || code === 2) return "🌤️";
-  if (code === 3) return "☁️";
-  if (code === 45 || code === 48) return "🌫️";
-  if (code >= 51 && code <= 57) return "🌦️";
-  if (code >= 61 && code <= 67) return "🌧️";
-  if (code >= 71 && code <= 77) return "❄️";
-  if (code >= 80 && code <= 82) return "🌧️";
-  if (code === 85 || code === 86) return "🌨️";
-  if (code >= 95) return "⛈️";
-  return "🌡️";
-}
 
 /** "2026-07-20" → "Mon" (UTC-safe: the ISO date is already the local calendar day). */
 function dayLabel(iso: string, index: number): string {
@@ -96,7 +90,7 @@ export async function getForecast(): Promise<ForecastDay[] | null> {
     const days: ForecastDay[] = d.time.map((date, i) => ({
       date,
       label: dayLabel(date, i),
-      emoji: codeEmoji(d.weather_code?.[i] ?? -1),
+      code: d.weather_code?.[i] ?? -1,
       high: Math.round(d.temperature_2m_max?.[i] ?? 0),
       low: Math.round(d.temperature_2m_min?.[i] ?? 0),
       precip: Math.round(d.precipitation_probability_max?.[i] ?? 0),

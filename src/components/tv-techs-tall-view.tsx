@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { TV_REFRESH_MS, useAutoReload } from "@/components/use-auto-reload";
+import { AwardIcon, PrecipIcon, WeatherIcon } from "@/components/tv-icons";
 import type { AwardWinner, TechBoard } from "@/lib/service/tech-board";
 import type { ForecastDay } from "@/lib/weather";
 
@@ -59,7 +60,7 @@ function AwardTile({ w, basePx }: { w: AwardWinner; basePx: number }) {
       style={{ fontSize: `${basePx}px` }}
     >
       <div className="flex max-w-full items-center justify-center gap-[0.35em]">
-        <span className="shrink-0 text-[1.15em] leading-none">{w.award.emoji}</span>
+        <AwardIcon id={w.award.id} size="1.5em" />
         <span className="min-w-0 truncate text-[0.6em] font-bold uppercase tracking-[0.14em] text-emerald-400">
           {w.award.label}
         </span>
@@ -148,12 +149,15 @@ export function TvTechsTallView({
                 <div className="text-[clamp(8px,2.1vmin,14px)] font-bold uppercase tracking-[0.12em] text-slate-400">
                   {d.label}
                 </div>
-                <div className="text-[clamp(15px,4.6vmin,32px)] leading-tight">{d.emoji}</div>
+                <div className="my-[0.3vmin] leading-none">
+                  <WeatherIcon code={d.code} size="clamp(15px,4.6vmin,32px)" />
+                </div>
                 <div className="text-[clamp(10px,2.7vmin,18px)] font-bold tabular-nums">
                   {d.high}°<span className="text-slate-500">/{d.low}°</span>
                 </div>
-                <div className="text-[clamp(8px,2.1vmin,14px)] font-semibold tabular-nums text-sky-400">
-                  💧{d.precip}%
+                <div className="flex items-center gap-[0.25em] text-[clamp(8px,2.1vmin,14px)] font-semibold tabular-nums text-sky-400">
+                  <PrecipIcon size="0.95em" />
+                  {d.precip}%
                 </div>
               </div>
             ))}
@@ -193,11 +197,16 @@ export function TvTechsTallView({
       )}
 
       {/* 4. YTD ticker */}
-      <div className="mt-[1vmin] shrink-0 border-t border-slate-800 pt-[1vmin] text-center text-[clamp(9px,2.4vmin,17px)] text-slate-400">
-        <span className="font-bold text-emerald-300">{fmt(board.ytd.sprays)}</span> sprays ·{" "}
-        <span className="font-bold text-emerald-300">{board.ytd.rate.toFixed(1)}%</span> team rate ·
-        🎯 <span className="font-bold text-slate-200">{firstName(board.ytd.longestCleanStreakTech)}</span>{" "}
-        {fmt(board.ytd.longestCleanStreak)} in a row
+      <div className="mt-[1vmin] flex shrink-0 flex-wrap items-center justify-center gap-x-[0.4em] border-t border-slate-800 pt-[1vmin] text-center text-[clamp(9px,2.4vmin,17px)] text-slate-400">
+        <span>
+          <span className="font-bold text-emerald-300">{fmt(board.ytd.sprays)}</span> sprays ·{" "}
+          <span className="font-bold text-emerald-300">{board.ytd.rate.toFixed(1)}%</span> team rate ·
+        </span>
+        <span className="inline-flex items-center gap-[0.3em]">
+          <AwardIcon id="clean-streak" size="1.25em" />
+          <span className="font-bold text-slate-200">{firstName(board.ytd.longestCleanStreakTech)}</span>{" "}
+          {fmt(board.ytd.longestCleanStreak)} in a row
+        </span>
       </div>
     </div>
   );
