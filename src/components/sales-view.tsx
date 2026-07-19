@@ -12,7 +12,7 @@ import { RefreshedAt } from "@/components/refreshed-at";
 import { useLiveSales, type SalesMeta } from "@/components/use-live-sales";
 import { useSalesTaxonomy } from "@/components/use-sales-taxonomy";
 import type { SalesSummary } from "@/lib/sales-data";
-import type { SalesTaxonomy } from "@/lib/sales-taxonomy";
+import type { ReturnRatePair, SalesTaxonomy } from "@/lib/sales-taxonomy";
 import { cn } from "@/lib/utils";
 import { CollapsibleSection, MaybeCollapsible } from "@/components/ui/collapsible-section";
 
@@ -309,6 +309,116 @@ function SalesDashboard({
   );
 }
 
+/**
+ * Five-season return-rate sparkline (rev 33).
+ *
+ * FORM: one series, change-over-time → a line. No legend box (the card title
+ * names the series) and no number on every point — only the first and last are
+ * direct-labeled, plus the endpoint delta, which is the thing ops actually
+ * reads off a trend.
+ *
+ * THE SEAM IS ENCODED, NOT HIDDEN. The three pre-Pocomos points (`sprayOnly`)
+ * come from a spray-only rule in RealGreen short-id space; the two live ones
+ * also credit an active season tag. Measured gap on the one pair computable
+ * both ways (24→25): 76.93% vs 78.8% ≈ 1.9pp. So the historical segment is
+ * DASHED with hollow markers — a reader must not mistake a change of method for
+ * a change in the business.
+ *
+ * The y-axis is deliberately NOT zero-based: these are rates in a ~75-85% band
+ * and this is a LINE, where a truncated axis is legitimate (a BAR would have to
+ * start at zero). The axis range is printed under the plot so the zoom is
+ * explicit rather than implied.
+ */
+function ReturnRateTrend({ pairs }: { pairs: ReturnRatePair[] }) {
+  const pts = pairs.filter((p) => p.reliable);
+  if (pts.length < 2) return null;
+
+  // Pad the band so the line never rides the frame; keep it honest and labeled.
+  const rates = pts.map((p) => p.rate);
+  const lo = Math.floor(Math.min(...rates) - 2);
+  const hi = Math.ceil(Math.max(...rates) + 2);
+  const W = 100;
+  const H = 34;
+  const x = (i: number) => (pts.length === 1 ? W / 2 : (i / (pts.length - 1)) * W);
+  const y = (r: number) => H - ((r - lo) / (hi - lo)) * H;
+
+  const d = pts.map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(2)},${y(p.rate).toFixed(2)}`).join(" ");
+  // Split the path so the pre-Pocomos span can be dashed. The joining segment
+  // (last historical → first live) is dashed too: it spans the method change.
+  const lastHistorical = pts.reduce((acc, p, i) => (p.sprayOnly ? i : acc), -1);
+  const solidFrom = Math.max(lastHistorical, 0);
+  const dashed = pts
+    .slice(0, solidFrom + 1)
+    .map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(2)},${y(p.rate).toFixed(2)}`)
+    .join(" ");
+  const solid = pts
+    .slice(solidFrom)
+    .map((p, i) => `${i === 0 ? "M" : "L"}${x(i + solidFrom).toFixed(2)},${y(p.rate).toFixed(2)}`)
+    .join(" ");
+
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+  const delta = last.rate - first.rate;
+
+  return (
+    <div className="mb-4 rounded-lg border bg-muted/30 p-3">
+      <div className="mb-2 flex items-baseline justify-between gap-3">
+        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          {first.fromYear} → {last.toYear} trend
+        </span>
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {first.rate.toFixed(1)}% → <strong className="text-foreground">{last.rate.toFixed(1)}%</strong>{" "}
+          <span className={delta < 0 ? "text-amber-700 dark:text-amber-400" : "text-emerald-700 dark:text-emerald-400"}>
+            ({delta >= 0 ? "+" : ""}
+            {delta.toFixed(1)}pp)
+          </span>
+        </span>
+      </div>
+      <svg
+        viewBox={`-2 -4 ${W + 4} ${H + 8}`}
+        preserveAspectRatio="none"
+        className="h-16 w-full text-emerald-600 dark:text-emerald-400"
+        role="img"
+        aria-label={`Return rate by season: ${pts
+          .map((p) => `${p.fromYear} to ${p.toYear} ${p.rate.toFixed(1)} percent`)
+          .join(", ")}`}
+      >
+        {dashed && solidFrom > 0 ? (
+          <path d={dashed} fill="none" stroke="currentColor" strokeWidth={1.5} strokeDasharray="3 2" opacity={0.75} vectorEffect="non-scaling-stroke" />
+        ) : null}
+        <path d={solid || d} fill="none" stroke="currentColor" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+        {pts.map((p, i) => (
+          <circle
+            key={p.fromYear}
+            cx={x(i)}
+            cy={y(p.rate)}
+            r={2.6}
+            stroke="currentColor"
+            strokeWidth={1.5}
+            // Hollow = the pre-Pocomos, spray-only method.
+            fill={p.sprayOnly ? "var(--background, #fff)" : "currentColor"}
+            vectorEffect="non-scaling-stroke"
+          >
+            <title>
+              {p.fromYear} → {p.toYear}: {p.rate.toFixed(1)}% ({fmt(p.returned)}/{fmt(p.realFrom)})
+              {p.sprayOnly ? " — spray-only (pre-Pocomos)" : ""}
+            </title>
+          </circle>
+        ))}
+      </svg>
+      <div className="mt-1 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+        <span className="tabular-nums">
+          {pts.map((p) => p.fromYear).join(" · ")} · {last.toYear}
+        </span>
+        <span>
+          axis {lo}–{hi}% · dashed/hollow = pre-Pocomos, spray-only rule (≈1.9pp
+          below the current rule where both are measurable)
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function ReturnRateCard({
   taxonomy,
   loading,
@@ -351,6 +461,7 @@ function ReturnRateCard({
           </p>
         ) : (
           <div className="overflow-x-auto">
+            <ReturnRateTrend pairs={rr.pairs} />
             <table className="w-full text-sm">
               <thead className="[&>tr>th]:sticky [&>tr>th]:top-0 [&>tr>th]:z-10 [&>tr>th]:bg-background">
                 <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
@@ -364,6 +475,14 @@ function ReturnRateCard({
                   <tr key={p.fromYear} className="border-b last:border-0">
                     <td className="py-2 pr-4 font-medium tabular-nums">
                       {p.fromYear} → {p.toYear}
+                      {p.sprayOnly ? (
+                        <span
+                          className="ml-1.5 align-middle text-[10px] font-normal uppercase tracking-wide text-muted-foreground"
+                          title="Pre-Pocomos season: computed spray-only in RealGreen short-id space (no season tags existed)."
+                        >
+                          spray-only
+                        </span>
+                      ) : null}
                     </td>
                     {p.reliable ? (
                       <>
@@ -393,17 +512,26 @@ function ReturnRateCard({
               Event Spray never counts. &ldquo;Returned&rdquo; = active with any
               tag for the next season, or meeting its spray rule regardless of
               status.{" "}
-              {rr.pairs.some((p) => p.reliable && p.lateSignupsFrom + p.lateSignupsTo > 0)
+              {/*
+                These two sub-counts are scoped to the LIVE pairs. The frozen
+                pre-Pocomos pairs carry lateSignupsTo = 0 and returnedByTag = 0
+                by construction (not as a finding), so listing them here would
+                assert a zero the history never measured.
+              */}
+              {rr.pairs.some((p) => p.reliable && !p.sprayOnly && p.lateSignupsFrom + p.lateSignupsTo > 0)
                 ? `Late-season signups counted as real — ${rr.pairs
-                    .filter((p) => p.reliable)
+                    .filter((p) => p.reliable && !p.sprayOnly)
                     .map((p) => `${p.fromYear}: ${fmt(p.lateSignupsFrom)}, ${p.toYear}: ${fmt(p.lateSignupsTo)}`)
                     .join("; ")}. `
                 : ""}
-              {rr.pairs.some((p) => p.reliable && p.returnedByTag > 0)
+              {rr.pairs.some((p) => p.reliable && !p.sprayOnly && p.returnedByTag > 0)
                 ? `Returns by continuation tag vs. spray history — ${rr.pairs
-                    .filter((p) => p.reliable)
+                    .filter((p) => p.reliable && !p.sprayOnly)
                     .map((p) => `${p.fromYear}→${p.toYear}: ${fmt(p.returnedByTag)} tag, ${fmt(p.returnedBySprayHistory)} sprays`)
                     .join("; ")}. `
+                : ""}
+              {rr.pairs.some((p) => p.sprayOnly)
+                ? `Seasons before 2024 come from the RealGreen "spray dates" exports and are marked spray-only: Pocomos didn't exist yet, so there are no season tags to credit a signup — those pairs count sprays on both sides, computed in RealGreen customer-number space (never through the Pocomos id map, which resolves only customers who still exist today and would drop the churned customers a denominator is made of). Where both rules are measurable (2024→2025) spray-only reads ~1.9pp lower. `
                 : ""}
               Completed seasons come from authoritative bulk job exports (2025
               Pocomos completed-jobs, 2024 RealGreen — the system used before

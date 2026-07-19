@@ -14,6 +14,11 @@
 - [ ] Marketing source breakdown: Long Island vs Westchester
 
 ## Needs a human decision
+- [ ] **Return rate has fallen every season for five seasons (−5.0pp: 82.3 → 77.3%)** — surfaced by
+      the rev-33 trend (§5.17). The denominator grew over the same span, so this is retention, not
+      sample size. Worth an ops conversation on cause before building more measurement: the data now
+      supports a cohort cut (by marketing source, route/tech, LI vs Westchester, tenure) using
+      `realgreen_jobs_history.source_code`/`source_description`, which is loaded for 2021-2023.
 - [x] ~~`/leads/followup`: should "No open task" count as Overdue?~~ RESOLVED by UPDATE-RL-04
       (rev 25) — the whole task-only model was replaced with the notes+tasks model
       (never_reached / loop_not_closed / working_on_track / working_overdue). See §5.11.
@@ -75,6 +80,14 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **2021-2023 history + 5-season return-rate trend (rev 33, 2026-07-19)** — the return rate is
+      now a TREND, not two points: **82.3 → 80.7 → 79.6 → 78.9 → 77.3%**, a **−5.0pp decline every
+      single season**, while the real-customer denominator GREW 1,061 → 1,296. That's retention
+      sliding, not a shrinking sample — **worth an ops conversation.** New `realgreen_jobs_history`
+      + `return_rate_history`, `scripts/load-history.ts`, sparkline on `/sales`, arc caption on
+      `/tv/sales`. History is computed in RealGreen short-id space (the id map would have inflated
+      23→24 by +17.3pp); the spray-only-vs-tag seam is measured at ≈1.9pp and encoded in the UI.
+      See §5.17.
 - [x] **TV nav dropdown (rev 32, 2026-07-19)** — new **TV** tab in the top nav → Sales board /
       Tech board / Tech board — narrow. Items open in a **new tab** (`/tv/*` renders without the nav,
       so an in-tab link strands the user); new opt-in `NavLink.matchPrefix` lights the tab across

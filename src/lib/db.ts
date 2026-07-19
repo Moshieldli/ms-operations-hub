@@ -280,6 +280,52 @@ export async function initSchema(): Promise<void> {
     )
   `;
   await c`CREATE INDEX IF NOT EXISTS realgreen_jobs_2024_short_id_idx ON realgreen_jobs_2024 (short_id)`;
+  // ---- Pre-2024 RealGreen history (rev 33) ----
+  // 2021-2023, loaded to give the return rate a 5-pair TREND instead of 2 points.
+  // A single year-keyed table, unlike the year-suffixed 2024/2025 landing tables:
+  // these three arrive together, are never curated individually, and are read
+  // only in aggregate. `realgreen_jobs_2024` is deliberately NOT folded in here —
+  // it feeds the /sales anomalies card, whose worklist must stay scoped to the
+  // years ops actually reconciles (see lib/sales-anomalies.ts).
+  await c`
+    CREATE TABLE IF NOT EXISTS realgreen_jobs_history (
+      year INT NOT NULL,
+      short_id TEXT NOT NULL,
+      customer_name TEXT,
+      first_name TEXT,
+      last_name TEXT,
+      email TEXT,
+      phone TEXT,
+      address TEXT,
+      zip TEXT,
+      done_date DATE,
+      program_or_service_code TEXT,
+      source_code TEXT,
+      source_description TEXT,
+      route_code TEXT,
+      since_date DATE,
+      billing_type_description TEXT
+    )
+  `;
+  await c`CREATE INDEX IF NOT EXISTS realgreen_jobs_history_year_idx ON realgreen_jobs_history (year, short_id)`;
+  // Frozen return-rate pairs for COMPLETED, fully-export-backed season pairs that
+  // predate Pocomos (21→22, 22→23, 23→24). Computed once at load time in
+  // RealGreen SHORT-ID space — deliberately NOT through customer_id_map, which
+  // only resolves customers who still exist in Pocomos and would therefore drop
+  // exactly the churned customers a return-rate DENOMINATOR is made of. Frozen
+  // because these seasons can never change again; keeps the history off the
+  // /sales read path entirely.
+  await c`
+    CREATE TABLE IF NOT EXISTS return_rate_history (
+      from_year INT PRIMARY KEY,
+      to_year INT NOT NULL,
+      real_from INT NOT NULL,
+      returned INT NOT NULL,
+      rate NUMERIC(5,2) NOT NULL,
+      late_signups_from INT NOT NULL DEFAULT 0,
+      built_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
   // short_id (the 6-digit customer number used by BOTH exports) → pocomos web id
   // (the 7-digit id everything else in this app keys on). Pocomos exposes NO
   // short id on any API/bulk surface, so this map is built by matching contact

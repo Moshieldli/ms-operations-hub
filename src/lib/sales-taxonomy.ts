@@ -3,6 +3,7 @@ import { CURRENT_YEAR } from "@/lib/pocomos";
 import { initSchema, sql } from "@/lib/db";
 import { buildServiceCountCohort, getServiceCountsData } from "@/lib/service/serviceCounts";
 import { buildReturnRateAnomalies, type ReturnRateAnomalies } from "@/lib/sales-anomalies";
+import { getHistoryPairs } from "@/lib/service/historyLoad";
 
 /**
  * Year-relative cancelled taxonomy + "customers with issues" roster for /sales.
@@ -107,7 +108,7 @@ export const CONTINUATION_TAGS_NAMED = ["Auto", "SEB", "EB", "Renewed"] as const
  * of its own year? (Used only for single-spray customers: their one spray IS the
  * earliest.) Month/day comparison — year-agnostic.
  */
-function isLateSeasonSpray(iso: string): boolean {
+export function isLateSeasonSpray(iso: string): boolean {
   const m = iso.match(/^\d{4}-(\d{2})-(\d{2})/);
   if (!m) return false;
   const mm = parseInt(m[1], 10);
@@ -148,6 +149,15 @@ export interface ReturnRatePair {
    * pair needs a full-history source (see §5.8 / BACKLOG) before it's valid.
    */
   reliable: boolean;
+  /**
+   * True for the frozen PRE-POCOMOS pairs (21→22, 22→23, 23→24), which are
+   * computed spray-only in RealGreen short-id space — there were no Pocomos
+   * tags to read, so the live metric's "active with a {Y} tag = returned" path
+   * has no analogue. Measured seam on 24→25, the one pair computable both ways:
+   * spray-only 76.93% vs the live rule's 78.8% ≈ 1.9pp. The UI marks these
+   * points so nobody reads a method change as a trend change. See §5.17.
+   */
+  sprayOnly?: boolean;
 }
 
 /**
@@ -226,7 +236,11 @@ export interface ReturningBox {
 }
 
 export interface ReturnRates {
-  /** Ordered oldest→newest: [(CY-2 → CY-1), (CY-1 → CY)]. */
+  /**
+   * Ordered oldest→newest — FIVE pairs since rev 33: the three frozen
+   * pre-Pocomos seasons (21→22, 22→23, 23→24, `sprayOnly: true`) followed by
+   * the two live ones [(CY-2 → CY-1), (CY-1 → CY)].
+   */
   pairs: ReturnRatePair[];
   /** The late-season signup cutoff in effect (surfaced on the card), e.g. "Aug 15". */
   lateSeasonCutoff: string;
@@ -410,7 +424,29 @@ async function computeReturnRatesAndBox(people: Map<string, Person>): Promise<{
   const hasReturned = (id: string, y: number): boolean =>
     hasYearTagActive(id, y) || isReal(id, y);
 
-  const pairs: ReturnRatePair[] = [];
+  /**
+   * The three frozen pre-Pocomos pairs (rev 33) lead the series, so the card
+   * shows a 5-season TREND instead of two points. They're read from
+   * `return_rate_history` (computed once at load time, see
+   * lib/service/historyLoad.ts) rather than recomputed here: those seasons can
+   * never change, and the RealGreen job rows they're derived from are not in
+   * the pocomos-id space this function operates in.
+   */
+  const pairs: ReturnRatePair[] = (await getHistoryPairs()).map((h) => ({
+    fromYear: String(h.fromYear),
+    toYear: String(h.toYear),
+    realFrom: h.realFrom,
+    returned: h.returned,
+    rate: h.rate,
+    // Spray-only by construction — no tags existed before Pocomos.
+    returnedBySprayHistory: h.returned,
+    returnedByTag: 0,
+    lateSignupsFrom: h.lateSignupsFrom,
+    lateSignupsTo: 0,
+    reliable: true,
+    sprayOnly: true,
+  }));
+
   for (const [fromN, toN] of [[cy - 2, cy - 1], [cy - 1, cy]] as const) {
     let realFrom = 0;
     let returned = 0;

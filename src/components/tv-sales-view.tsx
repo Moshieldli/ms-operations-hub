@@ -123,7 +123,13 @@ function TvDashboard({
             ) : null}
           </div>
           <div className="grid grid-cols-2 gap-4 lg:gap-6">
-            {taxonomy.returnRates.pairs.filter((p) => p.reliable).map((p) => (
+            {/*
+              The two LIVE pairs only. Rev 33 added three frozen pre-Pocomos
+              pairs for the /sales trend; showing all five here would reflow this
+              2-up grid into three cramped rows on a screen read from across a
+              room. The 5-season arc goes in the one-line caption below instead.
+            */}
+            {taxonomy.returnRates.pairs.filter((p) => p.reliable && !p.sprayOnly).map((p) => (
               <div
                 key={p.fromYear}
                 className="flex flex-col rounded-xl border p-5 lg:p-7"
@@ -140,6 +146,14 @@ function TvDashboard({
               </div>
             ))}
           </div>
+          {taxonomy.returnRates.pairs.filter((p) => p.reliable).length > 2 ? (
+            <div className="mt-3 text-xs tabular-nums text-muted-foreground lg:text-sm">
+              {taxonomy.returnRates.pairs
+                .filter((p) => p.reliable)
+                .map((p) => `${p.toYear.slice(2)} ${p.rate.toFixed(0)}%`)
+                .join("  ·  ")}
+            </div>
+          ) : null}
         </section>
       ) : null}
 
