@@ -75,6 +75,20 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **BUILD-SPEEDUP tooling (rev 27, 2026-07-19)** — Playwright MCP in `.mcp.json`; `scripts/lib/`
+      (livecheck / pocomos / csv / neon) + `scripts/verify-live.ts`; skills `pocomos-scraping` +
+      `dashboard-conventions`; `/ship` command; CLAUDE.md slimmed to identity+rules+pointers.
+      Deleted 44 obsolete one-off scripts (71 → 27 + 4 lib). Rule added: verify deployed UI via
+      Playwright, not curl+regex. See §11.2.
+
+## Needs a human decision (dashboard access)
+- [ ] **Fix Vercel GitHub auto-deploy** (intermittent — a push once produced no deployment). The repo
+      IS git-connected (CLI confirms) but the CLI can't see the toggle. Check: Vercel → Project →
+      Settings → Git (production branch `main`, auto-deploy ON, Ignored Build Step empty); GitHub →
+      org Settings → Applications → Vercel → repo access includes `ms-operations-hub`. Until fixed,
+      ship with `npx vercel --prod`. See REFERENCE §11.2.
+
+## Done (earlier)
 - [x] **RL-04 follow-up: CLOSED-OUT bucket + collapsible sections (rev 26, 2026-07-19)** — split the
       old loop_not_closed (234) into **closed_out 185** (task completed, none in progress — done
       reaching out; section shows closing description / completion date / salesperson / Not-Interested

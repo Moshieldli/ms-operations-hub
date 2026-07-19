@@ -18,6 +18,7 @@
  */
 import { fetchAllCustomers } from "../src/lib/pocomos";
 import { postSessioned } from "../src/lib/pocomos/webSession";
+import { legacyDataTablesBody } from "./lib/pocomos";
 import { listContactsInFolder, normalizePhone } from "../src/lib/phoneburner/client";
 import { FOLDERS } from "../src/lib/phoneburner/folders";
 
@@ -27,23 +28,11 @@ function show(label: string, obj: unknown) {
 }
 
 async function fetchCustomersDataPage(start: number, len: number): Promise<Record<string, unknown>[]> {
-  const COLS = 11;
-  const body = new URLSearchParams();
-  body.set("sEcho", "1");
-  body.set("iColumns", String(COLS));
-  body.set("sColumns", ",".repeat(COLS - 1));
-  body.set("iDisplayStart", String(start));
-  body.set("iDisplayLength", String(len));
-  for (let i = 0; i < COLS; i++) {
-    body.set(`mDataProp_${i}`, String(i));
-    body.set(`sSearch_${i}`, "");
-    body.set(`bRegex_${i}`, "false");
-    body.set(`bSearchable_${i}`, "true");
-    body.set(`bSortable_${i}`, "true");
-  }
-  body.set("sSearch", "");
-  body.set("bRegex", "false");
-  body.set("iSortingCols", "0");
+  // /customers/data uses 11 numeric-index columns and no sort.
+  const body = legacyDataTablesBody(
+    Array.from({ length: 11 }, (_, i) => String(i)),
+    { start, length: len, sort: false }
+  );
   const resp = await postSessioned<{ aaData?: Record<string, unknown>[] }>(
     "/customers/data",
     body,

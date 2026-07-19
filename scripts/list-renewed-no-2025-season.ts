@@ -17,7 +17,7 @@
  * Run:
  *   node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/list-renewed-no-2025-season.ts
  */
-import { writeFileSync } from "node:fs";
+import { writeCsv } from "./lib/csv";
 import { getDataset, CURRENT_YEAR } from "../src/lib/pocomos";
 import { buildServiceCountCohort, getServiceCountsData } from "../src/lib/service/serviceCounts";
 import { isMosquitoServiceType } from "../src/lib/service/mosquito";
@@ -34,7 +34,6 @@ const day = (v: unknown): string => {
   const m = String(v).match(/(\d{4}-\d{2}-\d{2})/);
   return m ? m[1] : "";
 };
-const esc = (s: unknown) => `"${String(s ?? "").replace(/"/g, '""')}"`;
 
 (async () => {
   const [cohort, data, ds] = await Promise.all([
@@ -100,11 +99,7 @@ const esc = (s: unknown) => `"${String(s ?? "").replace(/"/g, '""')}"`;
     "profile_url",
   ];
   const file = "renewed-no-2025-season.csv";
-  writeFileSync(
-    file,
-    [header.join(","), ...rows.map((r) => header.map((h) => esc(r[h])).join(","))].join("\n") + "\n",
-    "utf8"
-  );
+  writeCsv(file, header, rows);
 
   console.log(
     `ACTIVE + ${CY} continuation tag + ZERO ${PY} mosquito sprays (table_ok only): ${rows.length}\n`
