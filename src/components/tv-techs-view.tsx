@@ -1,7 +1,7 @@
 "use client";
 
 import { TV_REFRESH_MS, useAutoReload } from "@/components/use-auto-reload";
-import { AwardIcon } from "@/components/tv-icons";
+import { AwardIcon, BoostStar } from "@/components/tv-icons";
 import type { TechBoard } from "@/lib/service/tech-board";
 
 const fmt = (n: number) => n.toLocaleString("en-US");
@@ -53,9 +53,11 @@ export function TvTechsView({ board }: { board: TechBoard }) {
         </div>
       ) : (
         <>
+          {/* Hero slot. Keyed by award + tech: two techs can hold a referral
+              trophy at once, so award.id alone would collide. */}
           {hero.map((w) => (
             <div
-              key={w.award.id}
+              key={`${w.award.id}:${w.technician}`}
               className="mt-6 flex items-center gap-8 rounded-3xl border-2 border-amber-400/60 bg-gradient-to-r from-amber-500/20 to-transparent px-10 py-6"
             >
               <div className={w.award.spin ? "animate-spin-slow" : ""}>
@@ -66,7 +68,10 @@ export function TvTechsView({ board }: { board: TechBoard }) {
                   {w.award.label}
                 </div>
                 <div className="text-6xl font-black">{w.technician}</div>
-                <div className="text-3xl font-semibold text-amber-200/90">{w.stat}</div>
+                {/* The referred CUSTOMER is the headline. Never a dollar amount. */}
+                <div className="text-3xl font-semibold text-amber-200/90">
+                  {w.referredCustomer ? `referred ${w.referredCustomer}` : w.stat}
+                </div>
                 <div className="mt-1 text-xl text-amber-200/60">{w.period}</div>
               </div>
             </div>
@@ -75,14 +80,19 @@ export function TvTechsView({ board }: { board: TechBoard }) {
           <div className="mt-6 grid flex-1 grid-cols-3 gap-6">
             {grid.map((w) => (
               <div
-                key={w.award.id}
-                className="flex flex-col justify-center rounded-3xl border border-slate-700/70 bg-slate-900/70 px-8 py-6"
+                key={`${w.award.id}:${w.technician}`}
+                className={`flex flex-col justify-center rounded-3xl border bg-slate-900/70 px-8 py-6 ${
+                  w.boosted ? "border-amber-400/50 shadow-[0_0_0_1px_rgba(251,191,36,0.25)]" : "border-slate-700/70"
+                }`}
               >
                 <div className="flex items-center gap-4">
                   <AwardIcon id={w.award.id} size="4.5rem" />
                   <span className="text-xl font-bold uppercase tracking-[0.18em] text-emerald-400">
                     {w.award.label}
                   </span>
+                  {/* Boost badge — this tech referred a customer, so EVERY tile
+                      he wins is decorated for the celebration month. */}
+                  {w.boosted ? <BoostStar size="1.6rem" /> : null}
                 </div>
                 <div className="mt-4 truncate text-5xl font-black">{w.technician}</div>
                 <div className="mt-1 text-3xl font-bold text-emerald-300">{w.stat}</div>

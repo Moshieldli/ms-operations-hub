@@ -10,9 +10,11 @@ import {
   Map as MapIcon,
   Medal,
   Shield,
+  Star,
   Snowflake,
   Sun,
   Target,
+  Trophy,
   Thermometer,
   TrendingUp,
   Zap,
@@ -43,6 +45,8 @@ const AWARD_ICONS: Record<string, { Icon: LucideIcon; accent: string }> = {
   "road-warrior": { Icon: MapIcon, accent: "#4ade80" }, // green — ground covered
   "most-improved": { Icon: TrendingUp, accent: "#2dd4bf" }, // teal — upward trend
   "perfect-week": { Icon: Medal, accent: "#fcd34d" }, // gold — the medal
+  // The referral trophy (rev 41) — gold, top billing, the only spinning icon.
+  referral: { Icon: Trophy, accent: "#fbbf24" },
 };
 
 /** Fallback keeps an unknown//future award (e.g. the deferred referral trophy) legible. */
@@ -89,6 +93,22 @@ export function AwardIcon({ id, size = "1em" }: { id: string; size?: string }) {
         absoluteStrokeWidth
       />
     </span>
+  );
+}
+
+/**
+ * The BOOSTED star (rev 41) — a tech inside his referral celebration month
+ * carries this on every tile he wins, not just the trophy. Filled gold so it
+ * reads instantly across a room without needing the label.
+ */
+export function BoostStar({ size = "1em" }: { size?: string }) {
+  return (
+    <Star
+      style={{ width: size, height: size, color: "#fbbf24", fill: "#fbbf24" }}
+      strokeWidth={2}
+      absoluteStrokeWidth
+      aria-hidden="true"
+    />
   );
 }
 

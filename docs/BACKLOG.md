@@ -165,12 +165,18 @@
       callout via maximum bipartite matching. See §5.15.
 
 ## Ready to build (unblocked) — /tv/techs follow-ups
-- [ ] **TV-TECHS-REFERRAL** — 🏆 referral trophy as a top-billing award on `/tv/techs` (spinning
-      trophy in the hero slot). **Blocked on the data source**: no referral/lead-attribution feed is
-      wired up yet — Pocomos lead marketing_type is ~93% blank, so referrals credited to a tech will
-      likely have to come from the converted customer's record or a manual sheet. Decide the source,
-      then it's an entry in `AWARDS` (`topBilling: true, spin: true`) + a `computeCandidates` case;
-      the view already renders the hero slot and the spin animation (`animate-spin-slow`). See §5.15.
+- [x] **TV-TECHS-REFERRAL — spinning referral trophy (rev 41, 2026-07-19)** — SHIPPED. Data source
+      is the **weekly payroll Google Sheets**, not Pocomos: a referral = an OTHER PAY row of exactly
+      **$50** with a customer name in NOTES. Spinning gold trophy hero on both boards + a month-long
+      "boosted" star on every tile the referrer wins. Scanned 6 weeks: **Nicholas → Channa Noiman
+      (wk 07-10), Nathaniel → Mina Becher (wk 06-26)**. See §5.15.
+- [ ] **Provision the Google service account for the payroll scan (rev 41 follow-up).** The nightly
+      `/api/cron/referrals` scanner is built but **dormant** — no service account exists yet, so
+      `referral_awards` is currently maintained by `scripts/seed-referrals.ts`. To go fully
+      automatic: create a service account, share the payroll folder
+      (`1UsODcBn0JsGMEzsZQQ1CmCVMgxe1Z0nM`) with its email **read-only**, and set
+      `GOOGLE_SERVICE_ACCOUNT_EMAIL` / `GOOGLE_PRIVATE_KEY` in Vercel. The cron picks it up with no
+      code change. The service-account email to share with is reported in the ship note.
 
 - [x] **BUILD-SPEEDUP tooling (rev 27, 2026-07-19)** — Playwright MCP in `.mcp.json`; `scripts/lib/`
       (livecheck / pocomos / csv / neon) + `scripts/verify-live.ts`; skills `pocomos-scraping` +

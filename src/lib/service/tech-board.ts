@@ -49,6 +49,7 @@ import {
   type RespJob,
 } from "./resprays";
 import { isMosquitoServiceType } from "./mosquito";
+import { boostExpiry, getActiveReferrals } from "./referrals";
 
 /** Minimum sprays in the board week to qualify for a quality (rate-based) award. */
 export const MIN_SPRAYS_FOR_QUALITY_AWARD = 20;
@@ -103,6 +104,22 @@ export interface AwardDef {
  * printed on the wall next to a number that contradicts it. The award NAME
  * carries the honour; the blurb just says what's being measured.
  */
+/**
+ * The referral trophy (rev 41). NOT in `AWARDS`: the six weekly awards are a
+ * one-winner-each matching problem, while referrals are per-EVENT — two techs
+ * can each hold one, and one tech could hold two. So trophies are built
+ * separately in `getTechBoard` and prepended to `winners`; the views already
+ * split `topBilling` into the hero slot, and `spin` drives the animation. Both
+ * hooks were reserved at rev 28 for exactly this.
+ */
+export const REFERRAL_AWARD: AwardDef = {
+  id: "referral",
+  label: "Customer Referral!",
+  blurb: "Brought us a new customer",
+  topBilling: true,
+  spin: true,
+};
+
 export const AWARDS: AwardDef[] = [
   { id: "clean-streak", label: "Clean Streak", blurb: "Sprays in a row with no respray" },
   { id: "iron-wall", label: "Iron Wall", blurb: `Respray rate, min ${MIN_SPRAYS_FOR_QUALITY_AWARD} sprays` },
@@ -143,6 +160,13 @@ export interface TechWeekStat {
 export interface AwardWinner {
   award: AwardDef;
   technician: string;
+  /**
+   * The tech is inside a referral BOOST month (rev 41) — every tile he wins
+   * carries the badge, not just the trophy, so the celebration lasts the month.
+   */
+  boosted?: boolean;
+  /** Referral trophies only: the customer he referred. NEVER a dollar amount. */
+  referredCustomer?: string;
   /** The headline number, pre-formatted (e.g. "0.0%", "101", "16 routes"). */
   stat: string;
   /**
@@ -154,6 +178,13 @@ export interface AwardWinner {
   period: string;
   /** Abbreviated period for the narrow board, where the full line won't fit. */
   periodShort: string;
+}
+
+/** A live referral trophy — one per referral inside its celebration month. */
+export interface ReferralTrophy {
+  technician: string;
+  customerName: string;
+  weekEnding: string;
 }
 
 export interface TechBoard {
@@ -181,6 +212,8 @@ export interface TechBoard {
     longestCleanStreak: number;
     longestCleanStreakTech: string;
   };
+  /** Techs inside a referral boost month — their tiles get the badge. */
+  boostedTechs: string[];
   /** True when the cache is empty — the view shows a friendly placeholder. */
   stale?: boolean;
 }
@@ -316,6 +349,12 @@ export function buildWeekStats(
     });
   }
   return stats.sort((a, b) => b.sprays - a.sprays || a.technician.localeCompare(b.technician));
+}
+
+/** "2026-08-10" → "Aug 10". */
+export function prettyMonthDay(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 /** "2026-07-12","2026-07-17" → "Jul 12–17"; crosses months → "Jul 28–Aug 2". */
@@ -529,7 +568,7 @@ async function readLastWeekAwards(weekStartIso: string): Promise<Map<string, str
 }
 
 /** Remember this week's assignment (idempotent) so next week can avoid repeats. */
-async function recordAwards(weekStartIso: string, winners: AwardWinner[]): Promise<void> {
+async function recordAwards(weekStartIso: string, winners: AwardSeat[]): Promise<void> {
   if (winners.length === 0) return;
   await sql`
     INSERT INTO tv_tech_awards (week_start, award_id, technician)
@@ -582,15 +621,45 @@ export async function getTechBoard(): Promise<TechBoard> {
   // resprays count in every number on this page and on /service/resprays.
   const awardStats = stats.filter((s) => !isExcludedTech(s.technician));
   const rawWinners = assignAwards(awardStats, lastWeek);
-  const winners: AwardWinner[] = rawWinners.map((w) => ({
-    ...w,
-    ...awardPeriod(
-      w.award.id,
-      { start: board, end: addDays(board, 5) },
-      { start: matured, end: addDays(matured, 5) }
-    ),
-  }));
-  if (winners.length > 0) await recordAwards(board, winners);
+
+  // ---- Referral trophies + the boost month (rev 41) ----
+  // Trophies are per-EVENT, so they're built here rather than going through the
+  // one-winner-per-award matching. A tech excluded from awards (Cesar, the Z-*
+  // placeholders) still can't take the hero slot.
+  const activeReferrals = await getActiveReferrals(today);
+  const boosted = new Set(activeReferrals.map((r) => r.technician));
+  const trophies: AwardWinner[] = activeReferrals
+    .filter((r) => !isExcludedTech(r.technician))
+    .map((r) => ({
+      award: REFERRAL_AWARD,
+      technician: r.technician,
+      // NO dollar amount, anywhere — the customer's name IS the headline.
+      stat: r.customerName,
+      referredCustomer: r.customerName,
+      boosted: true,
+      period: `referred a new customer · celebrating through ${prettyMonthDay(
+        boostExpiry(r.weekEnding)
+      )}`,
+      periodShort: `thru ${prettyMonthDay(boostExpiry(r.weekEnding))}`,
+    }));
+
+  const winners: AwardWinner[] = [
+    ...trophies,
+    ...rawWinners.map((w) => ({
+      ...w,
+      boosted: boosted.has(w.technician),
+      ...awardPeriod(
+        w.award.id,
+        { start: board, end: addDays(board, 5) },
+        { start: matured, end: addDays(matured, 5) }
+      ),
+    })),
+  ];
+  // Record only the six weekly award SEATS for repeat-avoidance. Referral
+  // trophies are per-event (two can share award_id="referral" in one week, which
+  // would collide on the (week_start, award_id) key) and aren't a weekly award —
+  // never record them here.
+  if (rawWinners.length > 0) await recordAwards(board, rawWinners);
 
   // YTD ticker — WHOLE TEAM, including Cesar and the Z-* placeholders.
   const ytdApps = jobs.filter(isApplication);
@@ -612,6 +681,7 @@ export async function getTechBoard(): Promise<TechBoard> {
   const best = [...stats].sort((a, b) => b.cleanStreak - a.cleanStreak)[0];
 
   return {
+    boostedTechs: [...boosted],
     weekStart: board,
     // FRIDAY, not Saturday: the bucket is Sun–Sat but the crew never works
     // Saturday, so showing "Jul 12 – Jul 18" would advertise a day nobody

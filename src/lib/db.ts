@@ -142,6 +142,26 @@ export async function initSchema(): Promise<void> {
   await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS pending_reservice BOOLEAN NOT NULL DEFAULT FALSE`;
   await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS pending_checked_at TIMESTAMPTZ`;
 
+  // ---- Referral awards (rev 41) ----
+  // Source of truth is the weekly PAYROLL Google Sheet, not Pocomos: a referral
+  // is an OTHER PAY row of exactly $50 whose NOTES cell holds the referred
+  // customer's name. One row per (technician, customer) — the payroll sheet
+  // repeats a referral across consecutive weeks, so the unique key dedupes it.
+  await c`
+    CREATE TABLE IF NOT EXISTS referral_awards (
+      technician TEXT NOT NULL,
+      customer_name TEXT NOT NULL,
+      week_ending DATE NOT NULL,
+      payroll_name TEXT,
+      source_file_id TEXT,
+      source_file_title TEXT,
+      source TEXT NOT NULL DEFAULT 'payroll',
+      detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (technician, customer_name)
+    )
+  `;
+  await c`CREATE INDEX IF NOT EXISTS referral_awards_week_idx ON referral_awards (week_ending DESC)`;
+
   // Per-customer-per-year COMPLETED mosquito-family service counts (Event Spray
   // excluded — it's a separate contract, never on the mosquito service-history
   // table). Feeds the ops-canonical return-rate metric (§5.8): a "real year-Y

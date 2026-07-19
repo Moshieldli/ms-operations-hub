@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { TV_REFRESH_MS, useAutoReload } from "@/components/use-auto-reload";
-import { AwardIcon, PrecipIcon, WeatherIcon } from "@/components/tv-icons";
+import { AwardIcon, BoostStar, PrecipIcon, WeatherIcon } from "@/components/tv-icons";
 import type { AwardWinner, TechBoard } from "@/lib/service/tech-board";
 import type { ForecastDay } from "@/lib/weather";
 
@@ -56,20 +56,27 @@ function AwardTile({ w, basePx }: { w: AwardWinner; basePx: number }) {
   return (
     <div
       data-award-tile={w.award.id}
-      className="flex min-h-0 min-w-0 flex-col items-center justify-center overflow-hidden rounded-[0.5em] border border-slate-700/70 bg-slate-900/70 px-[0.5em] py-[0.3em] text-center"
+      className={`flex min-h-0 min-w-0 flex-col items-center justify-center overflow-hidden rounded-[0.5em] border bg-slate-900/70 px-[0.5em] py-[0.3em] text-center ${
+        w.boosted ? "border-amber-400/60" : "border-slate-700/70"
+      }`}
       style={{ fontSize: `${basePx}px` }}
     >
       <div className="flex max-w-full items-center justify-center gap-[0.35em]">
-        <AwardIcon id={w.award.id} size="1.5em" />
+        <span className={w.award.spin ? "animate-spin-slow" : ""}>
+          <AwardIcon id={w.award.id} size="1.5em" />
+        </span>
         <span className="min-w-0 truncate text-[0.6em] font-bold uppercase tracking-[0.14em] text-emerald-400">
           {w.award.label}
         </span>
+        {/* Boost badge survives even on the narrow wall — it's the whole point
+            of the month-long celebration. */}
+        {w.boosted ? <BoostStar size="0.7em" /> : null}
       </div>
       <div className="mt-[0.1em] max-w-full truncate text-[1.35em] font-black leading-tight">
         {firstName(w.technician)}
       </div>
       <div className="max-w-full truncate text-[0.72em] font-bold leading-tight text-emerald-300">
-        {w.stat}
+        {w.referredCustomer ? `referred ${w.referredCustomer}` : w.stat}
       </div>
       {/* The PERIOD must survive even here: the two clocks mean neighbouring
           tiles can describe different weeks. Abbreviated, never dropped. */}
@@ -197,8 +204,10 @@ export function TvTechsTallView({
               gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
             }}
           >
+            {/* Keyed by award + tech: two techs can hold a referral trophy at
+                once, so award.id alone would collide. */}
             {winners.map((w) => (
-              <AwardTile key={w.award.id} w={w} basePx={basePx} />
+              <AwardTile key={`${w.award.id}:${w.technician}`} w={w} basePx={basePx} />
             ))}
           </div>
         </div>
