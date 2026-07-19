@@ -75,6 +75,11 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **TV-TECHS-TALL — `/tv/techs/tall` narrow board + weather (rev 29, 2026-07-19)** — right-column
+      Yodeck widget: `https://ms-operations-hub.vercel.app/tv/techs/tall`. Weather strip (Open-Meteo,
+      free/no key, display-only, 30-min module memo, fail-soft) + header + six one-line award rows +
+      YTD ticker; no bottom table. Breakpoint-free `clamp(min,Nvw,max)` sizing, verified 500×450 →
+      600×900 with no overflow. Landscape `/tv/techs` unchanged. See §5.16.
 - [x] **TV-TECHS — `/tv/techs` shop-TV Tech Board (rev 28, 2026-07-19)** — Yodeck webpage-widget URL
       `https://ms-operations-hub.vercel.app/tv/techs`. 1080p, self-reloads every 10 min, no
       interaction. No new scrape/cron — computed on read from `respray_jobs` +

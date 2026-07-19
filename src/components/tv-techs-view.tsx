@@ -1,10 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
+import { TV_REFRESH_MS, useAutoReload } from "@/components/use-auto-reload";
 import type { TechBoard } from "@/lib/service/tech-board";
-
-/** Yodeck reloads nothing on its own — the page refreshes itself. */
-const REFRESH_MS = 10 * 60 * 1000;
 
 const fmt = (n: number) => n.toLocaleString("en-US");
 
@@ -26,10 +23,7 @@ function prettyDate(iso: string): string {
  * inheriting the dashboard theme (a TV is always dark).
  */
 export function TvTechsView({ board }: { board: TechBoard }) {
-  useEffect(() => {
-    const t = setInterval(() => window.location.reload(), REFRESH_MS);
-    return () => clearInterval(t);
-  }, []);
+  useAutoReload(TV_REFRESH_MS);
 
   const hero = board.winners.filter((w) => w.award.topBilling);
   const grid = board.winners.filter((w) => !w.award.topBilling);
