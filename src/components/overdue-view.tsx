@@ -238,10 +238,13 @@ export function OverdueView({ initial }: { initial: OverdueReport }) {
         <CardHeader>
           <CardTitle>Needs manual check</CardTitle>
           <CardDescription>
-            Eligible mosquito customers whose currently-selected Pocomos contract
-            isn&rsquo;t the mosquito one. We never switch contracts
-            automatically — open them in Pocomos, switch to the mosquito
-            contract, and read the history there.
+            Eligible mosquito customers whose Pocomos profile opens to a
+            non-mosquito contract <em>and</em> who have no completed mosquito
+            service on record in the completed-jobs report — so we can&rsquo;t
+            date their last spray. (Customers who just render a tick/ant contract
+            first but do have mosquito jobs are now resolved automatically from
+            the completed-jobs report, not flagged here.) Open them in Pocomos to
+            confirm the mosquito contract and tagging.
           </CardDescription>
         </CardHeader>
         <CardContent>

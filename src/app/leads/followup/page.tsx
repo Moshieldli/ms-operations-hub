@@ -22,7 +22,7 @@ export default async function LeadsFollowupPage() {
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Overdue follow-ups</CardTitle>
+          <CardTitle>Lead follow-ups</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-red-600 dark:text-red-400">

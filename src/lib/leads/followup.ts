@@ -56,7 +56,22 @@ const LEADS_COLUMNS = [
   "function",
 ] as const;
 
-export type FollowupBucket = "overdue" | "no_task" | "no_open_task" | "on_track";
+/**
+ * Follow-up state (RL feedback rev 25). Ops model: notes and tasks are SEPARATE.
+ * A task stays In Progress while the lead is being worked (due date pushed
+ * forward per touch); a completed task = done reaching out. Notes are the record
+ * of contact. So we read BOTH the task board and the Lead Notes panel:
+ *   - never_reached    — no task EVER and no notes this year (for-sure missed)
+ *   - loop_not_closed  — reached (notes and/or a past task) but NO in-progress
+ *                        task tracking the next step (create a closing task)
+ *   - working_on_track — in-progress task, due today or later
+ *   - working_overdue  — in-progress task, due date in the past (days overdue)
+ */
+export type FollowupBucket =
+  | "never_reached"
+  | "loop_not_closed"
+  | "working_on_track"
+  | "working_overdue";
 
 export interface FollowupLead {
   leadId: string;
@@ -67,13 +82,15 @@ export interface FollowupLead {
   phone: string | null;
   email: string | null;
   bucket: FollowupBucket;
-  /** Comment count on the open task (or the newest archived one) = # touches. */
+  /** Comment count across the lead's tasks (from the board) — activity proxy. */
   touches: number;
-  /** Last comment timestamp, ISO. Null = never touched beyond task creation. */
-  lastTouchAt: string | null;
-  /** Open task's due date, ISO. Null when there's no open task. */
+  /** Lead Notes this year (count). */
+  notesCount: number;
+  /** Latest lead-note date this year, ISO, or null. */
+  lastNoteAt: string | null;
+  /** In-progress task's due date, ISO. Null when there's no in-progress task. */
   taskDueAt: string | null;
-  /** Whole days past due (>=1 only when overdue). */
+  /** Whole days past due (>=1 only when working_overdue). */
   daysOverdue: number | null;
   taskStatus: string | null;
   taskDescription: string | null;
@@ -90,11 +107,11 @@ export interface FollowupReport {
   leads: FollowupLead[];
   counts: {
     scope: number;
-    overdue: number;
-    noTask: number;
-    noOpenTask: number;
-    onTrack: number;
-    /** Of overdue+no-task: how many have ANY PhoneBurner call activity. */
+    neverReached: number;
+    loopNotClosed: number;
+    workingOnTrack: number;
+    workingOverdue: number;
+    /** Of the not-actively-worked buckets (never-reached + loop-not-closed): how many have PB call activity. */
     withPbActivity: number;
   };
   /** Populated when the cache is empty and the page had to say so. */
@@ -107,7 +124,7 @@ export interface FollowupRefreshMeta {
   durationMs: number;
   scope: number;
   boardsScraped: number;
-  taskDetailsScraped: number;
+  notesScraped: number;
   failed: number;
   counts: FollowupReport["counts"];
 }
@@ -262,13 +279,25 @@ export function parseTasks(html: string): ParsedTask[] {
   return out;
 }
 
-/** Newest comment timestamp on a task detail page. */
-export function parseLastComment(html: string): { at: string | null; count: number } {
-  const dates = [...html.matchAll(/class="comment__date"[^>]*>\s*Posted on ([^<]+)</g)]
-    .map((m) => parseCommentDate(m[1].trim()))
-    .filter(Boolean) as string[];
-  dates.sort();
-  return { at: dates.length ? dates[dates.length - 1] : null, count: dates.length };
+/**
+ * Lead Notes from the `#notes-table` on `/lead/{id}/lead-information`
+ * (server-rendered, one row per note). Each Date cell carries a machine-readable
+ * `data-order="YYYY-MM-DD HH:MM:SS"`. Returns every note date (ISO), newest last.
+ */
+export function parseLeadNotes(html: string): string[] {
+  const i = html.indexOf('id="notes-table"');
+  if (i < 0) return [];
+  const end = html.indexOf("</table>", i);
+  const seg = html.slice(i, end === -1 ? undefined : end);
+  const tb = seg.indexOf("<tbody");
+  if (tb < 0) return [];
+  const rows = seg.slice(tb).match(/<tr[\s\S]*?<\/tr>/g) || [];
+  const dates: string[] = [];
+  for (const r of rows) {
+    const d = r.match(/data-order="(\d{4}-\d{2}-\d{2})/)?.[1] ?? r.match(/(\d{4}-\d{2}-\d{2})/)?.[1];
+    if (d) dates.push(d);
+  }
+  return dates.sort();
 }
 
 // ------------------------------------------------------------------- refresh
@@ -301,55 +330,50 @@ export async function refreshLeadsFollowup(): Promise<FollowupRefreshMeta> {
   );
 
   let boardsScraped = 0;
-  let taskDetailsScraped = 0;
+  let notesScraped = 0;
+  const yearPrefix = CURRENT_YEAR;
   const results: FollowupLead[] = [];
 
   const one = async (l: RawLead): Promise<void> => {
     const leadId = String(l.id);
+    // (1) Task board.
     await sleep(PER_REQUEST_PAUSE_MS);
-    const html = await getSessionedHtml(`/lead/${leadId}/message-board`);
+    const boardHtml = await getSessionedHtml(`/lead/${leadId}/message-board`);
     boardsScraped++;
-    const tasks = parseTasks(html);
-    const open = tasks.filter((t) => t.open && String(t.status || "").toLowerCase() !== "completed");
+    const tasks = parseTasks(boardHtml);
+    // "In progress" = an open task not marked completed (the team pushes its due
+    // date forward per touch while working the lead).
+    const inProgress = tasks.filter(
+      (t) => t.open && String(t.status || "").toLowerCase() !== "completed"
+    );
     const archived = tasks.filter((t) => !t.open);
+    const dued = inProgress.filter((t) => t.dueAt).sort((a, b) => a.dueAt!.localeCompare(b.dueAt!));
+    const primary = dued[0] ?? inProgress[0] ?? [...archived].sort((a, b) => (b.dueAt ?? "").localeCompare(a.dueAt ?? ""))[0] ?? null;
+    const touches = tasks.reduce((s, t) => s + (t.comments || 0), 0);
 
-    // The task that defines the lead's next step: the soonest-due open task.
-    // Falling back through open-without-a-date → newest archived keeps the
-    // description/status columns populated for the no-open-task bucket.
-    const dued = open.filter((t) => t.dueAt).sort((a, b) => a.dueAt!.localeCompare(b.dueAt!));
-    const newestArchived = [...archived].sort((a, b) => (b.dueAt ?? "").localeCompare(a.dueAt ?? ""))[0];
-    const primary = dued[0] ?? open[0] ?? newestArchived ?? null;
+    // (2) Lead Notes panel (separate from tasks, per ops).
+    await sleep(PER_REQUEST_PAUSE_MS);
+    const infoHtml = await getSessionedHtml(`/lead/${leadId}/lead-information`);
+    notesScraped++;
+    const noteDates = parseLeadNotes(infoHtml).filter((d) => d.startsWith(yearPrefix));
+    const notesCount = noteDates.length;
+    const lastNoteAt = notesCount ? noteDates[noteDates.length - 1] : null;
 
-    // TOUCHES = every comment across EVERY task on the lead, not just the open
-    // one. The team normally keeps one rolling task per lead (they push its due
-    // date out after each touch), but a lead whose task was completed and
-    // replaced would otherwise under-report its history. The comment TIMESTAMPS
-    // aren't on the board, so each commented task costs one extra GET.
-    let lastTouchAt: string | null = null;
-    let touches = 0;
-    for (const t of tasks) {
-      if (t.comments <= 0) {
-        continue;
-      }
-      await sleep(PER_REQUEST_PAUSE_MS);
-      const detail = await getSessionedHtml(`/message/todo/${t.taskId}/show`);
-      taskDetailsScraped++;
-      const parsed = parseLastComment(detail);
-      touches += parsed.count || t.comments;
-      if (parsed.at && (!lastTouchAt || parsed.at > lastTouchAt)) lastTouchAt = parsed.at;
-    }
-
-    const dueIso = dued[0]?.dueAt?.slice(0, 10) ?? null;
+    // ---- classify ----
     let bucket: FollowupBucket;
     let daysOverdue: number | null = null;
-    if (tasks.length === 0) bucket = "no_task";
-    else if (!dued.length) bucket = "no_open_task"; // every task completed/archived
-    else {
-      const d = daysBetween(dueIso!, today);
+    if (inProgress.length > 0) {
+      // WORKING — split by the soonest in-progress due date.
+      const dueIso = dued[0]?.dueAt?.slice(0, 10) ?? null;
+      const d = dueIso ? daysBetween(dueIso, today) : 0;
       if (d > 0) {
-        bucket = "overdue";
+        bucket = "working_overdue";
         daysOverdue = d;
-      } else bucket = "on_track";
+      } else bucket = "working_on_track";
+    } else if (tasks.length === 0 && notesCount === 0) {
+      bucket = "never_reached"; // no task ever AND no notes this year
+    } else {
+      bucket = "loop_not_closed"; // reached (notes and/or a past task), no active task
     }
 
     const p = pb.get(leadId);
@@ -363,12 +387,13 @@ export async function refreshLeadsFollowup(): Promise<FollowupRefreshMeta> {
       email: l.email || null,
       bucket,
       touches,
-      lastTouchAt,
+      notesCount,
+      lastNoteAt,
       taskDueAt: dued[0]?.dueAt ?? null,
       daysOverdue,
       taskStatus: primary?.status ?? null,
       taskDescription: primary?.description?.slice(0, 300) ?? null,
-      openTaskCount: open.length,
+      openTaskCount: inProgress.length,
       archivedTaskCount: archived.length,
       pbCalls: p?.calls ?? 0,
       pbLastCallAt: p?.last ?? null,
@@ -386,7 +411,7 @@ export async function refreshLeadsFollowup(): Promise<FollowupRefreshMeta> {
     durationMs: Date.now() - t0,
     scope: scope.length,
     boardsScraped,
-    taskDetailsScraped,
+    notesScraped,
     failed: pooled.failures.length,
     counts,
   };
@@ -395,12 +420,12 @@ export async function refreshLeadsFollowup(): Promise<FollowupRefreshMeta> {
 function tally(leads: FollowupLead[]): FollowupReport["counts"] {
   return {
     scope: leads.length,
-    overdue: leads.filter((l) => l.bucket === "overdue").length,
-    noTask: leads.filter((l) => l.bucket === "no_task").length,
-    noOpenTask: leads.filter((l) => l.bucket === "no_open_task").length,
-    onTrack: leads.filter((l) => l.bucket === "on_track").length,
+    neverReached: leads.filter((l) => l.bucket === "never_reached").length,
+    loopNotClosed: leads.filter((l) => l.bucket === "loop_not_closed").length,
+    workingOnTrack: leads.filter((l) => l.bucket === "working_on_track").length,
+    workingOverdue: leads.filter((l) => l.bucket === "working_overdue").length,
     withPbActivity: leads.filter(
-      (l) => (l.bucket === "overdue" || l.bucket === "no_task") && l.pbCalls > 0
+      (l) => (l.bucket === "never_reached" || l.bucket === "loop_not_closed") && l.pbCalls > 0
     ).length,
   };
 }
@@ -415,7 +440,7 @@ async function writeFollowupCache(leads: FollowupLead[]): Promise<void> {
     await sql`
       INSERT INTO leads_followup (
         lead_id, name, created_date, salesperson, marketing_type, phone, email,
-        bucket, touches, last_touch_at, task_due_at, days_overdue, task_status,
+        bucket, touches, notes_count, last_note_at, task_due_at, days_overdue, task_status,
         task_description, open_task_count, archived_task_count, pb_calls, pb_last_call_at
       )
       SELECT * FROM UNNEST(
@@ -423,7 +448,8 @@ async function writeFollowupCache(leads: FollowupLead[]): Promise<void> {
         ${c.map((l) => l.createdDate)}::date[], ${c.map((l) => l.salesperson)}::text[],
         ${c.map((l) => l.marketingType)}::text[], ${c.map((l) => l.phone)}::text[],
         ${c.map((l) => l.email)}::text[], ${c.map((l) => l.bucket)}::text[],
-        ${c.map((l) => l.touches)}::int[], ${c.map((l) => l.lastTouchAt)}::timestamptz[],
+        ${c.map((l) => l.touches)}::int[], ${c.map((l) => l.notesCount)}::int[],
+        ${c.map((l) => l.lastNoteAt)}::date[],
         ${c.map((l) => l.taskDueAt)}::timestamptz[], ${c.map((l) => l.daysOverdue)}::int[],
         ${c.map((l) => l.taskStatus)}::text[], ${c.map((l) => l.taskDescription)}::text[],
         ${c.map((l) => l.openTaskCount)}::int[], ${c.map((l) => l.archivedTaskCount)}::int[],
@@ -459,7 +485,8 @@ export async function getFollowupReport(): Promise<FollowupReport> {
     email: (r.email as string) ?? null,
     bucket: r.bucket as FollowupBucket,
     touches: Number(r.touches ?? 0),
-    lastTouchAt: iso(r.last_touch_at),
+    notesCount: Number(r.notes_count ?? 0),
+    lastNoteAt: iso(r.last_note_at)?.slice(0, 10) ?? null,
     taskDueAt: iso(r.task_due_at),
     daysOverdue: r.days_overdue == null ? null : Number(r.days_overdue),
     taskStatus: (r.task_status as string) ?? null,

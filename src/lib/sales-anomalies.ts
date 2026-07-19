@@ -93,6 +93,64 @@ export interface ReturnRateAnomalies {
 
 const profile = (id: string) => `${POCOMOS_BASE}/customer/${id}/service-information`;
 
+const normName = (s: string) => s.trim().toLowerCase().replace(/[^a-z\s]/g, "").replace(/\s+/g, " ");
+
+/** Levenshtein distance (small strings). */
+function editDistance(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(
+        prev[j] + 1,
+        cur[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+
+/** Two first names are "the same person": exact, nickname-prefix, or a typo. */
+function firstNamesSimilar(a: string, b: string): boolean {
+  const x = normName(a).split(" ")[0] || "";
+  const y = normName(b).split(" ")[0] || "";
+  if (!x || !y) return true; // one side unknown → don't split on it
+  if (x === y) return true;
+  const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+  if (short.length >= 3 && long.startsWith(short)) return true; // Rob / Robert
+  return editDistance(x, y) <= 2 && Math.min(x.length, y.length) >= 4; // typo tolerance
+}
+
+/** Same person = same (normalized) last name AND a similar first name. */
+function samePerson(a: Person, b: Person): boolean {
+  const la = normName(a.lastName);
+  const lb = normName(b.lastName);
+  if (la && lb && la !== lb) return false; // different surname → different person (father/daughter safe)
+  return firstNamesSimilar(a.firstName || a.name, b.firstName || b.name);
+}
+
+/**
+ * Cluster records that share an email into "same person" groups. A record joins
+ * an existing cluster if it matches ANY member (transitive), else it starts its
+ * own — so a father and daughter on one email become two clusters, neither of
+ * which is a duplicate group.
+ */
+function clusterBySamePerson(group: Person[]): Person[][] {
+  const clusters: Person[][] = [];
+  for (const p of group) {
+    const hit = clusters.find((c) => c.some((q) => samePerson(p, q)));
+    if (hit) hit.push(p);
+    else clusters.push([p]);
+  }
+  return clusters;
+}
+
 /**
  * Build the anomaly roster from live data.
  *
@@ -111,38 +169,50 @@ export async function buildReturnRateAnomalies({
   const items: AnomalyItem[] = [];
 
   // ---- 1. Duplicate customer records (same human, several Pocomos ids) ----
-  // Grouped by email: the lead-conversion duplicate set. Only report groups where
-  // the split actually matters — at least one twin carries return-rate-relevant
-  // evidence (a recent tag or sprays) — otherwise two dormant shells are noise.
-  const byEmail = new Map<string, Person[]>();
-  for (const p of people.values()) {
-    if (!p.email) continue;
-    byEmail.set(p.email, [...(byEmail.get(p.email) || []), p]);
-  }
+  // Grouped by email, then clustered by NAME IDENTITY (RL feedback, rev 25):
+  //  (a) records whose name contains "duplicate" are known dup shells, not open
+  //      questions — dropped from detection entirely.
+  //  (b) a shared email is NOT proof of the same person (fathers/daughters share
+  //      an inbox). Only records that also match on name identity — same last
+  //      name AND same/similar first name (fuzzy) — count as the same human.
+  //      Different people under one email each land in their own cluster and are
+  //      NOT flagged.
+  // A dup group = an email + name-cluster with 2+ records where at least one
+  // carries return-rate-relevant evidence (a recent tag or sprays).
+  const isDupShell = (p: Person) => /duplicate/i.test(p.name);
   const relevant = (p: Person) =>
     p.active ||
     p.tags.some((t) => /^\d{4} -/.test(String(t).trim())) ||
     Object.keys(data.counts.get(p.id) ?? {}).length > 0;
+  const sprays = (p: Person) => data.counts.get(p.id)?.[cy] ?? 0;
+
+  const byEmail = new Map<string, Person[]>();
+  for (const p of people.values()) {
+    if (!p.email) continue;
+    if (isDupShell(p)) continue; // (a) drop "…duplicate…" shells
+    byEmail.set(p.email, [...(byEmail.get(p.email) || []), p]);
+  }
   for (const [email, group] of byEmail) {
     if (group.length < 2) continue;
-    if (!group.some(relevant)) continue;
-    // Anchor on the record the rest of the app prefers (active first), and list
-    // the twins beside it so an operator can open both and merge.
-    const sorted = [...group].sort((a, b) => Number(b.active) - Number(a.active));
-    const [head, ...twins] = sorted;
-    const sprays = (p: Person) => data.counts.get(p.id)?.[cy] ?? 0;
-    items.push({
-      classKey: "duplicate_records",
-      id: head.id,
-      name: head.name,
-      reason:
-        `${group.length} records share ${email} — ` +
-        sorted
-          .map((p) => `${p.id} (${p.status}${sprays(p) ? `, ${sprays(p)} ${cy} sprays` : ""})`)
-          .join(" · "),
-      profileUrl: profile(head.id),
-      related: twins.map((p) => ({ id: p.id, name: p.name, profileUrl: profile(p.id) })),
-    });
+    // (b) cluster the email group by name identity — same person only.
+    for (const cluster of clusterBySamePerson(group)) {
+      if (cluster.length < 2) continue; // lone records = different people, no dup
+      if (!cluster.some(relevant)) continue;
+      const sorted = [...cluster].sort((a, b) => Number(b.active) - Number(a.active));
+      const [head, ...twins] = sorted;
+      items.push({
+        classKey: "duplicate_records",
+        id: head.id,
+        name: head.name,
+        reason:
+          `${cluster.length} records share ${email} and the same name — ` +
+          sorted
+            .map((p) => `${p.id} (${p.status}${sprays(p) ? `, ${sprays(p)} ${cy} sprays` : ""})`)
+            .join(" · "),
+        profileUrl: profile(head.id),
+        related: twins.map((p) => ({ id: p.id, name: p.name, profileUrl: profile(p.id) })),
+      });
+    }
   }
 
   // ---- 2. Unmapped short ids (in an export, no confident web match) ----

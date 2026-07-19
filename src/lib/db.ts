@@ -211,6 +211,9 @@ export async function initSchema(): Promise<void> {
     )
   `;
   await c`CREATE INDEX IF NOT EXISTS leads_followup_bucket_idx ON leads_followup (bucket)`;
+  // Lead Notes signal (rev 25) — for the never-reached / loop-not-closed split.
+  await c`ALTER TABLE leads_followup ADD COLUMN IF NOT EXISTS notes_count INTEGER NOT NULL DEFAULT 0`;
+  await c`ALTER TABLE leads_followup ADD COLUMN IF NOT EXISTS last_note_at DATE`;
 
   // ---- Bulk ground-truth exports (rev 18) ----
   // Raw-ish landing tables for the two authoritative job exports. Kept beyond the

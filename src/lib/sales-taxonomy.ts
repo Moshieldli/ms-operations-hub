@@ -170,6 +170,9 @@ export interface ReturnRatePair {
 export interface Person {
   id: string;
   name: string;
+  /** First / last name, when known — drives duplicate-record name matching. */
+  firstName: string;
+  lastName: string;
   /** Lowercased Pocomos status. */
   status: string;
   active: boolean;
@@ -592,7 +595,8 @@ export async function getSalesTaxonomy(): Promise<SalesTaxonomy> {
 
   // ---- Non-active side (enriched tags from the customers table) ----
   const rows = (await sql`
-    SELECT pocomos_id, status, tags, contracts, last_service_date, full_name, email
+    SELECT pocomos_id, status, tags, contracts, last_service_date, full_name, email,
+           first_name, last_name
     FROM customers WHERE lower(status) <> 'active'
   `) as Array<{
     pocomos_id: string;
@@ -602,7 +606,16 @@ export async function getSalesTaxonomy(): Promise<SalesTaxonomy> {
     last_service_date: string | null;
     full_name: string | null;
     email: string | null;
+    first_name: string | null;
+    last_name: string | null;
   }>;
+
+  /** Best-effort first/last split when only a full name is available. */
+  const splitName = (full: string): { first: string; last: string } => {
+    const parts = full.trim().split(/\s+/);
+    if (parts.length < 2) return { first: full.trim(), last: "" };
+    return { first: parts.slice(0, -1).join(" "), last: parts[parts.length - 1] };
+  };
 
   /**
    * Every customer we know, merged: the live dataset carries name/status/email
@@ -614,9 +627,12 @@ export async function getSalesTaxonomy(): Promise<SalesTaxonomy> {
   for (const c of ds.customers) {
     const id = String(c.id);
     const status = c.status.toLowerCase();
+    const split = splitName(c.fullName);
     people.set(id, {
       id,
       name: c.fullName,
+      firstName: (c.firstName ?? split.first).trim(),
+      lastName: (c.lastName ?? split.last).trim(),
       status,
       active: status === "active",
       tags: c.tags ?? [],
@@ -629,14 +645,20 @@ export async function getSalesTaxonomy(): Promise<SalesTaxonomy> {
     const prev = people.get(id);
     if (prev) {
       // Non-actives come back slim from the live path (tags: []) — take the
-      // enriched tags/email instead of the empty ones.
+      // enriched tags/email/name parts instead of the empty ones.
       if (!prev.tags.length && tags.length) prev.tags = tags;
       if (!prev.email && r.email) prev.email = String(r.email).trim().toLowerCase();
+      if (!prev.firstName && r.first_name) prev.firstName = r.first_name.trim();
+      if (!prev.lastName && r.last_name) prev.lastName = r.last_name.trim();
     } else {
       const status = String(r.status || "").toLowerCase();
+      const full = r.full_name || id;
+      const split = splitName(full);
       people.set(id, {
         id,
-        name: r.full_name || id,
+        name: full,
+        firstName: (r.first_name ?? split.first).trim(),
+        lastName: (r.last_name ?? split.last).trim(),
         status,
         active: status === "active",
         tags,

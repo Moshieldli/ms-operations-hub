@@ -22,27 +22,27 @@ const BUCKETS: Array<{
   tone: "bad" | "warn" | "ok";
 }> = [
   {
-    key: "overdue",
-    label: "Overdue",
-    def: "Has an open follow-up task whose due date has passed.",
+    key: "never_reached",
+    label: "Never reached",
+    def: "No task ever AND no notes this year — for-sure missed. The worst bucket.",
     tone: "bad",
   },
   {
-    key: "no_task",
-    label: "No task",
-    def: "No follow-up task at all — active or archived. Nobody has ever set a next step.",
-    tone: "bad",
-  },
-  {
-    key: "no_open_task",
-    label: "No open task",
-    def: "Every task is completed and nothing new is scheduled — the lead is still open, but there's no next step.",
+    key: "loop_not_closed",
+    label: "Loop not closed",
+    def: "Talked to (notes and/or a past task) but no in-progress task tracking the next step. Review and create a closing task.",
     tone: "warn",
   },
   {
-    key: "on_track",
-    label: "On track",
-    def: "Open task due today or later.",
+    key: "working_overdue",
+    label: "Working — overdue",
+    def: "In-progress task, but its due date has passed. Being worked, just behind.",
+    tone: "warn",
+  },
+  {
+    key: "working_on_track",
+    label: "Working — on track",
+    def: "In-progress task, due today or later.",
     tone: "ok",
   },
 ];
@@ -51,7 +51,7 @@ export function FollowupView({ initial }: { initial: FollowupReport }) {
   const [report, setReport] = useState<FollowupReport>(initial);
   const [refreshing, setRefreshing] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  const [show, setShow] = useState<FollowupBucket[]>(["overdue", "no_task"]);
+  const [show, setShow] = useState<FollowupBucket[]>(["never_reached", "loop_not_closed"]);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -81,12 +81,16 @@ export function FollowupView({ initial }: { initial: FollowupReport }) {
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <CardTitle>Overdue follow-ups</CardTitle>
+              <CardTitle>Lead follow-ups</CardTitle>
               <CardDescription>
-                Open {report.year} leads and where their follow-up stands. A
-                lead&rsquo;s next step lives in its Pocomos <strong>task</strong>;
-                the team pushes the task&rsquo;s due date out after each touch, so
-                a due date in the past means the trail went cold.{" "}
+                Open {report.year} leads by where their follow-up stands.{" "}
+                <strong>Tasks and notes are separate</strong>: an in-progress
+                task means someone is actively working the lead (due date pushed
+                forward per touch); <strong>notes</strong> are the record of
+                contact. So the worst bucket is <strong>never reached</strong>
+                &nbsp;— no task ever and no notes at all — and a lead that was
+                talked to but has no active task is a <strong>loop not
+                closed</strong> (create a closing task).{" "}
                 {report.stale ? (
                   <span className="text-amber-600 dark:text-amber-400">
                     Cache is empty — hit Refresh now to build it.
@@ -109,10 +113,10 @@ export function FollowupView({ initial }: { initial: FollowupReport }) {
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {BUCKETS.map((b) => {
               const n =
-                b.key === "overdue" ? c.overdue
-                : b.key === "no_task" ? c.noTask
-                : b.key === "no_open_task" ? c.noOpenTask
-                : c.onTrack;
+                b.key === "never_reached" ? c.neverReached
+                : b.key === "loop_not_closed" ? c.loopNotClosed
+                : b.key === "working_overdue" ? c.workingOverdue
+                : c.workingOnTrack;
               const on = show.includes(b.key);
               return (
                 <button
@@ -147,8 +151,8 @@ export function FollowupView({ initial }: { initial: FollowupReport }) {
             {c.withPbActivity > 0 ? (
               <>
                 <strong className="font-medium">{fmt(c.withPbActivity)}</strong> of the
-                Overdue / No-task leads have PhoneBurner call activity — someone
-                dialled them even though the task went stale.
+                Never-reached / Loop-not-closed leads have PhoneBurner call
+                activity — someone dialled them even though no task tracks it.
               </>
             ) : null}
           </p>
@@ -169,8 +173,8 @@ export function FollowupView({ initial }: { initial: FollowupReport }) {
                     <th className="py-2 pr-3 font-medium">Lead</th>
                     <th className="py-2 pr-3 font-medium">Created</th>
                     <th className="py-2 pr-3 font-medium">Salesperson</th>
-                    <th className="py-2 pr-3 text-right font-medium">Touches</th>
-                    <th className="py-2 pr-3 font-medium">Last touch</th>
+                    <th className="py-2 pr-3 text-right font-medium">Notes</th>
+                    <th className="py-2 pr-3 font-medium">Last note</th>
                     <th className="py-2 pr-3 font-medium">Task due</th>
                     <th className="py-2 pr-3 text-right font-medium">Days overdue</th>
                     <th className="py-2 pr-3 font-medium">PB calls</th>
@@ -193,29 +197,29 @@ export function FollowupView({ initial }: { initial: FollowupReport }) {
 }
 
 function Row({ l }: { l: FollowupLead }) {
-  const bad = l.bucket === "overdue" || l.bucket === "no_task";
+  const bad = l.bucket === "never_reached";
   return (
     <tr className={cn("border-b align-top last:border-0", bad && "bg-red-50/40 dark:bg-red-950/10")}>
       <td className="py-2 pr-3">
         <div className="font-medium">{l.name}</div>
         <div className="text-[11px] tabular-nums text-muted-foreground">
           {l.leadId}
-          {l.bucket === "no_task" ? (
+          {l.bucket === "never_reached" ? (
             <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-700 dark:bg-red-950 dark:text-red-400">
-              never followed up
+              never reached
             </span>
           ) : null}
-          {l.bucket === "no_open_task" ? (
+          {l.bucket === "loop_not_closed" ? (
             <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-700 dark:bg-amber-950 dark:text-amber-400">
-              no next step
+              loop open
             </span>
           ) : null}
         </div>
       </td>
       <td className="py-2 pr-3 tabular-nums text-muted-foreground">{dayOf(l.createdDate)}</td>
       <td className="py-2 pr-3 text-muted-foreground">{l.salesperson || "—"}</td>
-      <td className="py-2 pr-3 text-right tabular-nums">{l.touches}</td>
-      <td className="py-2 pr-3 tabular-nums text-muted-foreground">{dayOf(l.lastTouchAt)}</td>
+      <td className="py-2 pr-3 text-right tabular-nums">{l.notesCount}</td>
+      <td className="py-2 pr-3 tabular-nums text-muted-foreground">{dayOf(l.lastNoteAt)}</td>
       <td className="py-2 pr-3 tabular-nums text-muted-foreground">{dayOf(l.taskDueAt)}</td>
       <td className="py-2 pr-3 text-right tabular-nums font-medium">
         {l.daysOverdue != null ? (

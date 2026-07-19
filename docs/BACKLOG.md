@@ -14,12 +14,9 @@
 - [ ] Marketing source breakdown: Long Island vs Westchester
 
 ## Needs a human decision
-- [ ] **`/leads/followup`: should "No open task" (185 leads) count as Overdue?** The spec asked for
-      Overdue / No task / On track, but 185 of the 288 open 2026 leads have a COMPLETED task and
-      nothing rescheduled — they fit none of the three, so a 4th bucket was added rather than lose
-      them. The team completes tasks instead of letting them lapse, so Overdue is nearly empty (1)
-      while 277/288 open leads have no next step. Decide whether "No open task" is a crack (fold
-      into Overdue / make it the headline) or expected (a parked lead). See REFERENCE §5.11.
+- [x] ~~`/leads/followup`: should "No open task" count as Overdue?~~ RESOLVED by UPDATE-RL-04
+      (rev 25) — the whole task-only model was replaced with the notes+tasks model
+      (never_reached / loop_not_closed / working_on_track / working_overdue). See §5.11.
 - [ ] "Real lead" definition for close rate — pending Rivka & Leon (drops into isRealLead() hook).
 - [~] Return-rate mid-season-cancel decision — RESOLVED by the 2026-07-07 ops override: metric is
       now completed-service-based ("served in Y, receiving in Y+1"), single rate per pair, no dual
@@ -78,6 +75,17 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **RL (Mrs. L) feedback pack — UPDATE-RL-01 / RL-03 / RL-04 shipped (rev 25, 2026-07-18)** —
+      **UPDATE-RL-01 (dup detection):** drop "…duplicate…"-named shells; a shared email now needs
+      NAME IDENTITY (same last name + fuzzy first) to be a dup, so father/daughter shared inboxes
+      aren't flagged. **Dup groups 83 → 59** (25 shell records / ~15 groups + 9 name-mismatch groups
+      removed). **UPDATE-RL-03 (needs manual check):** resolve add-on customers who render a
+      non-mosquito contract from the completed-jobs cache (`respray_jobs`) instead of flagging.
+      **needs_check 7 → 0** (Chana Lovi + Susan Badalbayev cleared without the Monday tag fix — 6
+      current, 1 overdue). **UPDATE-RL-04 (/leads/followup reclassification):** added a Lead Notes
+      scrape (`/lead/{id}/lead-information` `#notes-table`; the bulk `/all-notes-data` feed is
+      customer-only). New buckets: **never_reached 43 · loop_not_closed 234 · working_overdue 6 ·
+      working_on_track 7** (tasks & notes treated separately per ops). See §5.5 / §5.10 / §5.11.
 - [x] **Respray pack: RESPRAY-RULE-CHANGE + RESPRAY-WEEKLY + RESPRAY-CHAIN (rev 24, 2026-07-17)** —
       **RESPRAY-RULE-CHANGE:** respray = ANY re-service this year (10-day window dropped); attributed
       to the most recent prior mosquito job's tech, INCLUDING prior re-services (chain rule).

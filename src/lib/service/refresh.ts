@@ -267,6 +267,31 @@ export async function refreshMosquitoStatus(
   const bulk = await fetchAllCustomersLastService();
   const balances = await fetchOpenBalances(now);
 
+  // ---- Completed-jobs (respray_jobs) — the AUTHORITATIVE, contract-specific
+  //      mosquito service source (RL feedback rev 25). Refreshed here at the TOP
+  //      (one ~3s POST) so it's fresh for BOTH the read-time sprayed-today rescue
+  //      AND the needs-check resolution below. respray_jobs is mosquito-only by
+  //      construction, so a customer's latest row IS their last mosquito service
+  //      regardless of which contract their profile renders by default. ----
+  let completedJobsRefreshed = false;
+  try {
+    await refreshResprays();
+    completedJobsRefreshed = true;
+  } catch (e) {
+    console.error(
+      JSON.stringify({ event: "mosquito.status.completedJobs.error", error: (e as Error).message })
+    );
+  }
+  const mosquitoJobRows = (await sql`
+    SELECT customer_id, to_char(MAX(completed_date), 'YYYY-MM-DD') AS last_date, COUNT(*)::int AS n
+    FROM respray_jobs GROUP BY customer_id
+  `) as Array<{ customer_id: string; last_date: string | null; n: number }>;
+  /** customer id → most recent completed mosquito service date (ISO) this year. */
+  const lastMosquitoService = new Map<string, string>();
+  for (const r of mosquitoJobRows) {
+    if (r.last_date) lastMosquitoService.set(String(r.customer_id), r.last_date);
+  }
+
   // Sign-up now comes from the ELIGIBLE mosquito contract's top-level
   // `date_start` (carried on EligibleCustomer.signUpDate) — the active contract
   // that passed eligibility — NOT grid col 7 (the customer's stale ORIGINAL
@@ -367,7 +392,42 @@ export async function refreshMosquitoStatus(
     const nextServiceDate = nextServiceFor(e.id);
 
     if (!renderedTableIsMosquito(parsed.tableContractLabel, parsed.selectedContractLabel)) {
-      // Selected contract isn't mosquito — DO NOT switch. Flag for manual check.
+      // Selected contract isn't mosquito — DO NOT switch. Before flagging for a
+      // manual check, RESOLVE via the completed-jobs report (RL feedback rev 25):
+      // this customer IS eligible, so a mosquito contract is identified; the
+      // completed-jobs cache carries their mosquito service dates independent of
+      // which contract renders. Only genuinely-unresolvable customers (an
+      // eligible mosquito contract but NO completed mosquito service on record)
+      // stay in "needs check".
+      const lastMosq = lastMosquitoService.get(e.id);
+      if (lastMosq) {
+        const st = statusFromLastServiceDate(parseDbDate(lastMosq), now);
+        if (st.status === "overdue") {
+          overdue++;
+          if (st.daysSince == null) noServiceYet++;
+        } else {
+          current++;
+        }
+        await upsert({
+          id: e.id,
+          fullName: e.fullName,
+          mosquitoContractType: e.mosquitoContractType,
+          // Keep the non-mosquito default label for context, but the DATE is
+          // the real mosquito service from the completed-jobs report.
+          selectedContractLabel: parsed.tableContractLabel ?? parsed.selectedContractLabel,
+          lastRegularSpray: st.lastRegularSpray,
+          daysSince: st.daysSince,
+          status: st.status,
+          reason: "mosquito_from_completed_jobs",
+          signUpDate,
+          openBalance: 0,
+          nextServiceDate,
+          isWeekly: e.isWeekly,
+        });
+        scraped++;
+        return;
+      }
+      // No completed mosquito service on record → genuinely needs a look.
       needsCheck++;
       await upsert({
         id: e.id,
@@ -377,7 +437,7 @@ export async function refreshMosquitoStatus(
         lastRegularSpray: null,
         daysSince: null,
         status: "needs_check",
-        reason: "mosquito_not_selected",
+        reason: "no_mosquito_service_on_record",
         signUpDate,
         openBalance: 0,
         nextServiceDate,
@@ -450,23 +510,9 @@ export async function refreshMosquitoStatus(
   const routeDurationMs = Date.now() - routeStart;
   const routesPending = Math.max(0, routeCandidates.length - routesScraped);
 
-  // ---- Completed-jobs phase: refresh the respray_jobs cache (one cheap POST to
-  //      the completed-jobs report, ~3s) so the read side's SPRAYED-TODAY rescue
-  //      reflects TODAY's completions. Without this, a "Refresh now" on
-  //      /service/overdue wouldn't pick up a customer sprayed an hour ago, and
-  //      they'd stay wrongly overdue. Guarded: a completed-jobs hiccup must not
-  //      fail the whole overdue refresh (the sprayed-today rescue just uses
-  //      whatever respray_jobs already holds). Shares the table with
-  //      /service/resprays — both refreshes are idempotent truncate+reloads. ----
-  let completedJobsRefreshed = false;
-  try {
-    await refreshResprays();
-    completedJobsRefreshed = true;
-  } catch (e) {
-    console.error(
-      JSON.stringify({ event: "mosquito.status.completedJobs.error", error: (e as Error).message })
-    );
-  }
+  // (Completed-jobs / respray_jobs is refreshed at the TOP of this function now,
+  //  so it's available for the needs-check resolution AND the read-time
+  //  sprayed-today rescue — no second refresh needed here.)
 
   // ---- ASAP phase: for CURRENTLY-OVERDUE rows only (keeps it cheap — ~overdue
   //      count, not the whole eligible set), scrape /scheduled-services and flag
