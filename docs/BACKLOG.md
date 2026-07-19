@@ -156,6 +156,14 @@
       Playwright, not curl+regex. See §11.2.
 
 ## Monitor (not blocking)
+- [ ] **`/service/resprays` HTML served a stale snapshot after the rev-37 deploy.** The page is
+      `force-dynamic`, yet its rendered HTML showed cadence 2026 = **31.8% (1,330/4,182 gaps)** while
+      **`GET /api/service/resprays` on the SAME deployment returned 31.1% (1,331/4,282)** — which
+      matches a local computation against the same Neon table exactly. Both figures are internally
+      consistent (1330/4182 = 31.80%, 1331/4282 = 31.09%), so it is a divergent/cached SSR snapshot,
+      not a logic bug; a cache-busting query param did not shift it. 2024/2025 (frozen) matched
+      exactly in both. Re-check after the next deploy; if it persists, suspect edge caching of the
+      `force-dynamic` HTML and compare `cache-control` on the page vs the API response.
 - [~] **Vercel auto-deploy** — VERIFIED WORKING rev 27 (a push produced a git-triggered
       `…-git-main-…` deployment, no CLI). Has flaked before, so keep confirming a fresh deployment
       after each push; if it starts missing again, the dashboard levers are in REFERENCE §11.2.

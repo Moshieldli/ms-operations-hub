@@ -998,6 +998,11 @@ between a customer's consecutive mosquito services, what share ran **strictly lo
 | 2025 | 2,643 / 9,514 | **27.8%** | Pocomos completed-jobs export |
 | **2026 (live)** | 1,331 / 4,282 | **31.1%** | `respray_jobs` — moves as the season runs |
 
+(2026 figures as of 2026-07-19 and **live by design** — they move as the season fills in. Verified
+against `GET /api/service/resprays` on production, which agreed with a local computation over the
+same Neon table. ⚠️ The page HTML briefly served a divergent snapshot right after the rev-37 deploy
+— see BACKLOG "Monitor".)
+
 **Three seasons, roughly 3.4×.** The card tints the live season amber when it exceeds the oldest
 complete season and shows the delta (**+22.0pp vs 2024**).
 
