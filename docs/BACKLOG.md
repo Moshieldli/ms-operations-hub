@@ -75,6 +75,11 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **TV nav dropdown (rev 32, 2026-07-19)** — new **TV** tab in the top nav → Sales board /
+      Tech board / Tech board — narrow. Items open in a **new tab** (`/tv/*` renders without the nav,
+      so an in-tab link strands the user); new opt-in `NavLink.matchPrefix` lights the tab across
+      `/tv/*` without making Sales double-highlight with Finance. `scripts/verify-nav-tv.ts`.
+      See §5.14.
 - [x] **TV-TECHS-TALL 2×3 award wall — rotation REMOVED (rev 31, 2026-07-19)** — all six awards are
       now visible at every size; the 15s 3-up rotation is gone. Root cause of rev 30's cramped tiles
       was the **one-column grid wasting the slot's width**, not the tile count: the same ~470×430

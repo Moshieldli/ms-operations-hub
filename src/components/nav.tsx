@@ -8,8 +8,15 @@ import { cn } from "@/lib/utils";
 interface NavLink {
   href: string;
   label: string;
+  /**
+   * Prefix that lights the tab, when the children don't all live under `href`.
+   * Without it a tab highlights only on its own `href` subtree — which is right
+   * for Sales (whose `/finance` child has its OWN top-level tab and must not
+   * light two tabs at once) but wrong for TV, whose pages span `/tv/*`.
+   */
+  matchPrefix?: string;
   /** When present the tab becomes a dropdown; `href` is still the tab's landing page. */
-  children?: Array<{ href: string; label: string }>;
+  children?: Array<{ href: string; label: string; newTab?: boolean }>;
 }
 
 const links: NavLink[] = [
@@ -41,6 +48,16 @@ const links: NavLink[] = [
   },
   { href: "/finance", label: "Finance" },
   { href: "/texting", label: "Texting" },
+  {
+    href: "/tv/sales",
+    label: "TV",
+    matchPrefix: "/tv",
+    children: [
+      { href: "/tv/sales", label: "Sales board", newTab: true },
+      { href: "/tv/techs", label: "Tech board", newTab: true },
+      { href: "/tv/techs/tall", label: "Tech board — narrow", newTab: true },
+    ],
+  },
 ];
 
 /** A tab is active on its own page AND on any page beneath it. */
@@ -87,7 +104,7 @@ const activeClass = (active: boolean) =>
 function NavDropdown({ link, pathname }: { link: NavLink; pathname: string }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const active = isActive(pathname, link.href);
+  const active = isActive(pathname, link.matchPrefix ?? link.href);
 
   // Close when the route changes (the menu would otherwise stay open on tap-through).
   useEffect(() => {
@@ -146,8 +163,11 @@ function NavDropdown({ link, pathname }: { link: NavLink; pathname: string }) {
               href={c.href}
               role="menuitem"
               onClick={() => setOpen(false)}
+              // TV boards render WITHOUT the nav (see Shell), so opening one in
+              // this tab strands the user on a kiosk page with no way back.
+              {...(c.newTab ? { target: "_blank", rel: "noopener noreferrer" } : {})}
               className={cn(
-                "block rounded-sm px-3 py-2 text-sm transition-colors",
+                "block rounded-sm px-3 py-2 text-sm whitespace-nowrap transition-colors",
                 pathname === c.href
                   ? "bg-muted font-medium text-foreground"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground"
