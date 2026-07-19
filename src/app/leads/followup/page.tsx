@@ -3,6 +3,11 @@ import { getFollowupReport, type FollowupReport } from "@/lib/leads/followup";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export const dynamic = "force-dynamic";
+// Defeat RSC Data-Cache memoization of the Neon HTTP read — without this the
+// page can pin an early (empty) result of `SELECT * FROM leads_followup` and
+// keep serving 0-count buckets even though the DB and the API return live data.
+export const fetchCache = "force-no-store";
+export const revalidate = 0;
 export const maxDuration = 60;
 
 /**
