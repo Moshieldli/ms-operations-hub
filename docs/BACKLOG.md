@@ -75,6 +75,11 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **TV-TECHS-TALL award TILES + adaptive rotation (rev 30, 2026-07-19)** — awards restored to
+      tiles matching the landscape board (label + emoji + big first name + stat); 1 column at Yodeck
+      widths, 2 only ≥900px. Adaptive: all six when rows clear 76px, else rotate 3 at a time with a
+      15s cross-fade (the real ~470×430 slot). Tile type sized from the measured row height, so tiles
+      can't clip. Verified 470×430 / 550×700 / 600×900 / 1200×600. See §5.16.
 - [x] **TV-TECHS-TALL — `/tv/techs/tall` narrow board + weather (rev 29, 2026-07-19)** — right-column
       Yodeck widget: `https://ms-operations-hub.vercel.app/tv/techs/tall`. Weather strip (Open-Meteo,
       free/no key, display-only, 30-min module memo, fail-soft) + header + six one-line award rows +
