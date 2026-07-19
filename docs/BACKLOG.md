@@ -83,6 +83,10 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **TV ticker reworded to "Team best" (rev 40, 2026-07-19)** — it could name a different tech
+      than the Clean Streak tile (109 Daniel vs 108 Jason) because the ticker is the season maximum
+      and the tile is an award seat. Fixed the label, not the number (echoing the tile would have
+      printed a figure lower than the real best); now computed over all techs. See §5.12.
 - [x] **Respray rule corrected + pending-re-service maturity (rev 39, 2026-07-19)** — the ~9-day
       window is a **booking** rule, not a completion rule (rev 38 had it wrong and dropped 39 jobs):
       **resprays 60 → 99, team rate 1.11% → 1.84%**, long gaps now just carry a "late visit" marker.

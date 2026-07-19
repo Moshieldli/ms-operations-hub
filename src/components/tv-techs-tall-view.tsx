@@ -210,8 +210,12 @@ export function TvTechsTallView({
           <span className="font-bold text-emerald-300">{fmt(board.ytd.sprays)}</span> sprays ·{" "}
           <span className="font-bold text-emerald-300">{board.ytd.rate.toFixed(1)}%</span> team rate ·
         </span>
+        {/* Labelled "Team best" — the season MAXIMUM across everyone. The Clean
+            Streak tile above is an award seat and can name a different tech;
+            unlabelled, the two lines read as a contradiction. */}
         <span className="inline-flex items-center gap-[0.3em]">
           <AwardIcon id="clean-streak" size="1.25em" />
+          Team best —{" "}
           <span className="font-bold text-slate-200">{firstName(board.ytd.longestCleanStreakTech)}</span>{" "}
           {fmt(board.ytd.longestCleanStreak)} in a row
         </span>

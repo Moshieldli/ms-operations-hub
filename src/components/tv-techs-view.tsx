@@ -131,8 +131,12 @@ export function TvTechsView({ board }: { board: TechBoard }) {
                   ("Daniel Castelo , 138 in a row"). */}
               <div className="mt-1 flex items-center gap-2 text-xl text-slate-400">
                 <AwardIcon id="clean-streak" size="1.6rem" />
+                {/* "Team best", not "Longest streak": this is the season
+                    MAXIMUM across everyone, while the Clean Streak tile is an
+                    award seat that can go to a credible runner-up. Different
+                    labels stop the two lines reading as a contradiction. */}
                 <span>
-                  Longest streak —{" "}
+                  Team best —{" "}
                   <span className="font-bold text-slate-200">{board.ytd.longestCleanStreakTech}</span>
                   , {fmt(board.ytd.longestCleanStreak)} in a row
                 </span>

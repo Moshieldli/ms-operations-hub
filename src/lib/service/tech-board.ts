@@ -595,8 +595,21 @@ export async function getTechBoard(): Promise<TechBoard> {
   // YTD ticker — WHOLE TEAM, including Cesar and the Z-* placeholders.
   const ytdApps = jobs.filter(isApplication);
   const ytdResprays = attribute(jobs).filter((a) => a.kind === "counted" && a.tech).length;
-  // Streak callout still skips excluded techs — it's a recognition line.
-  const best = [...awardStats].sort((a, b) => b.cleanStreak - a.cleanStreak)[0];
+  /**
+   * TEAM-BEST streak (rev 40) — the true maximum across EVERY tech, Cesar and
+   * the placeholders included, because this is a numeric season stat and not an
+   * award (exclusion is awards-only).
+   *
+   * ⚠️ It deliberately may NOT equal the Clean Streak tile's winner. The award
+   * matching can seat a credible non-top candidate so that every tech leaves
+   * with something, so the tile showed 108 while the real best was 109 — two
+   * lines on one screen that looked like a contradiction. The fix is the LABEL,
+   * not the number: the ticker says "Team best" (a leaderboard fact) and the
+   * tile carries an award name. Echoing the tile instead would have printed
+   * "longest streak 108" while a 109 existed — trading an ambiguity for a
+   * falsehood.
+   */
+  const best = [...stats].sort((a, b) => b.cleanStreak - a.cleanStreak)[0];
 
   return {
     weekStart: board,
