@@ -17,51 +17,57 @@ function prettyDate(iso: string): string {
   });
 }
 
-/** Tiles are narrow, so only the first name fits — and it reads friendlier. */
+/** Tiles are compact, so only the first name fits — and it reads friendlier. */
 const firstName = (full: string) => full.trim().split(/\s+/)[0];
 
-/**
- * Smallest tile height that still reads across a room: label + emoji row, the
- * name, and the stat line. Below this the tile is present but not legible, which
- * is worse than showing fewer tiles — hence the rotation fallback.
- */
-const MIN_TILE_PX = 76;
-/** Two columns only when a column would still be comfortably wide. */
-const TWO_COL_MIN_WIDTH = 900;
-/** Tiles per page when rotating. */
-const PAGE_SIZE = 3;
-const ROTATE_MS = 15_000;
-const FADE_MS = 600;
 /** Grid gap between tiles, in px — must match the `gap-[6px]` on the grid. */
 const GAP_PX = 6;
+/** Below this width a tall region stacks in one column instead of two. */
+const NARROW_MAX = 700;
+/** At/above this width there's room for three across. */
+const WIDE_MIN = 1000;
 
 /**
- * One award tile — the landscape board's visual language, compacted.
+ * Column count for the awards wall. Explicit rules beat "optimise the tile
+ * aspect ratio", which quietly disagreed with what each real slot needs:
+ *  - genuinely TALL and NARROW (e.g. 600×900) → one stacked column.
+ *  - wide (≥1000px, e.g. 1200×600) → three across.
+ *  - everything else, including the real short Yodeck slot (~470×430) and
+ *    550×700 → TWO columns, so all six tiles land as a 2×3 wall.
+ */
+function columnsFor(w: number, h: number): number {
+  if (h > w && w < NARROW_MAX) return 1;
+  if (w >= WIDE_MIN) return 3;
+  return 2;
+}
+
+/**
+ * One award tile — the landscape board's visual language, compacted and centred
+ * for the wall.
  *
- * Type is sized in `em` off a base font-size the parent derives from the
- * MEASURED row height, not from viewport units. Viewport-relative type can't
- * know how tall its row actually is, so at 550×700 it overflowed the tile and
- * clipped the name and stat mid-glyph. Driving everything from the row height
- * makes the tile fit by construction at any size; `overflow-hidden` is the
- * belt-and-braces guarantee that it can never spill even so.
+ * Type is sized in `em` off a base the parent derives from the MEASURED tile
+ * box, not from viewport units. Viewport-relative type can't know how big its
+ * cell is: it overflowed and clipped names mid-glyph at 550×700 while the
+ * document itself fit perfectly. `overflow-hidden` is the belt-and-braces
+ * guarantee that a tile can never spill even so.
  */
 function AwardTile({ w, basePx }: { w: AwardWinner; basePx: number }) {
   return (
     <div
       data-award-tile={w.award.id}
-      className="flex min-h-0 flex-col justify-center overflow-hidden rounded-[0.5em] border border-slate-700/70 bg-slate-900/70 px-[0.7em] py-[0.35em]"
+      className="flex min-h-0 min-w-0 flex-col items-center justify-center overflow-hidden rounded-[0.5em] border border-slate-700/70 bg-slate-900/70 px-[0.5em] py-[0.3em] text-center"
       style={{ fontSize: `${basePx}px` }}
     >
-      <div className="flex items-center gap-[0.4em]">
-        <span className="shrink-0 text-[1.1em] leading-none">{w.award.emoji}</span>
-        <span className="min-w-0 truncate text-[0.62em] font-bold uppercase tracking-[0.16em] text-emerald-400">
+      <div className="flex max-w-full items-center justify-center gap-[0.35em]">
+        <span className="shrink-0 text-[1.15em] leading-none">{w.award.emoji}</span>
+        <span className="min-w-0 truncate text-[0.6em] font-bold uppercase tracking-[0.14em] text-emerald-400">
           {w.award.label}
         </span>
       </div>
-      <div className="mt-[0.12em] truncate text-[1.3em] font-black leading-tight">
+      <div className="mt-[0.1em] max-w-full truncate text-[1.35em] font-black leading-tight">
         {firstName(w.technician)}
       </div>
-      <div className="truncate text-[0.78em] font-bold leading-tight text-emerald-300">
+      <div className="max-w-full truncate text-[0.72em] font-bold leading-tight text-emerald-300">
         {w.stat}
       </div>
     </div>
@@ -70,28 +76,23 @@ function AwardTile({ w, basePx }: { w: AwardWinner; basePx: number }) {
 
 /**
  * The narrow companion to `/tv/techs`, for the right-hand column of the Yodeck
- * layout. Same board data and rules, plus a weather strip that replaces Yodeck's
- * separate weather app.
+ * layout: a weather strip (replacing Yodeck's separate weather app), the week's
+ * award wall, and a YTD ticker.
  *
- * RESPONSIVE BY DESIGN: the Yodeck webpage widget IS the viewport, so sizes are
- * `clamp(min, Nvmin, max)` rather than fixed px or Tailwind steps — zoom just
- * changes the viewport and the type follows, with no breakpoints. `vmin` (not
- * `vw`) because this screen must also survive a WIDE short slot (1200×600),
+ * ALL SIX AWARDS ARE ALWAYS VISIBLE — there is no rotation. The grid reshapes
+ * instead (see `columnsFor`) and the type scales off the measured tile box, so
+ * even the short ~470×430 slot shows a full 2×3 wall rather than a slideshow.
+ *
+ * RESPONSIVE BY DESIGN: the Yodeck webpage widget IS the viewport, so chrome
+ * sizes are `clamp(min, Nvmin, max)` rather than fixed px or Tailwind steps —
+ * zoom just changes the viewport and the type follows, with no breakpoints.
+ * `vmin` (not `vw`) because this must also survive a WIDE SHORT slot (1200×600),
  * where `vw` would blow the type up past the available height.
  *
- * ADAPTIVE AWARDS — the interesting part. The real Yodeck slot is SHORT
- * (~470×430): after the weather strip and ticker, six tiles get ~44px each,
- * which is present but unreadable across a room. Rather than pick one mode for
- * every size, the awards region measures itself and chooses:
- *   - fits (≥76px per tile row) → show all six, static.
- *   - doesn't fit → rotate 3 at a time, cross-fading every 15s, forever.
- * So 550×700, 600×900 and the wide 1200×600 (two columns) show all six at once,
- * and only the genuinely short slot rotates. Measuring the container is safe
- * from feedback loops: the awards region is the only `flex-1` element, so its
- * height is set by the shrink-0 chrome around it, never by its own content.
- *
  * PRIORITY WHEN SHORT: weather, header and ticker are `shrink-0` and always
- * render; the awards block absorbs whatever height is left.
+ * render; the awards wall is the only `flex-1` region, so it absorbs whatever
+ * height is left. Measuring it is feedback-loop-safe for exactly that reason —
+ * its height comes from the chrome around it, never from its own content.
  */
 export function TvTechsTallView({
   board,
@@ -103,33 +104,26 @@ export function TvTechsTallView({
   useAutoReload(TV_REFRESH_MS);
 
   const areaRef = useRef<HTMLDivElement>(null);
-  const [cols, setCols] = useState(1);
-  const [rotate, setRotate] = useState(false);
+  const [cols, setCols] = useState(2);
   const [basePx, setBasePx] = useState(16);
-  const [page, setPage] = useState(0);
-  const [visible, setVisible] = useState(true);
 
   const winners = board.winners;
+  const count = winners.length;
 
-  // Measure the awards region: decide static-vs-rotating, then derive the tile
-  // type scale from the row height that mode actually produces.
   useEffect(() => {
     const el = areaRef.current;
-    if (!el) return;
+    if (!el || count === 0) return;
     const measure = () => {
+      const w = el.clientWidth;
       const h = el.clientHeight;
-      const c = window.innerWidth >= TWO_COL_MIN_WIDTH ? 2 : 1;
-      const allRows = Math.ceil(winners.length / c) || 1;
-      const willRotate = h / allRows < MIN_TILE_PX;
-      // Rows actually rendered once the mode is chosen.
-      const rows = willRotate ? Math.ceil(Math.min(PAGE_SIZE, winners.length) / c) || 1 : allRows;
-      const gaps = GAP_PX * (rows - 1);
-      const rowPx = (h - gaps) / rows;
+      const c = columnsFor(w, h);
+      const rows = Math.ceil(count / c) || 1;
+      const tileW = (w - GAP_PX * (c - 1)) / c;
+      const tileH = (h - GAP_PX * (rows - 1)) / rows;
       setCols(c);
-      setRotate(willRotate);
-      // A tile's content is ~4.1em tall, so ~0.20 of the row keeps it inside
-      // with margin to spare. Clamped so it stays legible but never cartoonish.
-      setBasePx(Math.max(9, Math.min(26, rowPx * 0.2)));
+      // Height sets the scale (a tile's content is ~4.3em tall); width caps it so
+      // a long stat like "75 sprays, 0 resprays" isn't truncated on a squat tile.
+      setBasePx(Math.max(8, Math.min(34, Math.min(tileH * 0.2, tileW * 0.125))));
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -139,31 +133,9 @@ export function TvTechsTallView({
       ro.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [winners.length]);
+  }, [count]);
 
-  const pages = Math.ceil(winners.length / PAGE_SIZE);
-
-  // Cross-fade to the next page. Only runs while rotating.
-  useEffect(() => {
-    if (!rotate || pages < 2) return;
-    const t = setInterval(() => {
-      setVisible(false);
-      setTimeout(() => {
-        setPage((p) => (p + 1) % pages);
-        setVisible(true);
-      }, FADE_MS);
-    }, ROTATE_MS);
-    return () => clearInterval(t);
-  }, [rotate, pages]);
-
-  // Reset to the first page whenever the mode flips, so a resize never leaves
-  // the screen parked on page 2 of a now-static grid.
-  useEffect(() => {
-    setPage(0);
-    setVisible(true);
-  }, [rotate]);
-
-  const shown = rotate ? winners.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE) : winners;
+  const rows = Math.ceil(count / cols) || 1;
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-slate-950 px-[2.4vmin] py-[1.6vmin] text-slate-50">
@@ -199,23 +171,21 @@ export function TvTechsTallView({
         </div>
       </div>
 
-      {/* 3. Awards — the only flexible region, so it absorbs a short container. */}
-      {board.stale || winners.length === 0 ? (
+      {/* 3. The award wall — the only flexible region, filling edge to edge. */}
+      {board.stale || count === 0 ? (
         <div className="flex flex-1 items-center justify-center text-[clamp(12px,3vmin,20px)] text-slate-500">
           Standing by for this week&rsquo;s numbers…
         </div>
       ) : (
         <div ref={areaRef} className="mt-[1.2vmin] min-h-0 flex-1">
           <div
-            className={`grid h-full gap-[6px] transition-opacity duration-500 ${
-              visible ? "opacity-100" : "opacity-0"
-            }`}
+            className="grid h-full w-full gap-[6px]"
             style={{
               gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-              gridTemplateRows: `repeat(${Math.ceil(shown.length / cols)}, minmax(0, 1fr))`,
+              gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
             }}
           >
-            {shown.map((w) => (
+            {winners.map((w) => (
               <AwardTile key={w.award.id} w={w} basePx={basePx} />
             ))}
           </div>
@@ -223,7 +193,7 @@ export function TvTechsTallView({
       )}
 
       {/* 4. YTD ticker */}
-      <div className="mt-[1vmin] shrink-0 border-t border-slate-800 pt-[1vmin] text-[clamp(9px,2.4vmin,17px)] text-slate-400">
+      <div className="mt-[1vmin] shrink-0 border-t border-slate-800 pt-[1vmin] text-center text-[clamp(9px,2.4vmin,17px)] text-slate-400">
         <span className="font-bold text-emerald-300">{fmt(board.ytd.sprays)}</span> sprays ·{" "}
         <span className="font-bold text-emerald-300">{board.ytd.rate.toFixed(1)}%</span> team rate ·
         🎯 <span className="font-bold text-slate-200">{firstName(board.ytd.longestCleanStreakTech)}</span>{" "}

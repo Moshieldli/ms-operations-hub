@@ -75,6 +75,14 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **TV-TECHS-TALL 2×3 award wall — rotation REMOVED (rev 31, 2026-07-19)** — all six awards are
+      now visible at every size; the 15s 3-up rotation is gone. Root cause of rev 30's cramped tiles
+      was the **one-column grid wasting the slot's width**, not the tile count: the same ~470×430
+      slot now shows a **2×3 wall at 222×89px per tile** (vs ~44px rows). `columnsFor(w,h)` —
+      tall-and-narrow → 1 col, ≥1000px wide → 3 col, everything else → 2 col. Tile type scales off
+      the measured tile box (`min(tileH×0.20, tileW×0.125)`), width capping the scale so long stats
+      don't truncate. Verified 470×430 (2×3) / 550×700 (2×3) / 600×900 (1×6) / 1200×600 (3×2),
+      0 clipped. See §5.16.
 - [x] **TV-TECHS-TALL award TILES + adaptive rotation (rev 30, 2026-07-19)** — awards restored to
       tiles matching the landscape board (label + emoji + big first name + stat); 1 column at Yodeck
       widths, 2 only ≥900px. Adaptive: all six when rows clear 76px, else rotate 3 at a time with a

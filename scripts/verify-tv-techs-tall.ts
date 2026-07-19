@@ -14,11 +14,12 @@ import { withBrowser } from "./lib/livecheck";
 const BASE = process.argv[2] || "https://ms-operations-hub.vercel.app";
 const URL = `${BASE}/tv/techs/tall`;
 
+/** All six awards must be visible at EVERY size — there is no rotation mode. */
 const SIZES = [
-  { w: 470, h: 430, tag: "slot", expectAllSix: false },
-  { w: 550, h: 700, tag: "mid", expectAllSix: true },
-  { w: 600, h: 900, tag: "max", expectAllSix: true },
-  { w: 1200, h: 600, tag: "wide", expectAllSix: true },
+  { w: 470, h: 430, tag: "slot", cols: 2 },
+  { w: 550, h: 700, tag: "mid", cols: 2 },
+  { w: 600, h: 900, tag: "max", cols: 1 },
+  { w: 1200, h: 600, tag: "wide", cols: 3 },
 ];
 
 const LABELS = [
@@ -55,23 +56,32 @@ const LABELS = [
       const shownLabels = LABELS.filter((l) => has(l));
       if (shownLabels.length === 0) fails.push(`[${s.tag}] no award labels rendered`);
 
-      if (s.expectAllSix) {
-        for (const l of LABELS) if (!has(l)) fails.push(`[${s.tag}] MISSING label: ${l}`);
-      } else {
-        // Short slot: expect the rotation fallback — a subset now, all six over time.
-        if (shownLabels.length > 3) {
-          fails.push(`[${s.tag}] expected rotation (<=3 tiles), saw ${shownLabels.length}`);
+      for (const l of LABELS) if (!has(l)) fails.push(`[${s.tag}] MISSING label: ${l}`);
+
+      // The grid must reshape to the expected column count for this slot.
+      const grid = await page.evaluate(() => {
+        const tile = document.querySelector("[data-award-tile]");
+        if (!tile) return null;
+        const g = tile.parentElement!;
+        const tops = [...g.children].map((c) => Math.round(c.getBoundingClientRect().top));
+        const firstTop = tops[0];
+        return {
+          cols: tops.filter((t) => t === firstTop).length,
+          rows: new Set(tops).size,
+          box: (() => {
+            const r = tile.getBoundingClientRect();
+            return { w: Math.round(r.width), h: Math.round(r.height) };
+          })(),
+        };
+      });
+      if (!grid) fails.push(`[${s.tag}] no grid found`);
+      else {
+        if (grid.cols !== s.cols) {
+          fails.push(`[${s.tag}] expected ${s.cols} columns, got ${grid.cols}`);
         }
-        const seen = new Set(shownLabels);
-        // Watch long enough for a full cycle (15s rotate + 0.6s fade).
-        for (let i = 0; i < 20 && seen.size < LABELS.length; i++) {
-          await page.waitForTimeout(2000);
-          const b = await read();
-          for (const l of LABELS) if (b.toLowerCase().includes(l.toLowerCase())) seen.add(l);
-        }
-        const missed = LABELS.filter((l) => !seen.has(l));
-        if (missed.length) fails.push(`[${s.tag}] rotation never showed: ${missed.join(", ")}`);
-        else console.log(`[${s.tag}] rotation cycled through all six labels ✓`);
+        console.log(
+          `[${s.tag}] grid ${grid.cols}x${grid.rows}, tile ${grid.box.w}x${grid.box.h}`
+        );
       }
 
       // Product rules.
