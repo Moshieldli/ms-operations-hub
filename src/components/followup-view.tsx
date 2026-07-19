@@ -4,8 +4,16 @@ import { useCallback, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshedAt } from "@/components/refreshed-at";
+import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import type { FollowupBucket, FollowupLead, FollowupReport } from "@/lib/leads/followup";
 import { cn } from "@/lib/utils";
+
+const toneClass = (tone: "bad" | "warn" | "ok") =>
+  tone === "bad"
+    ? "text-red-600 dark:text-red-400"
+    : tone === "warn"
+      ? "text-amber-600 dark:text-amber-400"
+      : "";
 
 const POCOMOS_BASE = "https://mypocomos.net";
 const fmt = (n: number) => n.toLocaleString("en-US");
@@ -30,8 +38,14 @@ const BUCKETS: Array<{
   {
     key: "loop_not_closed",
     label: "Loop not closed",
-    def: "Talked to (notes and/or a past task) but no in-progress task tracking the next step. Review and create a closing task.",
+    def: "Reached (notes/activity) but no task ever completed and none in progress. Review and create a closing task.",
     tone: "warn",
+  },
+  {
+    key: "closed_out",
+    label: "Closed out",
+    def: "A task was completed and none is in progress — done reaching out; the closing description is the outcome.",
+    tone: "ok",
   },
   {
     key: "working_overdue",
@@ -51,7 +65,6 @@ export function FollowupView({ initial }: { initial: FollowupReport }) {
   const [report, setReport] = useState<FollowupReport>(initial);
   const [refreshing, setRefreshing] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  const [show, setShow] = useState<FollowupBucket[]>(["never_reached", "loop_not_closed"]);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -71,9 +84,7 @@ export function FollowupView({ initial }: { initial: FollowupReport }) {
   }, []);
 
   const c = report.counts;
-  const rows = report.leads.filter((l) => show.includes(l.bucket));
-  const toggle = (k: FollowupBucket) =>
-    setShow((s) => (s.includes(k) ? s.filter((x) => x !== k) : [...s, k]));
+  const bucketRows = (k: FollowupBucket) => report.leads.filter((l) => l.bucket === k);
 
   return (
     <div className="space-y-4">
@@ -85,12 +96,10 @@ export function FollowupView({ initial }: { initial: FollowupReport }) {
               <CardDescription>
                 Open {report.year} leads by where their follow-up stands.{" "}
                 <strong>Tasks and notes are separate</strong>: an in-progress
-                task means someone is actively working the lead (due date pushed
-                forward per touch); <strong>notes</strong> are the record of
-                contact. So the worst bucket is <strong>never reached</strong>
-                &nbsp;— no task ever and no notes at all — and a lead that was
-                talked to but has no active task is a <strong>loop not
-                closed</strong> (create a closing task).{" "}
+                task means someone is actively working the lead; a{" "}
+                <strong>completed</strong> task = done reaching out (its closing
+                description is the outcome); <strong>notes</strong> are the record
+                of contact. Click a category to open its list.{" "}
                 {report.stale ? (
                   <span className="text-amber-600 dark:text-amber-400">
                     Cache is empty — hit Refresh now to build it.
@@ -109,45 +118,8 @@ export function FollowupView({ initial }: { initial: FollowupReport }) {
           {note ? <p className="mt-2 text-sm text-amber-600 dark:text-amber-400">{note}</p> : null}
         </CardHeader>
         <CardContent>
-          {/* Stat boxes — click to filter the table. */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {BUCKETS.map((b) => {
-              const n =
-                b.key === "never_reached" ? c.neverReached
-                : b.key === "loop_not_closed" ? c.loopNotClosed
-                : b.key === "working_overdue" ? c.workingOverdue
-                : c.workingOnTrack;
-              const on = show.includes(b.key);
-              return (
-                <button
-                  key={b.key}
-                  type="button"
-                  onClick={() => toggle(b.key)}
-                  title={b.def}
-                  className={cn(
-                    "rounded-md border p-3 text-left transition-colors",
-                    on ? "bg-muted/60" : "hover:bg-muted/30",
-                    !on && "opacity-60"
-                  )}
-                >
-                  <div
-                    className={cn(
-                      "text-2xl font-semibold tabular-nums",
-                      b.tone === "bad" && "text-red-600 dark:text-red-400",
-                      b.tone === "warn" && "text-amber-600 dark:text-amber-400"
-                    )}
-                  >
-                    {fmt(n)}
-                  </div>
-                  <div className="mt-1 text-xs font-medium">{b.label}</div>
-                  <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{b.def}</div>
-                </button>
-              );
-            })}
-          </div>
-          <p className="mt-3 text-xs text-muted-foreground">
-            {fmt(c.scope)} open {report.year} leads in scope · showing{" "}
-            {fmt(rows.length)} (click a box to filter).{" "}
+          <p className="text-xs text-muted-foreground">
+            {fmt(c.scope)} open {report.year} leads in scope.{" "}
             {c.withPbActivity > 0 ? (
               <>
                 <strong className="font-medium">{fmt(c.withPbActivity)}</strong> of the
@@ -159,39 +131,115 @@ export function FollowupView({ initial }: { initial: FollowupReport }) {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardContent className="pt-6">
-          {rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Nothing in the selected buckets. 🎉
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
-                    <th className="py-2 pr-3 font-medium">Lead</th>
-                    <th className="py-2 pr-3 font-medium">Created</th>
-                    <th className="py-2 pr-3 font-medium">Salesperson</th>
-                    <th className="py-2 pr-3 text-right font-medium">Notes</th>
-                    <th className="py-2 pr-3 font-medium">Last note</th>
-                    <th className="py-2 pr-3 font-medium">Task due</th>
-                    <th className="py-2 pr-3 text-right font-medium">Days overdue</th>
-                    <th className="py-2 pr-3 font-medium">PB calls</th>
-                    <th className="py-2 pr-3 font-medium">Marketing</th>
-                    <th className="py-2 pl-3 text-right font-medium">Pocomos</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((l) => (
-                    <Row key={l.leadId} l={l} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* One collapsible section per bucket — Never reached + Loop not closed
+          open by default; click any header to open its list. */}
+      <div className="space-y-2">
+        {BUCKETS.map((b) => {
+          const rows = bucketRows(b.key);
+          return (
+            <CollapsibleSection
+              key={b.key}
+              defaultOpen={b.key === "never_reached" || b.key === "loop_not_closed"}
+              label={<span className={cn("font-medium", toneClass(b.tone))}>{b.label}</span>}
+              right={<span className={cn("font-semibold tabular-nums", toneClass(b.tone))}>{fmt(rows.length)}</span>}
+            >
+              <p className="mb-2 text-[11px] leading-snug text-muted-foreground">{b.def}</p>
+              {rows.length === 0 ? (
+                <p className="text-sm text-muted-foreground">None.</p>
+              ) : b.key === "closed_out" ? (
+                <ClosedTable rows={rows} />
+              ) : (
+                <BucketTable rows={rows} />
+              )}
+            </CollapsibleSection>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Standard follow-up table (never / loop / working buckets share these columns). */
+function BucketTable({ rows }: { rows: FollowupLead[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+            <th className="py-2 pr-3 font-medium">Lead</th>
+            <th className="py-2 pr-3 font-medium">Created</th>
+            <th className="py-2 pr-3 font-medium">Salesperson</th>
+            <th className="py-2 pr-3 text-right font-medium">Notes</th>
+            <th className="py-2 pr-3 font-medium">Last note</th>
+            <th className="py-2 pr-3 font-medium">Task due</th>
+            <th className="py-2 pr-3 text-right font-medium">Days overdue</th>
+            <th className="py-2 pr-3 font-medium">PB calls</th>
+            <th className="py-2 pr-3 font-medium">Marketing</th>
+            <th className="py-2 pl-3 text-right font-medium">Pocomos</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((l) => (
+            <Row key={l.leadId} l={l} />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Closed-out table: a task was completed and none is in progress. Shows the
+ * outcome (closing task description), completion date, salesperson, the
+ * Not-Interested reason where set, and a link to the lead.
+ */
+function ClosedTable({ rows }: { rows: FollowupLead[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+            <th className="py-2 pr-3 font-medium">Lead</th>
+            <th className="py-2 pr-3 font-medium">Closed</th>
+            <th className="py-2 pr-3 font-medium">Salesperson</th>
+            <th className="py-2 pr-3 font-medium">What they closed with</th>
+            <th className="py-2 pr-3 font-medium">Not-Interested reason</th>
+            <th className="py-2 pl-3 text-right font-medium">Pocomos</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((l) => (
+            <tr key={l.leadId} className="border-b align-top last:border-0">
+              <td className="py-2 pr-3">
+                <div className="font-medium">{l.name}</div>
+                <div className="text-[11px] tabular-nums text-muted-foreground">{l.leadId}</div>
+              </td>
+              <td className="py-2 pr-3 tabular-nums text-muted-foreground">{dayOf(l.completedAt)}</td>
+              <td className="py-2 pr-3 text-muted-foreground">{l.salesperson || "—"}</td>
+              <td className="py-2 pr-3 text-xs text-muted-foreground">{l.taskDescription || "—"}</td>
+              <td className="py-2 pr-3 text-xs">
+                {l.notInterestedReason ? (
+                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                    {l.notInterestedReason}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </td>
+              <td className="py-2 pl-3 text-right">
+                <a
+                  href={boardUrl(l.leadId)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary underline-offset-4 hover:underline"
+                >
+                  Message board
+                </a>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -214,6 +214,9 @@ export async function initSchema(): Promise<void> {
   // Lead Notes signal (rev 25) — for the never-reached / loop-not-closed split.
   await c`ALTER TABLE leads_followup ADD COLUMN IF NOT EXISTS notes_count INTEGER NOT NULL DEFAULT 0`;
   await c`ALTER TABLE leads_followup ADD COLUMN IF NOT EXISTS last_note_at DATE`;
+  // Closed-out bucket (rev 26) — completed-task date + Not-Interested reason.
+  await c`ALTER TABLE leads_followup ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ`;
+  await c`ALTER TABLE leads_followup ADD COLUMN IF NOT EXISTS not_interested_reason TEXT`;
 
   // ---- Bulk ground-truth exports (rev 18) ----
   // Raw-ish landing tables for the two authoritative job exports. Kept beyond the

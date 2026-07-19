@@ -75,6 +75,11 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **RL-04 follow-up: CLOSED-OUT bucket + collapsible sections (rev 26, 2026-07-19)** — split the
+      old loop_not_closed (234) into **closed_out 185** (task completed, none in progress — done
+      reaching out; section shows closing description / completion date / salesperson / Not-Interested
+      reason / lead link) and **loop_not_closed 49** (reached, no task ever completed). /leads/followup
+      reworked to collapsible per-bucket sections (obvious one-click view per category). See §5.11.
 - [x] **RL (Mrs. L) feedback pack — UPDATE-RL-01 / RL-03 / RL-04 shipped (rev 25, 2026-07-18)** —
       **UPDATE-RL-01 (dup detection):** drop "…duplicate…"-named shells; a shared email now needs
       NAME IDENTITY (same last name + fuzzy first) to be a dup, so father/daughter shared inboxes
