@@ -48,6 +48,7 @@ const links: NavLink[] = [
   },
   { href: "/finance", label: "Finance" },
   { href: "/texting", label: "Texting" },
+  { href: "/requests", label: "Requests" },
   {
     href: "/tv/sales",
     label: "TV",

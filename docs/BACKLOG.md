@@ -83,6 +83,13 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **FEEDBACK-SYSTEM — in-dashboard feedback + /requests review queue (rev 42, 2026-07-19)** —
+      floating feedback bubble on every dashboard page (not /tv/*): text + optional name + optional
+      image (downscaled client-side), auto-captures page URL + time, stored in a new `feedback`
+      table (images base64 inline). New **Requests** nav tab → /requests: newest-first list with
+      thumbnails, click-to-cycle status (New/Selected/Shipped/Declined), status filters, and a
+      **prompt builder** that turns ticked items into a paste-ready /ship prompt (auto-marks them
+      Selected). No cron, no auth (POST lightly rate-limited). Verified end-to-end live. See §5.18.
 - [x] **TV ticker reworded to "Team best" (rev 40, 2026-07-19)** — it could name a different tech
       than the Clean Streak tile (109 Daniel vs 108 Jason) because the ticker is the season maximum
       and the tile is an award seat. Fixed the label, not the number (echoing the tile would have

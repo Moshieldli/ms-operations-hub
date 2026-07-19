@@ -142,6 +142,26 @@ export async function initSchema(): Promise<void> {
   await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS pending_reservice BOOLEAN NOT NULL DEFAULT FALSE`;
   await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS pending_checked_at TIMESTAMPTZ`;
 
+  // ---- In-dashboard feedback / feature requests (rev 42) ----
+  // Submitted by staff from the floating bubble on any dashboard page. No auth
+  // (internal tool). Image stored as a base64 data URI inline — cheapest path at
+  // our volume (a handful of rows/week), no blob store to provision; capped and
+  // downscaled client-side before upload.
+  await c`
+    CREATE TABLE IF NOT EXISTS feedback (
+      id BIGSERIAL PRIMARY KEY,
+      body TEXT NOT NULL,
+      submitter TEXT,
+      source_url TEXT,
+      image_data_uri TEXT,
+      status TEXT NOT NULL DEFAULT 'new',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await c`CREATE INDEX IF NOT EXISTS feedback_created_idx ON feedback (created_at DESC)`;
+  await c`CREATE INDEX IF NOT EXISTS feedback_status_idx ON feedback (status)`;
+
   // ---- Referral awards (rev 41) ----
   // Source of truth is the weekly PAYROLL Google Sheet, not Pocomos: a referral
   // is an OTHER PAY row of exactly $50 whose NOTES cell holds the referred
