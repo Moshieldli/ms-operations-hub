@@ -14,6 +14,18 @@
 - [ ] Marketing source breakdown: Long Island vs Westchester
 
 ## Needs a human decision
+- [ ] **RESPRAY-YOY weather probe (rev 47, 2026-07-20) — rainfall is NOT a monthly driver of resprays
+      or cadence; the YoY decline is operational.** Pulled Open-Meteo historical daily rainfall for our
+      area (40.597/-73.702), Apr–Oct 2024/2025/2026, vs monthly respray rate (Re-service ÷ apps; 2025
+      & 2026 only — 2024 RealGreen has no re-service typing) and monthly cadence (share of
+      consecutive-spray gaps >17d; all three years). **Same-month Pearson r: rain vs respray rate
+      −0.19 (n=11), rain vs cadence −0.06 (n=16) — no relationship.** A weak LAGGED signal (this
+      month's rain vs NEXT month's respray rate) r=+0.40 (n=9) is suggestive but small-n/noisy; the
+      next-month cadence lag (−0.56) is an end-of-season small-sample artifact (e.g. Oct-2024 100% off
+      a tiny gap count). **Takeaway:** rainfall did NOT systematically rise 2024→2026, yet cadence
+      >17d went 2024 low → 2025/2026 high — so the cadence/spray-gap decline (§5.17) is
+      **capacity/routing, not weather**, reinforcing the retention-cohort item above. Not worth a
+      dashboard widget on this data; revisit the lagged respray signal if more seasons accrue.
 - [x] ~~**Is the 9-day respray window right?**~~ RESOLVED by ops (rev 39): the window governs when a
       re-service is **booked**, not when it completes — rain/capacity push visits later. All 39
       "outside window" jobs are legitimate resprays again; the gap is now an informational marker.
@@ -74,6 +86,21 @@
       `pb_contact_id → phoneburner_contacts`). Only 5 of 288 scope leads have any call event, though
       136/288 are synced to PB. To make the "PB calls" column meaningful we'd need to backfill call
       history from the PhoneBurner API rather than rely on webhooks only. See REFERENCE §5.11.
+      **PROBE (rev 47, 2026-07-20): YES, PB exposes historical calls — via the `/dialsession`
+      resource.** Structural probe of `phoneburner.com/rest/1` (401=exists / 404=no, calibrated
+      against known endpoints): **`GET /dialsession` (list) and `GET /dialsession/{id}` both exist
+      (401)**, as do `/contacts`, `/members`, `/folders`, `/tags`. There is **no** `/calls`,
+      `/calllog`, `/dialsessions`, `/callanalytics`, `/reports`, or any contact-level
+      `/contacts/{id}/calls|history` endpoint (all 404). So the backfill path is: page `/dialsession`
+      (each dial session = a completed calling session carrying its calls + dispositions + the
+      **member/CSR** who dialed and timestamps), then join to contacts. **Why this matters for Rena:**
+      the webhook data can't attribute per-CSR — all 293 `webhook_log` rows record `csr_name =
+      "Ohavia Feldman"` (the API-account owner, not the dialing CSR), whereas a dial session carries
+      the actual member. **Volume NOT measured live** — `PHONEBURNER_TOKEN` is sensitive in Vercel
+      (env-pull returns empty) and absent from `.env.local`, so an authenticated probe needs the token
+      added locally or a short-lived deployed probe route; the structural existence of `/dialsession`
+      is confirmed. Webhook capture so far: 293 rows, 2026-05-28 → 07-17, dispositions No Answer 216 ·
+      Not Interested 37 · Left Message 15 · Set Appointment 10 · Bad Phone 5 · etc.
 - [ ] Fix `webhook_log.pocomos_id` at write time (webhookProcessor) so future rows join directly
       instead of needing the pb_contact_id bridge.
 
