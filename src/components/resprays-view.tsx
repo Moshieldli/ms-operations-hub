@@ -7,6 +7,7 @@ import { RefreshedAt } from "@/components/refreshed-at";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import type { ResprayDetail, RespraysReport, TechRow } from "@/lib/service/resprays";
 import { cn } from "@/lib/utils";
+import { TrophyIcon } from "@/components/ui/status-icons";
 
 const POCOMOS_BASE = "https://mypocomos.net";
 const fmt = (n: number) => n.toLocaleString("en-US");
@@ -562,7 +563,7 @@ function WeeklyLeaderboardCard({ report, minApps }: { report: RespraysReport; mi
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">This week on the board 🏆</CardTitle>
+        <CardTitle className="text-base">This week on the board <TrophyIcon /></CardTitle>
         <CardDescription>
           Current week and last full week. Callouts need {minApps}+ sprays that
           week so a light week can&rsquo;t win or lose it.

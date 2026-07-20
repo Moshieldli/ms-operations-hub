@@ -83,6 +83,8 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **Emoji sweep on browser pages (rev 46, 2026-07-20)** — last 🎉/🏆 on /sales + /service/* now
+      lucide SVG (status-icons.tsx), consistent with the TV boards. Polish.
 - [x] **BUILD-SCHEDULE v1 — /tv/board digital route board (rev 45, 2026-07-20)** — Yodeck-safe TV
       schedule board: today + next 4 workdays, per-day weather + route codes + towns + stop counts,
       from Pocomos (next_service_date + route_code) and a DAYCODES-tab snapshot; live Electric-Blower

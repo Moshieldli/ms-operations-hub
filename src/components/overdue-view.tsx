@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import { AllClearIcon } from "@/components/ui/status-icons";
 import {
   Card,
   CardContent,
@@ -158,7 +159,7 @@ export function OverdueView({ initial }: { initial: OverdueReport }) {
         <CardContent>
           {report.overdue.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No overdue customers. 🎉
+              No overdue customers. <AllClearIcon />
             </p>
           ) : (
             <RowTable rows={report.overdue} kind="overdue" />

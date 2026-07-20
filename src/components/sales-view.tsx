@@ -14,6 +14,7 @@ import { useSalesTaxonomy } from "@/components/use-sales-taxonomy";
 import type { SalesSummary } from "@/lib/sales-data";
 import type { ReturnRatePair, SalesTaxonomy } from "@/lib/sales-taxonomy";
 import { cn } from "@/lib/utils";
+import { AllClearIcon } from "@/components/ui/status-icons";
 import { CollapsibleSection, MaybeCollapsible } from "@/components/ui/collapsible-section";
 
 const POCOMOS_BASE = "https://mypocomos.net";
@@ -587,7 +588,7 @@ function ReturnRateAnomaliesCard({
           </p>
         ) : an.total === 0 ? (
           <p className="text-sm text-muted-foreground">
-            Nothing to fix — every record is measurable. 🎉
+            Nothing to fix — every record is measurable. <AllClearIcon />
           </p>
         ) : (
           <div className="space-y-6">
@@ -769,7 +770,7 @@ function MissingTagsCard({
           </p>
         ) : rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            None — every active customer carries a {year} tag. 🎉
+            None — every active customer carries a {year} tag. <AllClearIcon />
           </p>
         ) : (
           // Short list → show it; long list → collapse it (same pattern as the
