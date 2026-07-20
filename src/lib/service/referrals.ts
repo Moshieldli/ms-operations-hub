@@ -82,26 +82,48 @@ export function isReferralRow(row: { amount: number; notes: string }): boolean {
  * person.
  */
 export function matchTechnician(payrollName: string, known: string[]): string | null {
-  const toks = (s: string) =>
-    s
-      .toLowerCase()
-      .replace(/[^a-z\s,]/g, " ")
-      .split(/[\s,]+/)
-      .filter((t) => t.length > 1);
-  const want = new Set(toks(payrollName));
-  let best: { name: string; score: number } | null = null;
-  let tie = false;
-  for (const k of known) {
-    const score = toks(k).filter((t) => want.has(t)).length;
-    if (!best || score > best.score) {
-      best = { name: k, score };
-      tie = false;
-    } else if (best && score === best.score && score > 0) {
-      tie = true;
-    }
+  // Payroll writes tabs as "LAST, FIRST" — and often just "LAST, F" (a single
+  // first initial, seen live on the real sheet). So we anchor on the SURNAME and
+  // disambiguate a tie by the first initial, rather than requiring two full
+  // tokens (which "ROSALES, N" can never satisfy).
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+  const parts = String(payrollName).split(",");
+  const payLast = norm(parts[0] || "");
+  const payFirst = norm(parts[1] || "");
+  if (!payLast) return null;
+
+  // Levenshtein ≤ 2 so payroll "Barerra" matches Pocomos "Barrerra" (different
+  // spelling), without matching unrelated surnames.
+  const lev = (a: string, b: string): number => {
+    const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+    for (let j = 0; j <= b.length; j++) d[0][j] = j;
+    for (let i = 1; i <= a.length; i++)
+      for (let j = 1; j <= b.length; j++)
+        d[i][j] = Math.min(
+          d[i - 1][j] + 1,
+          d[i][j - 1] + 1,
+          d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+        );
+    return d[a.length][b.length];
+  };
+  const lastOf = (k: string) => norm(k.trim().split(/\s+/).slice(-1)[0] || "");
+  const firstOf = (k: string) => norm(k.trim().split(/\s+/)[0] || "");
+
+  const surnameHit = (k: string) => {
+    const kl = lastOf(k);
+    return kl === payLast || (Math.min(kl.length, payLast.length) >= 5 && lev(kl, payLast) <= 2);
+  };
+  let candidates = known.filter(surnameHit);
+  if (candidates.length === 1) return candidates[0];
+  if (candidates.length > 1 && payFirst) {
+    // Disambiguate by first name / initial.
+    const byFirst = candidates.filter((k) => {
+      const kf = firstOf(k);
+      return payFirst.length === 1 ? kf.startsWith(payFirst) : kf === payFirst || kf.startsWith(payFirst);
+    });
+    if (byFirst.length === 1) return byFirst[0];
   }
-  if (!best || best.score < 2 || tie) return null;
-  return best.name;
+  return null;
 }
 
 /** ISO date + N calendar months. */
