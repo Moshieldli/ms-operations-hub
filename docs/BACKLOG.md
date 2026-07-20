@@ -180,10 +180,20 @@
 - [ ] **Provision the Google service account for the payroll scan (rev 41 follow-up).** The nightly
       `/api/cron/referrals` scanner is built but **dormant** — no service account exists yet, so
       `referral_awards` is currently maintained by `scripts/seed-referrals.ts`. To go fully
-      automatic: create a service account, share the payroll folder
-      (`1UsODcBn0JsGMEzsZQQ1CmCVMgxe1Z0nM`) with its email **read-only**, and set
-      `GOOGLE_SERVICE_ACCOUNT_EMAIL` / `GOOGLE_PRIVATE_KEY` in Vercel. The cron picks it up with no
-      code change. The service-account email to share with is reported in the ship note.
+      automatic: create a service account, share the **"Payroll Calculator - MS" PARENT folder**
+      (`1EP1fMZrPMaCnx3lY2rt3DYOM-v8kwAwF`) with its email **read-only** (already done by ops — the
+      parent, not just 2026), and set `GOOGLE_SERVICE_ACCOUNT_EMAIL` / `GOOGLE_PRIVATE_KEY` in
+      Vercel. The scanner resolves the `${CURRENT_YEAR}` subfolder by name inside the parent (rev 43),
+      so no year folder ID is configured. The cron picks it up with no code change. The
+      service-account email to share with is reported in the ship note.
+
+## Recurring (yearly ritual)
+- [ ] **NEW YEAR → make the payroll year folder (referral scanner).** Every January, create a folder
+      named exactly `{YEAR}` (e.g. `2027`) inside the shared **"Payroll Calculator - MS"** parent
+      (`1EP1fMZrPMaCnx3lY2rt3DYOM-v8kwAwF`), same as prior years. **Nothing else** — no code, no env,
+      no redeploy. The scanner resolves the current year's folder by name at runtime (rev 43,
+      `resolveYearFolderId`). If the folder is missing the cron logs a clear "create a {YEAR} folder"
+      error and simply skips — it never crashes. See REFERENCE §5.15.
 
 - [x] **BUILD-SPEEDUP tooling (rev 27, 2026-07-19)** — Playwright MCP in `.mcp.json`; `scripts/lib/`
       (livecheck / pocomos / csv / neon) + `scripts/verify-live.ts`; skills `pocomos-scraping` +

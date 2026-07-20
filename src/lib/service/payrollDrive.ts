@@ -20,9 +20,13 @@
  * ENV:
  *   GOOGLE_SERVICE_ACCOUNT_EMAIL  — the service account's address
  *   GOOGLE_PRIVATE_KEY            — its PEM key (literal \n escapes are handled)
- *   PAYROLL_DRIVE_FOLDER_ID       — the 2026 payroll folder
+ *   PAYROLL_DRIVE_PARENT_FOLDER_ID — the "Payroll Calculator - MS" PARENT folder
+ *                                    (the year subfolder is resolved inside it)
+ *   PAYROLL_DRIVE_FOLDER_ID       — OPTIONAL override: a specific year folder to
+ *                                    scan directly, skipping year resolution
  */
 import { createSign } from "node:crypto";
+import { CURRENT_YEAR } from "@/lib/pocomos";
 import {
   isReferralRow,
   matchTechnician,
@@ -36,7 +40,15 @@ const SCOPES = [
   "https://www.googleapis.com/auth/spreadsheets.readonly",
 ].join(" ");
 
-/** Default: the "Payroll Calculator - MS → 2026" folder. */
+/**
+ * The "Payroll Calculator - MS" PARENT folder — the one shared with the service
+ * account. Its children are per-year subfolders ("2026", "2027", …) plus a
+ * "0-Templates" folder; the year folder is resolved by NAME at runtime (rev 43)
+ * so a new January needs zero code/config change — just a new year folder here.
+ */
+export const DEFAULT_PAYROLL_PARENT = "1EP1fMZrPMaCnx3lY2rt3DYOM-v8kwAwF";
+
+/** The 2026 year subfolder (kept only as the direct-override example / fallback). */
 export const DEFAULT_PAYROLL_FOLDER = "1UsODcBn0JsGMEzsZQQ1CmCVMgxe1Z0nM";
 
 export function hasDriveCredentials(): boolean {
@@ -91,10 +103,41 @@ export function weekEndingFromTitle(title: string): string | null {
   return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
 }
 
-/** The newest `limit` weekly sheets in the payroll folder, newest first. */
+/**
+ * Resolve the year subfolder INSIDE the parent by exact name (rev 43).
+ *
+ * `name = '2026'` matches only the year folder, never the sibling "0-Templates",
+ * so `January 2027` just works once someone drops a "2027" folder in the parent —
+ * no code, no env change. Year is `CURRENT_YEAR` (year-relative rule), overridable
+ * via `PAYROLL_DRIVE_YEAR` for a backfill.
+ */
+export async function resolveYearFolderId(token: string): Promise<string> {
+  const year = process.env.PAYROLL_DRIVE_YEAR || CURRENT_YEAR;
+  const parent = process.env.PAYROLL_DRIVE_PARENT_FOLDER_ID || DEFAULT_PAYROLL_PARENT;
+  const q = encodeURIComponent(
+    `'${parent}' in parents and mimeType='application/vnd.google-apps.folder' ` +
+      `and name='${year}' and trashed=false`
+  );
+  const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&pageSize=5`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+  if (!res.ok) throw new Error(`drive resolve-year ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const j = (await res.json()) as { files?: Array<{ id: string; name: string }> };
+  const folder = j.files?.find((f) => f.name === String(year));
+  if (!folder) {
+    throw new Error(
+      `no "${year}" subfolder in the payroll parent (${parent}) — ` +
+        `create a "${year}" folder inside "Payroll Calculator - MS" (the yearly ritual).`
+    );
+  }
+  return folder.id;
+}
+
+/** The newest `limit` weekly sheets in the CURRENT-year payroll folder, newest first. */
 export async function listPayrollFiles(limit = 6): Promise<PayrollFile[]> {
   const token = await accessToken();
-  const folder = process.env.PAYROLL_DRIVE_FOLDER_ID || DEFAULT_PAYROLL_FOLDER;
+  // Direct override (a pinned year folder) skips resolution; otherwise resolve
+  // the current year's subfolder by name inside the shared parent.
+  const folder = process.env.PAYROLL_DRIVE_FOLDER_ID || (await resolveYearFolderId(token));
   const q = encodeURIComponent(
     `'${folder}' in parents and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`
   );
