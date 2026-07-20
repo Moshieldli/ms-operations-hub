@@ -76,10 +76,10 @@ export function isReferralRow(row: { amount: number; notes: string }): boolean {
  * payroll "BARERRA, CESAR" vs Pocomos "Cesar Barrerra" (different spelling), and
  * payroll "MATUTE AYALA, JOSEF" vs Pocomos "Josef Matute" (extra surname).
  *
- * Requires TWO matching tokens, so a shared first name can't mis-assign a
- * referral to the wrong tech. Returns null when unsure — the caller keeps the
- * raw payroll name and the trophy is skipped rather than credited to the wrong
- * person.
+ * ⚠️ The live sheet tabs are often just "LAST, F" (first INITIAL only), so we
+ * anchor on the surname (Levenshtein ≤2 for spelling drift) and disambiguate a
+ * tie by first initial — NOT two full tokens, which "ROSALES, N" can't satisfy.
+ * Returns null when unsure, so the trophy is skipped rather than mis-credited.
  */
 export function matchTechnician(payrollName: string, known: string[]): string | null {
   // Payroll writes tabs as "LAST, FIRST" — and often just "LAST, F" (a single
