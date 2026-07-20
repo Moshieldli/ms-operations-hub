@@ -7,6 +7,7 @@ import { RefreshedAt } from "@/components/refreshed-at";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import type { ResprayDetail, RespraysReport, TechRow } from "@/lib/service/resprays";
 import { cn } from "@/lib/utils";
+import { Sparkles } from "lucide-react";
 import { TrophyIcon } from "@/components/ui/status-icons";
 
 const POCOMOS_BASE = "https://mypocomos.net";
@@ -575,8 +576,9 @@ function WeeklyLeaderboardCard({ report, minApps }: { report: RespraysReport; mi
             {funStats.map((s, i) => (
               <span
                 key={i}
-                className="rounded-full border bg-muted/40 px-3 py-1 text-xs font-medium"
+                className="inline-flex items-center gap-1.5 rounded-full border bg-muted/40 px-3 py-1 text-xs font-medium"
               >
+                <Sparkles className="h-3.5 w-3.5 text-amber-500" aria-hidden="true" />
                 {s}
               </span>
             ))}

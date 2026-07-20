@@ -676,7 +676,7 @@ export function buildWeeklyLeaderboard(techs: TechRow[]): WeeklyLeaderboard {
     }
   }
   if (streakLen >= 2) {
-    funStats.push(`🎯 ${streakTech} — ${streakLen} weeks straight with zero resprays.`);
+    funStats.push(`${streakTech} — ${streakLen} weeks straight with zero resprays.`);
   }
 
   // 2) Most improved week-over-week: biggest rate DROP from two weeks ago to
@@ -693,7 +693,7 @@ export function buildWeeklyLeaderboard(techs: TechRow[]): WeeklyLeaderboard {
     const drop = ra - rb;
     if (drop > bestDrop) {
       bestDrop = drop;
-      improvedMsg = `📈 ${t.technician} — most improved: ${ra.toFixed(1)}% → ${rb.toFixed(1)}% week-over-week.`;
+      improvedMsg = `${t.technician} — most improved: ${ra.toFixed(1)}% → ${rb.toFixed(1)}% week-over-week.`;
     }
   }
   if (bestDrop >= 1) funStats.push(improvedMsg);
@@ -703,7 +703,7 @@ export function buildWeeklyLeaderboard(techs: TechRow[]): WeeklyLeaderboard {
     .filter((s) => s.applications >= WEEKLY_CALLOUT_MIN_APPS && s.resprays === 0)
     .sort((a, b) => b.applications - a.applications)[0];
   if (perfect) {
-    funStats.push(`✨ ${perfect.technician} sprayed ${perfect.applications} last week with zero resprays.`);
+    funStats.push(`${perfect.technician} sprayed ${perfect.applications} last week with zero resprays.`);
   }
 
   return { current, lastFull, funStats };
