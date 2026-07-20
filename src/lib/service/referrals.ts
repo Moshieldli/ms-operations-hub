@@ -113,7 +113,7 @@ export function matchTechnician(payrollName: string, known: string[]): string | 
     const kl = lastOf(k);
     return kl === payLast || (Math.min(kl.length, payLast.length) >= 5 && lev(kl, payLast) <= 2);
   };
-  let candidates = known.filter(surnameHit);
+  const candidates = known.filter(surnameHit);
   if (candidates.length === 1) return candidates[0];
   if (candidates.length > 1 && payFirst) {
     // Disambiguate by first name / initial.
