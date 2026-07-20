@@ -119,6 +119,10 @@
       wired and dormant). Until then those boards run off Pocomos + the DAYCODES snapshot.
 
 ## Done (recent)
+- [x] **Feedback bubble upgrades + CALENDAR overlay (rev 49, 2026-07-20)** — Take-screenshot
+      (html2canvas) with an arrows/boxes/freehand markup step; name required + remembered in
+      localStorage; /requests by-submitter filter + per-person counts. Master Routing sheet shared →
+      corrected CALENDAR parser lights up tech-first rows on /tv/board (verified live). See §5.18/§5.15.
 - [x] **Referral scanner LIVE (rev 48, 2026-07-20)** — Drive/Sheets APIs enabled + creds set, so the
       nightly `/api/cron/referrals` now reads the live payroll sheets. Fixed `matchTechnician`: the
       real tabs are **"LAST, F"** (first initial only), so it's surname-anchored (Levenshtein ≤2 for

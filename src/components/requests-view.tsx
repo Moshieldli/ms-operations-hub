@@ -53,6 +53,7 @@ export function RequestsView({
 }) {
   const [items, setItems] = useState(initial);
   const [filter, setFilter] = useState<Filter>("all");
+  const [who, setWho] = useState<string>("all"); // submitter filter (rev 49)
   const [checked, setChecked] = useState<Set<number>>(new Set());
   const [prompt, setPrompt] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -66,9 +67,27 @@ export function RequestsView({
     return c;
   }, [items]);
 
+  // Per-person submission counts, most first (rev 49).
+  const submitters = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const it of items) {
+      const name = (it.submitter || "").trim() || "(no name)";
+      m.set(name, (m.get(name) ?? 0) + 1);
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [items]);
+
   const shown = useMemo(
-    () => (filter === "all" ? items : items.filter((i) => i.status === filter)),
-    [items, filter]
+    () =>
+      items.filter((i) => {
+        if (filter !== "all" && i.status !== filter) return false;
+        if (who !== "all") {
+          const name = (i.submitter || "").trim() || "(no name)";
+          if (name !== who) return false;
+        }
+        return true;
+      }),
+    [items, filter, who]
   );
 
   const cycle = useCallback(async (id: number, from: FeedbackStatus) => {
@@ -171,6 +190,36 @@ export function RequestsView({
               </Button>
             </div>
           </div>
+
+          {/* By-submitter filter + per-person counts (rev 49). */}
+          {submitters.length > 1 ? (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t pt-2">
+              <span className="mr-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                By submitter
+              </span>
+              <button
+                onClick={() => setWho("all")}
+                className={cn(
+                  "rounded-full border px-2.5 py-0.5 text-xs",
+                  who === "all" ? "bg-foreground text-background" : "hover:bg-muted"
+                )}
+              >
+                Everyone <span className="tabular-nums opacity-70">{items.length}</span>
+              </button>
+              {submitters.map(([name, n]) => (
+                <button
+                  key={name}
+                  onClick={() => setWho(name)}
+                  className={cn(
+                    "rounded-full border px-2.5 py-0.5 text-xs",
+                    who === name ? "bg-foreground text-background" : "hover:bg-muted"
+                  )}
+                >
+                  {name} <span className="tabular-nums opacity-70">{n}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 

@@ -1,8 +1,11 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { MAX_IMAGE_BYTES } from "@/lib/feedback";
+import { FeedbackMarkup } from "@/components/feedback-markup";
+
+const NAME_KEY = "ms_feedback_name";
 
 /**
  * Floating feedback bubble (rev 42) — bottom-right on every dashboard page.
@@ -22,19 +25,74 @@ export function FeedbackBubble() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [capturing, setCapturing] = useState(false);
+  const [markupSrc, setMarkupSrc] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Name is remembered so each person types it once (rev 49).
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(NAME_KEY);
+      if (saved) setSubmitter(saved);
+    } catch {
+      /* localStorage unavailable — fine */
+    }
+  }, []);
 
   // Belt-and-braces: never show on a TV screen even if mounted there.
   if (pathname?.startsWith("/tv")) return null;
 
   const reset = () => {
     setBody("");
-    setSubmitter("");
+    // Keep the remembered name.
     setImage(null);
     setImageName(null);
     setNote(null);
     setDone(false);
+    setMarkupSrc(null);
     if (fileRef.current) fileRef.current.value = "";
+  };
+
+  /**
+   * Capture the current page with html2canvas (no permission prompt, unlike
+   * getDisplayMedia) and open the markup step. The feedback panel is hidden
+   * during capture so it isn't in the screenshot.
+   */
+  const takeScreenshot = async () => {
+    setNote(null);
+    setOpen(false);
+    setCapturing(true);
+    // Let the panel actually disappear before capturing.
+    await new Promise((r) => setTimeout(r, 120));
+    try {
+      const html2canvas = (await import("html2canvas")).default;
+      const canvas = await html2canvas(document.body, {
+        logging: false,
+        useCORS: true,
+        scale: Math.min(1.5, window.devicePixelRatio || 1),
+        windowWidth: document.documentElement.clientWidth,
+        windowHeight: document.documentElement.clientHeight,
+        x: window.scrollX,
+        y: window.scrollY,
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
+      setMarkupSrc(canvas.toDataURL("image/jpeg", 0.9));
+    } catch {
+      setOpen(true);
+      setNote("Couldn't capture the screen — try Attach file instead.");
+    } finally {
+      setCapturing(false);
+    }
+  };
+
+  const onMarkupDone = async (dataUri: string) => {
+    // The composited screenshot may be large — downscale to the cap.
+    const shrunk = await downscaleDataUri(dataUri, 1600, 0.82);
+    setImage(shrunk);
+    setImageName("screenshot.jpg");
+    setMarkupSrc(null);
+    setOpen(true);
   };
 
   const onFile = async (file: File | undefined) => {
@@ -61,6 +119,15 @@ export function FeedbackBubble() {
     if (!body.trim()) {
       setNote("Please add a note first.");
       return;
+    }
+    if (!submitter.trim()) {
+      setNote("Please add your name.");
+      return;
+    }
+    try {
+      localStorage.setItem(NAME_KEY, submitter.trim());
+    } catch {
+      /* ignore */
     }
     setBusy(true);
     setNote(null);
@@ -136,16 +203,23 @@ export function FeedbackBubble() {
               <input
                 value={submitter}
                 onChange={(e) => setSubmitter(e.target.value)}
-                placeholder="Your name (optional)"
+                placeholder="Your name (required)"
                 className="w-full rounded-md border bg-background px-2.5 py-1.5 text-sm outline-none focus:ring-2 focus:ring-ring"
               />
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => fileRef.current?.click()}
                   className="rounded-md border px-2.5 py-1.5 text-xs hover:bg-muted"
                 >
-                  {imageName ? "Change image" : "Attach screenshot"}
+                  Attach file
+                </button>
+                <button
+                  type="button"
+                  onClick={takeScreenshot}
+                  className="rounded-md border px-2.5 py-1.5 text-xs hover:bg-muted"
+                >
+                  Take screenshot
                 </button>
                 {imageName ? (
                   <span className="truncate text-xs text-muted-foreground" title={imageName}>
@@ -194,6 +268,22 @@ export function FeedbackBubble() {
           Feedback
         </button>
       )}
+
+      {capturing ? (
+        <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/40 text-sm text-white">
+          Capturing…
+        </div>
+      ) : null}
+      {markupSrc ? (
+        <FeedbackMarkup
+          imageDataUri={markupSrc}
+          onDone={onMarkupDone}
+          onCancel={() => {
+            setMarkupSrc(null);
+            setOpen(true);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -213,6 +303,26 @@ function ChatIcon() {
  * `quality`. Keeps a phone screenshot well under the 2 MB cap without the server
  * ever seeing the original. Returns a data URI.
  */
+/** Downscale a data-URI image (the composited markup screenshot) to the cap. */
+async function downscaleDataUri(dataUri: string, maxDim: number, quality: number): Promise<string> {
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const i = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = reject;
+    i.src = dataUri;
+  });
+  const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+  const w = Math.max(1, Math.round(img.width * scale));
+  const h = Math.max(1, Math.round(img.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return dataUri;
+  ctx.drawImage(img, 0, 0, w, h);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
 async function downscaleImage(file: File, maxDim: number, quality: number): Promise<string> {
   const url = URL.createObjectURL(file);
   try {
