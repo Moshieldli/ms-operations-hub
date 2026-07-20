@@ -177,15 +177,17 @@
       **$50** with a customer name in NOTES. Spinning gold trophy hero on both boards + a month-long
       "boosted" star on every tile the referrer wins. Scanned 6 weeks: **Nicholas → Channa Noiman
       (wk 07-10), Nathaniel → Mina Becher (wk 06-26)**. See §5.15.
-- [ ] **Provision the Google service account for the payroll scan (rev 41 follow-up).** The nightly
-      `/api/cron/referrals` scanner is built but **dormant** — no service account exists yet, so
-      `referral_awards` is currently maintained by `scripts/seed-referrals.ts`. To go fully
-      automatic: create a service account, share the **"Payroll Calculator - MS" PARENT folder**
-      (`1EP1fMZrPMaCnx3lY2rt3DYOM-v8kwAwF`) with its email **read-only** (already done by ops — the
-      parent, not just 2026), and set `GOOGLE_SERVICE_ACCOUNT_EMAIL` / `GOOGLE_PRIVATE_KEY` in
-      Vercel. The scanner resolves the `${CURRENT_YEAR}` subfolder by name inside the parent (rev 43),
-      so no year folder ID is configured. The cron picks it up with no code change. The
-      service-account email to share with is reported in the ship note.
+- [ ] **⚠️ ENABLE Google Drive API + Sheets API for the referral scanner (rev 44 — one console click
+      away).** Credentials ARE now set + verified: service account
+      `payroll-reader@referral-hub-500201.iam.gserviceaccount.com`, `GOOGLE_SERVICE_ACCOUNT_EMAIL` /
+      `GOOGLE_PRIVATE_KEY` live in `.env.local` AND Vercel Production (key round-trips to the exact
+      PEM; JWT auth succeeds). The parent folder is shared read-only. **The ONLY remaining blocker:**
+      the scan 403s with *"Google Drive API has not been used in project 325864948081"* — the
+      **Drive API and Sheets API are not enabled** in GCP project `referral-hub-500201`
+      (#325864948081). Enable both at console.cloud.google.com → APIs & Services → Enable APIs (Google
+      Drive API + Google Sheets API), wait ~2 min, then trigger `/api/cron/referrals`. Zero code
+      change needed — resolution + creds are all in place. Until then `referral_awards` stays on the
+      `scripts/seed-referrals.ts` seed (board shows Nicholas→Channa Noiman, Nathaniel→Mina Becher).
 
 ## Recurring (yearly ritual)
 - [ ] **NEW YEAR → make the payroll year folder (referral scanner).** Every January, create a folder
