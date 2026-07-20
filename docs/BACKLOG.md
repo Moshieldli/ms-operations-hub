@@ -109,7 +109,21 @@
       shared paused-balance roster). Next tenant: review/queue failed-payment retries so paused
       accounts get unblocked. See REFERENCE §5.14.
 
+## Blocked — needs a share/permission
+- [ ] **⚠️ SHARE the "2026 Master Routing List" sheet with the service account.** The Drive/Sheets
+      APIs are enabled and the payroll sheets + the Technician roster sheet are readable, but the
+      Master Routing sheet (`1EPKjgwaFEA-q_QpvBXSAyL14V-3JxPIAJaNggefCA0o`) returns **403
+      PERMISSION_DENIED** — it was never shared with `payroll-reader@referral-hub-500201.iam.
+      gserviceaccount.com`. Share it **read-only** and `/tv/board` + `/service/board` light up the
+      tech-first CALENDAR rows, day notes, and sheet announcements automatically (masterRouting.ts is
+      wired and dormant). Until then those boards run off Pocomos + the DAYCODES snapshot.
+
 ## Done (recent)
+- [x] **Referral scanner LIVE (rev 48, 2026-07-20)** — Drive/Sheets APIs enabled + creds set, so the
+      nightly `/api/cron/referrals` now reads the live payroll sheets. Fixed `matchTechnician`: the
+      real tabs are **"LAST, F"** (first initial only), so it's surname-anchored (Levenshtein ≤2 for
+      spelling drift) with first-initial tie-break, not two full tokens. Live scan matches the seed
+      exactly: **Nicholas Rosales ← Channa Noiman, Nathaniel Tapscott ← Mina Becher.** See §5.15.
 - [x] **Emoji sweep on browser pages (rev 46, 2026-07-20)** — last 🎉/🏆 on /sales + /service/* now
       lucide SVG (status-icons.tsx), consistent with the TV boards. Polish.
 - [x] **BUILD-SCHEDULE v1 — /tv/board digital route board (rev 45, 2026-07-20)** — Yodeck-safe TV
