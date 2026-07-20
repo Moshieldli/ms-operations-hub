@@ -26,6 +26,12 @@ them without any upload.
 - **Year-relative logic** — derive from `CURRENT_YEAR` / `CURRENT_YEAR - 1`; never hardcode a year.
 - **Docs are the deliverable.** A change isn't done until `docs/REFERENCE.md` (+rev note) and
   `docs/BACKLOG.md` reflect it, committed and pushed. Never end a session with stale docs.
+- **Persist the final report.** At the end of every `/ship` or multi-task run, ALSO write the full
+  final report (the same per-item/standard report you give in chat) to
+  `docs/reports/YYYY-MM-DD-<taskname>.md` and commit it **with the build** (not a separate trailing
+  commit). `<taskname>` is a short kebab-case slug of the run (e.g. `board-v2-bundle`). If several
+  runs land the same day, suffix `-2`, `-3`. This is required, not optional — the chat report is
+  ephemeral; the file is the record.
 - **Work autonomously.** Don't ask for confirmation; make reasonable calls on ambiguity and note
   them in the final report. Only stop for something destructive, irreversible, or blocking.
 - **Display-only tasks must not touch** `categorize.ts` / `sales-provider.ts` / `sales-data.ts`.
