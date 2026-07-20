@@ -90,6 +90,30 @@ async function accessToken(): Promise<string> {
   return ((await res.json()) as { access_token: string }).access_token;
 }
 
+/**
+ * Read a values range from any spreadsheet (rev 45) — the generic Sheets read
+ * the master-routing reader shares. Returns null on any failure so callers can
+ * fall back gracefully. READ-ONLY (`spreadsheets.readonly`).
+ */
+export async function readSheetValues(
+  sheetId: string,
+  range: string
+): Promise<string[][] | null> {
+  if (!hasDriveCredentials()) return null;
+  try {
+    const token = await accessToken();
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(range)}`,
+      { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }
+    );
+    if (!res.ok) return null;
+    const j = (await res.json()) as { values?: string[][] };
+    return j.values ?? [];
+  } catch {
+    return null;
+  }
+}
+
 export interface PayrollFile {
   id: string;
   title: string;

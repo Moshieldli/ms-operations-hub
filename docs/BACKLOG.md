@@ -83,6 +83,11 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **BUILD-SCHEDULE v1 — /tv/board digital route board (rev 45, 2026-07-20)** — Yodeck-safe TV
+      schedule board: today + next 4 workdays, per-day weather + route codes + towns + stop counts,
+      from Pocomos (next_service_date + route_code) and a DAYCODES-tab snapshot; live Electric-Blower
+      marker. Sheet-driven tech names + ANT rain markers dormant until Drive/Sheets APIs enabled
+      (same blocker as referral scanner). Display-only, no writes. See §5.19.
 - [x] **WC season-bucket fix — Westchester is year one (rev 44, 2026-07-20)** — WC customers with the
       0-Westchester tag (or ZIP 105xx-108xx) whose only prior-year evidence is a TAG (no spray history
       with us) now count NEW, not Season-Skipped, because the territory was bought from a prior
