@@ -135,13 +135,14 @@ export async function getScheduleBoard(): Promise<ScheduleBoard> {
       byCode.set(key, e);
     }
     const overlay = sheet?.get(date);
-    // Reverse the sheet's tech→daycode so we can label a route with its tech.
+    // Map each daycode → the tech assigned to it on the sheet, so a Pocomos
+    // route row can be labelled with its tech.
     const daycodeToTech = new Map<string, string>();
     if (overlay) {
-      for (const [tech, code] of Object.entries(overlay.techToDaycode)) {
-        for (const part of code.split(/[,/]/)) {
+      for (const tr of overlay.rows) {
+        for (const part of tr.daycode.split(/[,/]/)) {
           const nc = normalizeDaycode(part);
-          if (nc) daycodeToTech.set(nc, tech);
+          if (nc) daycodeToTech.set(nc, tr.tech);
         }
       }
     }
