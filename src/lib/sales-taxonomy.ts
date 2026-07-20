@@ -188,6 +188,8 @@ export interface Person {
   active: boolean;
   tags: string[];
   email: string;
+  /** Postal code — used only for the Westchester season-bucket rule (rev 44). */
+  zip: string;
 }
 
 /**
@@ -290,6 +292,19 @@ export interface SalesTaxonomy {
   /** Records we can't measure cleanly — the anomalies card (rev 19). */
   anomalies: ReturnRateAnomalies;
   asOf: string;
+}
+
+/**
+ * Westchester detection (rev 44) for the season-bucket rule. Primary signal is
+ * the ops `0-Westchester` tag (also seen as `0-WSTR …`); ZIP 105xx–108xx is the
+ * fallback for a WC customer whose tag hasn't been applied yet.
+ */
+export function isWestchesterZip(zip: string): boolean {
+  const z = Number(String(zip || "").replace(/\D/g, "").slice(0, 5));
+  return (z >= 10501 && z <= 10610) || (z >= 10701 && z <= 10710) || (z >= 10801 && z <= 10805);
+}
+export function isWestchester(p: { tags: string[]; zip: string }): boolean {
+  return p.tags.some((t) => /westchester|wstr/i.test(String(t))) || isWestchesterZip(p.zip);
 }
 
 function hasYearTag(tags: string[], year: string): boolean {
@@ -569,8 +584,20 @@ async function computeReturnRatesAndBox(people: Map<string, Person>): Promise<{
     const priorSprays = Object.entries(data.counts.get(p.id) ?? {}).some(
       ([y, n]) => Number(y) < cy && Number(n) > 0
     );
-    if (priorTag || priorSprays) seasonBuckets.seasonSkipped++;
-    else seasonBuckets.newCount++;
+    if (priorTag || priorSprays) {
+      // WESTCHESTER IS YEAR ONE FOR US (rev 44, ops). WC territory was bought
+      // from a prior operator, so a WC customer's prior-year TAGS came from that
+      // operator, not from a season with us — and we have NO spray history for
+      // them. Such a customer is genuinely NEW to us, not one who "skipped" a
+      // season. So: a WC customer whose only prior-year evidence is a tag (no
+      // spray history in our data) → New. WC customers WITH real prior sprays,
+      // and all LI customers, are unchanged — Season-Skipped stays "had real
+      // history with us and sat out".
+      if (isWestchester(p) && !priorSprays) seasonBuckets.newCount++;
+      else seasonBuckets.seasonSkipped++;
+    } else {
+      seasonBuckets.newCount++;
+    }
   }
 
   return {
@@ -673,6 +700,7 @@ export async function getSalesTaxonomy(): Promise<SalesTaxonomy> {
       active: status === "active",
       tags: c.tags ?? [],
       email: String(c.email ?? "").trim().toLowerCase(),
+      zip: String((c as { zip?: string }).zip ?? "").trim(),
     });
   }
   for (const r of rows) {
@@ -699,6 +727,8 @@ export async function getSalesTaxonomy(): Promise<SalesTaxonomy> {
         active: status === "active",
         tags,
         email: String(r.email ?? "").trim().toLowerCase(),
+        // Enriched rows are non-active (never bucketed), so zip is unused here.
+        zip: "",
       });
     }
   }

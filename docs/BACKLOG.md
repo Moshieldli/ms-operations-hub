@@ -83,6 +83,11 @@
       accounts get unblocked. See REFERENCE §5.14.
 
 ## Done (recent)
+- [x] **WC season-bucket fix — Westchester is year one (rev 44, 2026-07-20)** — WC customers with the
+      0-Westchester tag (or ZIP 105xx-108xx) whose only prior-year evidence is a TAG (no spray history
+      with us) now count NEW, not Season-Skipped, because the territory was bought from a prior
+      operator. **New 149 → 199, Season-Skipped 89 → 39 (50 moved), Returning + total unchanged.**
+      New isWestchester() helper; /sales tile defs updated. See §5.8.
 - [x] **FEEDBACK-SYSTEM — in-dashboard feedback + /requests review queue (rev 42, 2026-07-19)** —
       floating feedback bubble on every dashboard page (not /tv/*): text + optional name + optional
       image (downscaled client-side), auto-captures page URL + time, stored in a new `feedback`

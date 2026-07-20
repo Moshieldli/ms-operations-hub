@@ -230,12 +230,12 @@ function SalesDashboard({
           <Tile
             label="New"
             value={taxNum(sb?.newCount)}
-            def={`Signed up for ${year} with no history at all — no prior-year tag and no prior mosquito service.`}
+            def={`Signed up for ${year} with no real prior season with us — no prior mosquito service in our data (no prior-year tag, OR a Westchester customer whose only prior tag came from the previous operator; WC is year one for us).`}
           />
           <Tile
             label="New – Season Skipped"
             value={taxNum(sb?.seasonSkipped)}
-            def={`Signed up for ${year} and has history with us, but wasn't a real ${prevYear} customer — they sat out last season.`}
+            def={`Signed up for ${year} and has REAL prior spray history with us, but wasn't a real ${prevYear} customer — they sat out last season. Westchester customers (year one for us, tags only from the prior operator) are counted New, not here.`}
           />
           <Tile
             label="Returning"
