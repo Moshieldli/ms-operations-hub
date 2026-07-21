@@ -6,6 +6,7 @@ import { getJson, postJson, pocomosOffice } from "@/lib/pocomos";
 import { POCOMOS_CALL_INTERACTION_TYPE } from "@/lib/pocomos/interactionTypes";
 import {
   buildPocomosSummary,
+  campaignForFolder,
   isWellnessContact,
   parseWebhook,
   type PBCallDonePayload,
@@ -153,15 +154,17 @@ async function processWellnessCall(parsed: ParsedWebhook, raw: unknown): Promise
   //    full call history on the account is the existing §5.4 behavior.
   let noteWritten = false;
   try {
-    const summary =
-      parsed.pocomosSummary ||
-      buildPocomosSummary({
-        disposition: parsed.disposition,
-        duration: parsed.duration,
-        csrName: parsed.csrName,
-        noteBody: "",
-        recordingUrl: parsed.recordingUrl,
-      });
+    // Rebuild unconditionally with the Wellness campaign label — the parser's
+    // folder-derived label can miss (payload without `folder`), and the
+    // loop-guard case leaves pocomosSummary empty while the call still counts.
+    const summary = buildPocomosSummary({
+      campaign: "Wellness",
+      disposition: parsed.disposition,
+      duration: parsed.duration,
+      csrName: parsed.csrName,
+      noteBody: parsed.noteBody,
+      emailSent: parsed.emailSent,
+    });
     await writeCustomerNote(parsed.pocomosId, summary, "Wellness Call");
     noteWritten = true;
   } catch (e) {
@@ -207,11 +210,14 @@ async function processNoteWrite(payload: PBCallDonePayload): Promise<void> {
     if (parsed.skipReason?.startsWith("no Customer ID")) {
       parsed.skipReason = null;
       parsed.pocomosSummary = buildPocomosSummary({
+        // Payload had no folder either (or we'd have a campaign match) — derive
+        // the campaign from the folder OUR cache last saw the contact in.
+        campaign: campaignForFolder(tracked.folder_id),
         disposition: parsed.disposition,
         duration: parsed.duration,
         csrName: parsed.csrName,
         noteBody: parsed.noteBody,
-        recordingUrl: parsed.recordingUrl,
+        emailSent: parsed.emailSent,
       });
     }
   }

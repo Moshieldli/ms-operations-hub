@@ -150,3 +150,34 @@ no error. Queue now 1,112 / Called 1.
 the Queue so the CSR can re-dial HER as the fresh end-to-end test of the live PB→webhook trigger.
 The other 1,111 contacts are expected to work: the bug was parser-level (identical for everyone),
 contact data is verified good, and detection now has three independent paths.
+
+**Re-test PASSED (same morning):** webhook_log 297 (Ohavia re-dial 10:01 ET) + 298 (Rivka 10:14 ET)
+both processed clean off live dials — guard rows, Queue→Called moves, notes written. Live
+PB→webhook trigger proven end-to-end. Team clear to dial.
+
+## Note-format redesign (rev 52, same day — ops requirements + 2 bugs)
+
+**New format** (`buildPocomosSummary`): `{Campaign} call — {disposition}` (campaign from the dialed
+folder via `campaignForFolder`: Wellness / Lead / Win-back / PhoneBurner) · optional `Email sent:
+{name}` (best-effort `extractEmailSent` over `call_notes[]` + `events.last_event`; no real email
+payload captured yet — line skipped when undetectable) · `{CSR} · {duration}s` · optional
+`Notes: {text}` (auto-disposition text still filtered; `Notes: (none)` gone).
+
+**Bug 1 — loop guard:** verified live: Pocomos stores 📞 as literal `?` (`? PhoneBurner Call — …`),
+so the old `startsWith("📞 …")` read-back dedup NEVER matched — silently broken since launch. New
+shared emoji-free `PB_NOTE_GUARD` regex matches the new first line AND all stored legacy forms
+(`📞`/`?`/bare, em/en/hyphen dashes), wired into BOTH sides (writer + `notes.ts::classifySource`
+→ leadSync + notesRefresh). 12/12 guard-matrix cases pass, including real stored text.
+
+**Bug 2 — recording URL:** verified the stored URLs from all 4 real calls — short private form AND
+the intact 245-char public form ALL 404 (public redirects to S3, no object; PB fills the fields
+even on unconnected VM drops). Dropped the recording line from the note entirely (recording lives
+in PB call history when it exists).
+
+**Backwards compat:** historical `webhook_log.raw_payload` rows replay through `parseWebhook` into
+the new format — backfill-ready with no shim (BACKLOG item added).
+
+**Verified:** new note rendered from Rivka's REAL stored payload (log 298):
+`Wellness call — Left Message` ⏎ `Ohavia Feldman · 14s`. Live replay of that payload against the
+production webhook wrote the new-format note to her record (all-notes report readback confirms),
+duplicate-guard no-op on wellness_calls as designed.

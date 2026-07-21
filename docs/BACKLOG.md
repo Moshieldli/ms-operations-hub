@@ -1,6 +1,15 @@
 # Backlog — MS Operations Hub
 
 ## Ready to build (unblocked)
+- [ ] **Historical webhook-notes backfill** (unlocked by rev 52): the 294+ stored
+      `webhook_log.raw_payload` rows never produced Pocomos notes (the §4 top-level-fields bug).
+      They replay cleanly through `parseWebhook` into the NEW note format — a one-off script can
+      backfill call notes onto lead/customer records (dedupe on webhook_log id; skip rows whose
+      contact no longer resolves). Decide with ops whether year-old call notes are wanted first.
+- [ ] **Capture a real one-touch-email `api_calldone` payload**: `extractEmailSent` (rev 52) is
+      unproven against a live email send — have a CSR send one from PB, then check the stored
+      payload (`events.last_event` / `call_notes`) and tighten the pattern + template-name
+      extraction if needed.
 - [ ] Cancelled – This Year (by deactivation date) + cancelled-by-reason — needs the per-customer
       deactivation scrape job (date+reason are scrape-only; sales_status scrapeable from
       service-information). See REFERENCE §9 #6.

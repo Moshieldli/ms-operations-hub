@@ -1,19 +1,23 @@
 import { getJson, pocomosOffice } from "./client";
 import { getSessionedHtml } from "./webSession";
+import { isPbOriginatedNote } from "@/lib/sync/webhookProcessor";
 
 export interface PocomosNote {
   /** ISO date `YYYY-MM-DD`. Empty string when unparseable. */
   date: string;
   /** The note body text. */
   summary: string;
-  /** Where the note originated. `pb` is detected via the `📞 PhoneBurner Call —` prefix. */
+  /**
+   * Where the note originated. `pb` is detected via `isPbOriginatedNote` —
+   * a regex over the campaign-call first line AND every stored legacy form.
+   * ⚠️ Pocomos stores the old 📞 prefix as "?" (verified 2026-07-21), so the
+   * previous exact `startsWith("📞 …")` test never matched real read-backs.
+   */
   source: "pocomos" | "pb";
 }
 
-const PB_NOTE_PREFIX = "📞 PhoneBurner Call —";
-
 function classifySource(summary: string): "pocomos" | "pb" {
-  return summary.startsWith(PB_NOTE_PREFIX) ? "pb" : "pocomos";
+  return isPbOriginatedNote(summary) ? "pb" : "pocomos";
 }
 
 function isoDate(input: string | number | Date | null | undefined): string {
@@ -264,4 +268,4 @@ export function formatNotesForPhoneBurner(
   return lines.join("\n");
 }
 
-export { PB_NOTE_PREFIX };
+export { isPbOriginatedNote };

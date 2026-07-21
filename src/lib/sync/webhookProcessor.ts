@@ -65,11 +65,67 @@ export interface PBCallDonePayload {
   custom_fields?: Record<string, unknown> | false;
   /** The folder the dial session ran from, e.g. {id:"66255089", name:"Wellness — Queue 2026"}. */
   folder?: { id?: string | number; name?: string };
+  /** THIS call's note strings, e.g. ["(516) 351-6036 -- Left Message."]. */
+  call_notes?: string[];
+  /** Dial-session events; shape unconfirmed beyond null (no email example captured yet). */
+  events?: { last_event?: unknown; next_event?: unknown };
   // Allow extra fields without flagging — PB sends a lot we don't use.
   [k: string]: unknown;
 }
 
+import { FOLDERS } from "@/lib/phoneburner/folders";
+
+/** Legacy write prefix (pre-2026-07-21). Kept ONLY for guard back-compat. */
 const POCOMOS_NOTE_PREFIX = "📞 PhoneBurner Call —";
+
+/**
+ * Loop-guard matcher for PB-originated Pocomos notes (2026-07-21 redesign).
+ *
+ * ⚠️ Pocomos STRIPS the 📞 emoji and stores a literal "?" (verified on the
+ * live notes 2026-07-21), so the old exact-prefix test `startsWith("📞
+ * PhoneBurner Call —")` NEVER matched what Pocomos actually returns — the
+ * read-back filter was silently broken. The guard is now an emoji-free regex
+ * matching the NEW campaign-style first line ("Wellness call — X" / "Lead
+ * call — X" / "Win-back call — X" / "PhoneBurner call — X") AND every stored
+ * form of the legacy prefix ("📞 PhoneBurner Call —" as written, "? PhoneBurner
+ * Call —" as Pocomos stores it, bare "PhoneBurner Call —"). The em-dash
+ * survives the Pocomos round-trip (verified), but "-"/"–" are tolerated too.
+ */
+export const PB_NOTE_GUARD = /^(?:📞\s*|\?\s*)?(?:wellness|lead|win-?back|phoneburner)\s+call\s*[—–-]/i;
+
+/** True when a Pocomos note summary originated from a PhoneBurner call write. */
+export function isPbOriginatedNote(summary: string | null | undefined): boolean {
+  return PB_NOTE_GUARD.test((summary ?? "").trim());
+}
+
+/**
+ * Campaign label for the note's first line, derived from the folder the dial
+ * session ran from: wellness folders → "Wellness", lead folders → "Lead",
+ * cancelled buckets → "Win-back", anything else/unknown → "PhoneBurner".
+ */
+export function campaignForFolder(folderId: string | number | null | undefined): string {
+  const id = folderId != null ? String(folderId) : "";
+  if (id === FOLDERS.WELLNESS_QUEUE || id === FOLDERS.WELLNESS_CALLED) return "Wellness";
+  if (
+    id === FOLDERS.LEADS_FRESH ||
+    id === FOLDERS.LEADS_GENERAL ||
+    id === FOLDERS.LEADS_COMPETITOR ||
+    id === FOLDERS.LEADS_FINANCIAL ||
+    id === FOLDERS.FOLLOW_UP
+  ) {
+    return "Lead";
+  }
+  if (
+    id === FOLDERS.CANCELLED_COMPETITOR ||
+    id === FOLDERS.CANCELLED_FINANCIAL ||
+    id === FOLDERS.CANCELLED_RESULTS ||
+    id === FOLDERS.CANCELLED_NO_REACH ||
+    id === FOLDERS.CANCELLED_PERSONAL
+  ) {
+    return "Win-back";
+  }
+  return "PhoneBurner";
+}
 
 export interface ParsedWebhook {
   pbContactId: string;
@@ -77,6 +133,11 @@ export interface ParsedWebhook {
   disposition: string;
   duration: string;
   csrName: string;
+  /** Campaign label from the dialed folder ("Wellness"/"Lead"/"Win-back"/"PhoneBurner"). */
+  campaign: string;
+  /** One-touch email name/subject when detectable; "" = email detected but unnamed; null = none. */
+  emailSent: string | null;
+  /** Kept for telemetry only — NOT written to notes (all payload recording URLs 404, 2026-07-21). */
   recordingUrl: string;
   /** The most recent entry's body, after stripping PB's date/phone prefix. Empty when no real note. */
   noteBody: string;
@@ -229,27 +290,74 @@ export function extractPbContactId(payload: PBCallDonePayload): string {
 }
 
 /**
- * Build the Pocomos `summary` string from a parsed payload. Format is the
- * one mandated by §5.4 of REFERENCE.md and is the prefix-loop-guard the
- * Pocomos→PhoneBurner direction looks for ("📞 PhoneBurner Call —"), so
- * don't change the leading line casually.
+ * Detect a one-touch email sent along with the disposition. Best-effort
+ * (2026-07-21): the captured payloads with NO email show `events.last_event:
+ * null` and `call_notes` holding only auto disposition text, so detection scans
+ * both for an "email … sent" marker and extracts the trailing name/subject.
+ * Returns the name ("" when an email is detected but unnamed), or null when no
+ * email evidence exists — the note line is skipped entirely then.
+ */
+export function extractEmailSent(payload: PBCallDonePayload): string | null {
+  const candidates: string[] = [];
+  if (Array.isArray(payload.call_notes)) {
+    for (const n of payload.call_notes) if (typeof n === "string") candidates.push(n);
+  }
+  const ev = payload.events?.last_event;
+  if (ev && typeof ev === "object") {
+    const o = ev as Record<string, unknown>;
+    const name = o.name ?? o.title ?? o.type ?? o.event;
+    if (name != null) candidates.push(String(name));
+  } else if (typeof ev === "string") {
+    candidates.push(ev);
+  }
+  for (const raw of candidates) {
+    const line = raw.replace(PHONE_PREFIX, "").trim();
+    if (!/email/i.test(line)) continue;
+    const m =
+      line.match(/email\s+sent\s*[:—–-]?\s*(.*)$/i) ??
+      line.match(/sent\s+(?:the\s+)?email\s*[:—–-]?\s*(.*)$/i) ??
+      line.match(/^(.*?)\s+email\s+sent\.?$/i);
+    if (m) return (m[1] ?? "").replace(/[.\s]+$/, "").trim();
+  }
+  return null;
+}
+
+/**
+ * Build the Pocomos `summary` string from a parsed payload — the SIMPLE format
+ * (ops redesign 2026-07-21):
+ *
+ *   {Campaign} call — {disposition}
+ *   Email sent: {name}          ← only when an email went out with the disposition
+ *   {CSR} · {duration}s
+ *   Notes: {text}               ← only when the CSR actually typed something
+ *
+ * NO recording line: every recording URL in the captured payloads (short
+ * private AND long "public" form) 404s even when fetched intact, and the long
+ * form additionally wraps/breaks in the Pocomos note display — the recording
+ * lives in PB call history when it exists. "Notes: (none)" is gone by design.
+ *
+ * The first line IS the loop guard (`PB_NOTE_GUARD` / `isPbOriginatedNote`) —
+ * emoji-free on purpose, because Pocomos stores 📞 as "?". Change it only
+ * together with the guard.
  */
 export function buildPocomosSummary(input: {
+  campaign?: string;
   disposition: string;
   duration: string;
   csrName: string;
   noteBody: string;
-  recordingUrl: string;
+  emailSent?: string | null;
 }): string {
   const csr = input.csrName || "(unknown)";
-  const noteText = input.noteBody && input.noteBody.trim() ? input.noteBody.trim() : "(none)";
-  const recording = input.recordingUrl || "(none)";
-  return [
-    `${POCOMOS_NOTE_PREFIX} ${input.disposition}`,
-    `Duration: ${input.duration}s · CSR: ${csr}`,
-    `Notes: ${noteText}`,
-    `Recording: ${recording}`,
-  ].join("\n");
+  const lines = [`${input.campaign || "PhoneBurner"} call — ${input.disposition}`];
+  if (input.emailSent != null) {
+    lines.push(input.emailSent ? `Email sent: ${input.emailSent}` : "Email sent");
+  }
+  lines.push(`${csr} · ${input.duration}s`);
+  if (input.noteBody && input.noteBody.trim()) {
+    lines.push(`Notes: ${input.noteBody.trim()}`);
+  }
+  return lines.join("\n");
 }
 
 /**
@@ -264,6 +372,8 @@ export function parseWebhook(payload: PBCallDonePayload): ParsedWebhook {
   const duration = extractDuration(payload);
   const csrName = extractCsrName(payload);
   const recordingUrl = extractRecordingUrl(payload);
+  const campaign = campaignForFolder(payload.folder?.id ?? payload.contact?.category?.category_id);
+  const emailSent = extractEmailSent(payload);
 
   const latest = parseLatestNoteEntry(payload.contact?.notes);
   const rawBody = latest?.body ?? "";
@@ -280,7 +390,7 @@ export function parseWebhook(payload: PBCallDonePayload): ParsedWebhook {
 
   const pocomosSummary = skipReason
     ? ""
-    : buildPocomosSummary({ disposition, duration, csrName, noteBody, recordingUrl });
+    : buildPocomosSummary({ campaign, disposition, duration, csrName, noteBody, emailSent });
 
   return {
     pbContactId,
@@ -288,6 +398,8 @@ export function parseWebhook(payload: PBCallDonePayload): ParsedWebhook {
     disposition,
     duration,
     csrName,
+    campaign,
+    emailSent,
     recordingUrl,
     noteBody,
     noteIsAutoDisposition: isAuto,
