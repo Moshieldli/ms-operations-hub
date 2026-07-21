@@ -104,9 +104,15 @@ random 20-row bi-weekly sample (the sprays-desc top-20 is all weekly customers).
 Rivka Leyton (1163970) is also in the list (staff-as-customer, like Ohavia who was deliberately
 kept) — awaiting a keep/exclude call before the live fill.
 
-## Rollout — remaining steps (on your go)
+## GO-LIVE (same day — Rivka approved the list; Rivka Leyton deliberately kept)
 
-1. Rivka eyeballs the would-push list (`run-wellness-feed.ts`, dry).
-2. `run-wellness-feed.ts --live` for the initial fill (or flip the cron and wait for 07:00).
-3. Flip the vercel.json cron path `/api/cron/wellness-feed?dryRun=1` → bare path; push.
-4. One more conversion-sweep dry-run check; controlled first-dial smoke test; Rena starts dialing.
+- **Initial fill:** `run-wellness-feed.ts --live` → **pushed 1,113 / 1,113, 0 errors**, 461s.
+  Exclusions as reviewed: 9 paused-balance · 1 staff (Brittany) · 2 no-phone · 12 phone dupes.
+- **PB verification:** folder walk found 1,112 + the 1 "missing" contact verified IN the Queue by
+  direct GET (Anna Riesenberg, pb 1295574535, category 66255089) — all 1,113 exist; the folder
+  list index lagged by one at check time. Called folder: 0, as expected.
+- **Cron flipped live:** vercel.json path `?dryRun=1` → bare `/api/cron/wellness-feed`; the 07:00
+  daily auto-refill now pushes for real.
+- **Final sweep check:** dry run AFTER the fill — 4,249 scanned across exactly the 9 policed
+  folders, wellness folders never walked, **0 would-moves**, 0 errors.
+- Nothing was dialed or triggered beyond adding contacts; first call is the CSR's manual test.

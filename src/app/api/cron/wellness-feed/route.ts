@@ -15,9 +15,9 @@ export const maxDuration = 300;
  * Auth: when CRON_SECRET is set, requires `Authorization: Bearer $CRON_SECRET`.
  * Pass `?dryRun=1` to compute counts + the would-push list with NO writes.
  *
- * ROLLOUT GATE: until ops gives the live-fill go, the vercel.json cron entry
- * points at `?dryRun=1` (daily logged counts, zero writes). Going live = drop
- * the param from the cron path. See BACKLOG "Wellness live fill — GO/NO-GO".
+ * LIVE since 2026-07-21 (ops go after Rivka approved the list): the cron path
+ * is the bare route, so the 07:00 run pushes new qualifiers for real. The
+ * initial fill was scripts/run-wellness-feed.ts --live the same day.
  */
 export async function GET(request: Request) {
   const expected = process.env.CRON_SECRET;
