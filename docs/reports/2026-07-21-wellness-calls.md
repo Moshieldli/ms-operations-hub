@@ -116,3 +116,37 @@ kept) — awaiting a keep/exclude call before the live fill.
 - **Final sweep check:** dry run AFTER the fill — 4,249 scanned across exactly the 9 policed
   folders, wellness folders never walked, **0 would-moves**, 0 errors.
 - Nothing was dialed or triggered beyond adding contacts; first call is the CSR's manual test.
+
+## Post-go-live: first-dial test FAILED → root cause found + fixed (same day)
+
+Two CSR test dials (Ohavia 1163370 ~8:51 ET, Leon 1163371 ~9:10 ET) logged dispositions in PB but
+produced NO fall-out. Diagnosis:
+
+1. Both `api_calldone` events ARRIVED (webhook_log 294/295) — error `no Customer ID`.
+2. **Root cause: PB's real payload carries `typed_custom_fields`, `custom_fields`, and `folder`
+   at the TOP LEVEL — `contact.typed_custom_fields` does not exist on the wire.** The parser read
+   only `contact.*` → Customer ID always empty → wellness branch never gated in. NOT an
+   old-contact edge case: **all 1,113 would have failed identically.** Same bug explains rev 20's
+   "pocomos_id NULL on all 293 webhook rows" — the webhook→Pocomos note write has been silently
+   dead since launch.
+3. The contacts themselves were fine: PB had MERGED the fill's creates into pre-existing Apr-15
+   contacts by phone (returning the old ids — which the fill correctly stored), and the merged
+   contacts carry category=Queue + all three custom fields (REST-verified).
+
+**Fix (182fc43):** extraction reads top-level `typed_custom_fields`/`custom_fields` (contact-level
+kept as fallback); wellness detection uses the payload's top-level `folder.id` (+ category +
+Hub Source + our own cache row's folder); NEW DB bridge `pb_contact_id → phoneburner_contacts →
+pocomos_id` resolves field-less payloads (internal id → direct note write, no resolve step) — the
+webhook now survives payload-shape drift.
+
+**Verification:** replayed both REAL stored payloads through the fixed parser — both extract
+`pocomosId` + `wellness=true`. Then replayed Leon's payload (log 295) through the PRODUCTION
+webhook: `wellness_calls` row created (Left Message, CSR captured) · contact moved to Called
+(66255090, REST-verified) · Pocomos note confirmed in the all-notes report ("📞 PhoneBurner Call —
+Left Message · 36s · CSR Ohavia Feldman" + recording link) · webhook_log 296 `note_written=true`,
+no error. Queue now 1,112 / Called 1.
+
+**Re-test:** Ohavia's call was deliberately NOT replayed — her contact (pb 1275424935) remains in
+the Queue so the CSR can re-dial HER as the fresh end-to-end test of the live PB→webhook trigger.
+The other 1,111 contacts are expected to work: the bug was parser-level (identical for everyone),
+contact data is verified good, and detection now has three independent paths.

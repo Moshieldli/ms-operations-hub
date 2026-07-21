@@ -497,14 +497,17 @@ POST /api/phoneburner/webhook?secret={WEBHOOK_SECRET}
 
 Setup in PhoneBurner UI: Settings → API Webhooks → Add Webhook → Event `api_calldone`, URL above.
 
-**Payload fields we use** (verified against the real Call End example payload — see §9 item 3 and `src/lib/sync/webhookProcessor.ts`):
+**Payload fields we use** (⚠️ RE-verified against LIVE payloads 2026-07-21 — the earlier "verified" map was WRONG about where custom fields live, and that error silently killed every webhook note write since launch; see the landmine below):
 - `status` (the disposition: Booked, Left VM, No Answer, Not Interested, etc.) — NOT `disposition`
 - `duration` (seconds, number or string)
 - `recording_url_public` (preferred) / `recording_url` (fallback) — NOT `call_recording_url`
 - `agent.first_name` + `agent.last_name` (some payloads also send `agent.name`) — NOT `csr_name`
 - `contact.user_id` — the PhoneBurner contact ID
-- `contact.typed_custom_fields[]` — array of `{type, name, value}`; we look for `name === "Customer ID"` to find the Pocomos record
+- **`typed_custom_fields[]` at the PAYLOAD TOP LEVEL** — array of `{type, name, value}`; we look for `name === "Customer ID"`. A flat top-level `custom_fields` object also exists (and is the literal boolean `false` when empty). **`contact.typed_custom_fields` does NOT exist on the wire.**
+- **`folder` at the top level** — `{id, name}` of the folder the dial session ran from (drives wellness-queue detection, §5.21)
 - `contact.notes` — FULL newline-separated history; `parseLatestNoteEntry` extracts the latest entry (PB prepends, so the first line that matches the date-header regex is newest)
+
+> **⚠️ LANDMINE (found 2026-07-21, fixed same day):** the processor originally read `contact.typed_custom_fields` per the old map above. On the real wire those fields are TOP-LEVEL, so `extractCustomerId` always returned empty, every webhook logged `no Customer ID` and **no Pocomos note was ever written by the webhook** — this is the real cause of rev 20's "webhook_log.pocomos_id is NULL on all 293 rows" finding. The fix reads top-level `typed_custom_fields`/`custom_fields` (contact-level kept as fallback) and adds a **DB bridge**: an unresolved payload falls back to `pb_contact_id → phoneburner_contacts → pocomos_id` (internal id → note written directly, no resolve step), so the flow now survives future PB payload-shape drift.
 
 ### PhoneBurner gotchas
 
