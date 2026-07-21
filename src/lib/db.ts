@@ -510,6 +510,10 @@ export async function initSchema(): Promise<void> {
   // Defensive: the column was added after the table; cover environments
   // where the table predates this migration.
   await c`ALTER TABLE webhook_log ADD COLUMN IF NOT EXISTS pb_contact_id TEXT`;
+  // Replay/duplicate gate (2026-07-21): the webhook hard-skips a note write
+  // when a row with the same PB call_id already wrote one. Expression index
+  // keeps that check cheap as the log grows.
+  await c`CREATE INDEX IF NOT EXISTS webhook_log_call_id_idx ON webhook_log ((raw_payload->>'call_id'))`;
 
   schemaInitialized = true;
 }

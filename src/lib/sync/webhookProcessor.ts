@@ -155,32 +155,50 @@ const PHONE_PREFIX = /^\(?\d{3}\)?\s*\d{3}-?\d{4}\s*--\s*/;
 /**
  * Each entry in `contact.notes` looks like:
  *   "-- 08/17/2021 @ 10:59 AM EDT -- (615) 265-0077 -- Voicemail Apt Setters sent."
- *   "-- 03/19/2021 @ 11:52 AM -- Email sent: (615) 265-0077, no one answered..."
- * Sometimes timezone is present, sometimes the phone segment is present, sometimes not.
- * The body is whatever follows the last `-- ` after the date/time header.
+ *   "-- 07/21/2026 @ 8:52 AM EDT by Ohavia Feldman -- Email sent: Are we living up…"
+ * Sometimes timezone is present, sometimes the phone segment is present, and the
+ * CURRENT wire format inserts "by {agent name}" before the closing "--" (found
+ * 2026-07-21 — the old regex didn't consume it, so entry parsing silently
+ * failed on every modern payload). The body is whatever follows the closing
+ * `-- ` after the date/time[/author] header.
  */
-const ENTRY_HEADER = /^--\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s+@\s+\d{1,2}:\d{2}\s*(?:AM|PM)?\s*[A-Z]{0,4}\s*--\s*/i;
+const ENTRY_HEADER = /^--\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s+@\s+(\d{1,2}):(\d{2})\s*(AM|PM)?\s*[A-Z]{0,4}\s*(?:by\s+[^\n]*?)?--\s*/i;
+
+export interface NoteEntry {
+  /** "MM/DD/YYYY" as printed. */
+  date: string;
+  /** Minutes-of-day (0-1439) parsed from the "h:mm AM/PM" header segment. */
+  minutes: number;
+  /** Entry body after the header + optional phone segment. */
+  body: string;
+}
+
+/** Parse EVERY header-bearing entry out of a PB `notes` history string. */
+export function parseNoteEntries(notesField: string | undefined | null): NoteEntry[] {
+  if (!notesField) return [];
+  const out: NoteEntry[] = [];
+  for (const raw of notesField.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line.startsWith("--")) continue;
+    const m = line.match(ENTRY_HEADER);
+    if (!m) continue; // continuation line of a multi-line body
+    let hours = parseInt(m[2], 10) % 12;
+    if ((m[4] ?? "").toUpperCase() === "PM") hours += 12;
+    out.push({
+      date: m[1],
+      minutes: hours * 60 + parseInt(m[3], 10),
+      body: line.slice(m[0].length).replace(PHONE_PREFIX, "").trim(),
+    });
+  }
+  return out;
+}
 
 export function parseLatestNoteEntry(notesField: string | undefined | null): {
   date: string;
   body: string;
 } | null {
-  if (!notesField) return null;
-  // Entries are newline-separated. Find the first one that starts with "--".
-  const lines = notesField.split(/\r?\n/);
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line.startsWith("--")) continue;
-    const m = line.match(ENTRY_HEADER);
-    if (!m) {
-      // Falls through to next line — this one looks like a continuation.
-      continue;
-    }
-    const date = m[1];
-    const tail = line.slice(m[0].length).replace(PHONE_PREFIX, "").trim();
-    return { date, body: tail };
-  }
-  return null;
+  const first = parseNoteEntries(notesField)[0];
+  return first ? { date: first.date, body: first.body } : null;
 }
 
 /**
@@ -201,6 +219,9 @@ const PB_AUTO_PATTERNS = [
   /^not\s*interested/i,
   /^wrong\s*number/i,
   /^bad\s*number/i,
+  // PB auto-logs one-touch sends as notes entries — never CSR-typed text.
+  // (The send itself surfaces as the note's own "Email sent:" line instead.)
+  /^email\s+sent/i,
 ];
 
 export function isAutoDispositionNote(body: string, disposition: string): boolean {
@@ -289,35 +310,58 @@ export function extractPbContactId(payload: PBCallDonePayload): string {
   return v != null ? String(v) : "";
 }
 
+/** Same-call tolerance for the email timestamp guard, in minutes. */
+const EMAIL_CLUSTER_TOLERANCE_MIN = 3;
+
+const EMAIL_SENT_PATTERNS = [
+  /email\s+sent\s*[:—–-]?\s*(.*)$/i,
+  /sent\s+(?:the\s+)?(?:one-?touch\s+)?email\s*[:—–-]?\s*(.*)$/i,
+];
+
 /**
- * Detect a one-touch email sent along with the disposition. Best-effort
- * (2026-07-21): the captured payloads with NO email show `events.last_event:
- * null` and `call_notes` holding only auto disposition text, so detection scans
- * both for an "email … sent" marker and extracts the trailing name/subject.
- * Returns the name ("" when an email is detected but unnamed), or null when no
- * email evidence exists — the note line is skipped entirely then.
+ * Detect a one-touch email sent WITH THIS CALL's disposition (proven against
+ * live payloads 2026-07-21): PB records it as a contact-notes entry — "-- {ts}
+ * by {agent} -- Email sent: {subject}" — timestamped at the call, INSIDE the
+ * same `api_calldone` payload (`contact.notes`), NOT in `events.last_event` /
+ * `call_notes`.
+ *
+ * TIMESTAMP GUARD: an "Email sent" entry from a PREVIOUS call stays in the
+ * history forever (verified: Ohavia's 10:01 re-dial payload still carries her
+ * 8:52 email entry), so only entries in the NEWEST same-day entry cluster
+ * (within EMAIL_CLUSTER_TOLERANCE_MIN of the newest entry's header time) count.
+ * Header times are compared to each other — never to `start_time`/`end_time`,
+ * which PB stamps in a DIFFERENT timezone (CT) than the note headers (ET).
+ *
+ * Returns the subject ("" when an email is detected but unnamed), or null when
+ * no same-call email evidence exists — the note line is skipped then.
  */
 export function extractEmailSent(payload: PBCallDonePayload): string | null {
-  const candidates: string[] = [];
+  const entries = parseNoteEntries(payload.contact?.notes);
+  if (entries.length) {
+    const newest = entries.reduce((a, b) => {
+      const [am, ad] = [a.minutes, Date.parse(a.date)];
+      const [bm, bd] = [b.minutes, Date.parse(b.date)];
+      return bd > ad || (bd === ad && bm > am) ? b : a;
+    });
+    for (const e of entries) {
+      if (e.date !== newest.date) continue;
+      if (newest.minutes - e.minutes > EMAIL_CLUSTER_TOLERANCE_MIN) continue;
+      for (const p of EMAIL_SENT_PATTERNS) {
+        const m = e.body.match(p);
+        if (m) return (m[1] ?? "").trim();
+      }
+    }
+  }
+  // Secondary: this-call note strings (no email example seen here yet, kept cheap).
   if (Array.isArray(payload.call_notes)) {
-    for (const n of payload.call_notes) if (typeof n === "string") candidates.push(n);
-  }
-  const ev = payload.events?.last_event;
-  if (ev && typeof ev === "object") {
-    const o = ev as Record<string, unknown>;
-    const name = o.name ?? o.title ?? o.type ?? o.event;
-    if (name != null) candidates.push(String(name));
-  } else if (typeof ev === "string") {
-    candidates.push(ev);
-  }
-  for (const raw of candidates) {
-    const line = raw.replace(PHONE_PREFIX, "").trim();
-    if (!/email/i.test(line)) continue;
-    const m =
-      line.match(/email\s+sent\s*[:—–-]?\s*(.*)$/i) ??
-      line.match(/sent\s+(?:the\s+)?email\s*[:—–-]?\s*(.*)$/i) ??
-      line.match(/^(.*?)\s+email\s+sent\.?$/i);
-    if (m) return (m[1] ?? "").replace(/[.\s]+$/, "").trim();
+    for (const raw of payload.call_notes) {
+      if (typeof raw !== "string") continue;
+      const line = raw.replace(PHONE_PREFIX, "").trim();
+      for (const p of EMAIL_SENT_PATTERNS) {
+        const m = line.match(p);
+        if (m) return (m[1] ?? "").trim();
+      }
+    }
   }
   return null;
 }
@@ -377,7 +421,9 @@ export function parseWebhook(payload: PBCallDonePayload): ParsedWebhook {
 
   const latest = parseLatestNoteEntry(payload.contact?.notes);
   const rawBody = latest?.body ?? "";
-  const isAuto = isAutoDispositionNote(rawBody, disposition);
+  // Auto text and our OWN round-tripped notes (feeder blurbs / prior call
+  // notes start with a campaign-call guard line) are never CSR-typed.
+  const isAuto = isAutoDispositionNote(rawBody, disposition) || isPbOriginatedNote(rawBody);
   const noteBody = isAuto ? "" : rawBody;
 
   // Loop guard A: skip when the latest entry was itself a Pocomos note we already wrote.

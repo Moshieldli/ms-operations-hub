@@ -193,6 +193,33 @@ async function processWellnessCall(parsed: ParsedWebhook, raw: unknown): Promise
 async function processNoteWrite(payload: PBCallDonePayload): Promise<void> {
   await initSchema();
   const parsed = parseWebhook(payload);
+
+  // REPLAY / RETRY GATE (2026-07-21): a webhook_log row with the same PB
+  // call_id that ALREADY wrote a note means this event was fully processed —
+  // a replay (manual or PB retry) must never double-write the Pocomos note
+  // (found live: Rivka's record got the same call twice). Hard skip: the
+  // wellness guard/move are idempotent anyway, so nothing else is lost.
+  const callId = payload.call_id != null ? String(payload.call_id) : "";
+  if (callId) {
+    const dup = (await sql`
+      SELECT 1 FROM webhook_log
+       WHERE raw_payload->>'call_id' = ${callId} AND note_written = TRUE
+       LIMIT 1
+    `) as unknown[];
+    if (dup.length) {
+      console.warn(
+        JSON.stringify({ event: "webhook.duplicate_call", call_id: callId, pb_contact_id: parsed.pbContactId })
+      );
+      await logWebhook({
+        parsed,
+        noteWritten: false,
+        error: `duplicate call_id ${callId} — note already written (replay guard)`,
+        raw: payload,
+      });
+      return;
+    }
+  }
+
   const tracked = await lookupTrackedContact(parsed.pbContactId);
 
   // DB-bridge fallback (2026-07-21): if the payload carried no Customer ID
