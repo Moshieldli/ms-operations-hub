@@ -44,6 +44,7 @@ const links: NavLink[] = [
     children: [
       { href: "/service/overdue", label: "Overdue sprays" },
       { href: "/service/resprays", label: "Respray performance" },
+      { href: "/service/board", label: "Route board" },
     ],
   },
   { href: "/finance", label: "Finance" },

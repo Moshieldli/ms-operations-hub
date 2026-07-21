@@ -119,6 +119,11 @@
       wired and dormant). Until then those boards run off Pocomos + the DAYCODES snapshot.
 
 ## Done (recent)
+- [x] **/tv/board v2 tech-first + /service/board + compliments (rev 50, 2026-07-20)** — Master Routing
+      CALENDAR now primary (tech-first rows, Pocomos fallback), ant/electric-blower markers, legend,
+      editable announcements, new-customer box, day notes. New /service/board browser mirror + shout-out
+      form + management. Compliments: roster from Technician sheet col A only (8 techs), nightly cron,
+      7-day shout-outs panel on both boards, soft-delete. Yodeck-safe, verified live. See §5.19/§5.20.
 - [x] **Feedback bubble upgrades + CALENDAR overlay (rev 49, 2026-07-20)** — Take-screenshot
       (html2canvas) with an arrows/boxes/freehand markup step; name required + remembered in
       localStorage; /requests by-submitter filter + per-person counts. Master Routing sheet shared →

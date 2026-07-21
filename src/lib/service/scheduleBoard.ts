@@ -1,63 +1,61 @@
 /**
- * Schedule board data (rev 45) — the `/tv/board` digital route schedule.
+ * Schedule board data (rev 50) — the `/tv/board` + `/service/board` route board.
  *
- * Built from what POCOMOS provides now, per the ops instruction (the Master
- * Routing sheet's live read is dormant until the Drive/Sheets APIs are enabled):
- *   - `mosquito_service_status` — each customer's `next_service_date` +
- *     `route_code` (== the sheet's daycode). Grouped per day, per route, this IS
- *     the live schedule Pocomos knows: which routes run each day and how many
- *     stops.
- *   - `routeTowns.ts` — the DAYCODES → towns/area snapshot from the sheet.
- *   - Open-Meteo forecast — the weather strip (shared with /tv/techs).
- *   - The `NT - Electric Blower Only` customer tag — read live from the dataset.
+ * PRIMARY SOURCE is the "2026 Master Routing List" CALENDAR (tech-first rows,
+ * like the physical board): per day, one row per tech — NAME | DayCode | Van/Loc
+ * # | Towns | # Stops. POCOMOS is SECONDARY: it supplies the electric-blower
+ * marker (which scheduled customers on a route carry `NT - Electric Blower Only`)
+ * and a Pocomos-derived fallback for days the sheet hasn't filled yet.
+ * Open-Meteo drives the weather strip + the ANT dry-day rain caution.
  *
- * WHEN THE SHEET IS ENABLED, `masterRouting.ts` overlays the per-day TECH names
- * and the ANT-day assignments onto each route; until then techs show blank and
- * ANT markers are dormant. Everything degrades gracefully.
- *
- * v1 is DISPLAY-ONLY. No writes anywhere.
+ * DISPLAY-ONLY. No writes to Pocomos or the sheet.
  */
 import { sql } from "@/lib/db";
 import { getForecast, type ForecastDay } from "@/lib/weather";
 import { daycodeArea, daycodeTowns, isAntDaycode, normalizeDaycode } from "./routeTowns";
-import { getMasterRoutingSchedule } from "./masterRouting";
+import { getMasterRoutingSchedule, type SheetDay } from "./masterRouting";
 
-/** Rain if the max precip probability reaches this, for the ant dry-day check. */
+/** Precip probability (%) that counts as a wet day for the ant dry-day check. */
 const RAIN_PROB = 55;
 
-export interface RouteStop {
+/** One tech's route for a day (tech-first, from the sheet). */
+export interface BoardRoute {
+  tech: string;
   daycode: string;
-  area: string;
-  towns: string[];
-  stops: number;
-  /** Tech from the sheet overlay, when available. */
-  tech: string | null;
+  van: string;
+  /** Region/towns label — the sheet's when present, else the DAYCODES snapshot. */
+  towns: string;
+  stops: number | null;
   ant: boolean;
+  /** Electric-blower customers scheduled on this route today (Pocomos). */
+  electricBlower: number;
+  /** OFF / OUT / RAIN / OFFICE DAY row — rendered as a status, not a route. */
+  off: string | null;
 }
 
 export interface BoardDay {
   date: string;
-  /** "Today" / "Mon" / … */
   label: string;
   weekday: string;
-  routes: RouteStop[];
-  totalStops: number;
+  /** Tech-first rows. Empty when the sheet hasn't scheduled this day yet. */
+  rows: BoardRoute[];
+  /** Pocomos daycode fallback (used only when `rows` is empty). */
+  fallback: Array<{ daycode: string; area: string; stops: number; electricBlower: number; ant: boolean }>;
   weather: ForecastDay | null;
-  /** Any scheduled customer that day carries the Electric-Blower tag. */
-  electricBlower: number;
-  /** Free-text note from the sheet (RAIN/sick/swap), when the sheet is read. */
   note: string | null;
-  /**
-   * True when the day has an ANT route AND rain falls within the 3-day window
-   * (service day, day+1, day+2). "Ant needs 3 dry days." Only computable with
-   * the sheet overlay (ANT assignment) + forecast reach.
-   */
+  /** Ant route today AND rain within the 3-day window (service day + 2). */
   antRainRisk: boolean;
+  fromSheet: boolean;
+}
+
+export interface Announcements {
+  thisWeek: string;
+  nextWeek: string;
 }
 
 export interface ScheduleBoard {
   days: BoardDay[];
-  /** True when the live routing sheet is feeding tech names / ANT markers. */
+  announcements: Announcements;
   sheetConnected: boolean;
   asOf: string;
   stale: boolean;
@@ -71,16 +69,14 @@ const addDays = (iso: string, n: number) => {
 const weekdayOf = (iso: string) =>
   ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(`${iso}T00:00:00Z`).getUTCDay()];
 
-/** Eastern "today" (the board runs at read time; use the same clock as overdue). */
 function easternToday(): string {
-  const now = new Date();
-  const eastern = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const eastern = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
   return `${eastern.getFullYear()}-${String(eastern.getMonth() + 1).padStart(2, "0")}-${String(
     eastern.getDate()
   ).padStart(2, "0")}`;
 }
 
-/** Today + the next 4 WORKDAYS (Sun–Fri; the crew never works Saturday). */
+/** Today + the next 4 workdays (Sun–Fri; the crew never works Saturday). */
 function workdayWindow(today: string): string[] {
   const out: string[] = [];
   let d = today;
@@ -91,79 +87,115 @@ function workdayWindow(today: string): string[] {
   return out;
 }
 
+const OFF_RE = /off|out|rain|sick|office|vac|holiday|trn|training/i;
+const isOffCode = (code: string, tech: string) =>
+  (!code && OFF_RE.test(tech)) || OFF_RE.test(code);
+
+async function getAnnouncements(): Promise<Announcements> {
+  const rows = (await sql`
+    SELECT this_week, next_week FROM board_announcements WHERE id = 1
+  `) as Array<{ this_week: string; next_week: string }>;
+  return { thisWeek: rows[0]?.this_week ?? "", nextWeek: rows[0]?.next_week ?? "" };
+}
+
 export async function getScheduleBoard(): Promise<ScheduleBoard> {
   const today = easternToday();
   const window = workdayWindow(today);
   const last = window[window.length - 1];
 
-  // 1. Scheduled stops per day+route from the mosquito-status cache.
+  // 1. Pocomos scheduled stops per day+route + which are electric-blower.
   const rows = (await sql`
     SELECT next_service_date::text AS d, route_code, pocomos_id
     FROM mosquito_service_status
     WHERE next_service_date >= ${today}::date AND next_service_date <= ${last}::date
   `) as Array<{ d: string; route_code: string | null; pocomos_id: string }>;
-
-  // 2. Electric-blower customer ids — a fast tag query on the enriched
-  //    `customers` cache (NOT getDataset, which rebuilds the whole ~80s Pocomos
-  //    roster; the board must read instantly).
   const ebRows = (await sql`
     SELECT pocomos_id FROM customers WHERE tags::text ILIKE ${"%electric blower%"}
   `) as Array<{ pocomos_id: string }>;
   const ebIds = new Set(ebRows.map((r) => String(r.pocomos_id)));
 
-  // 3. Weather + (dormant) sheet overlay. Both are wrapped so a slow/hung
-  //    external call can never stall the TV board — it just renders without them.
+  // (day, normalized daycode) → {stops, eb}
+  const pocByDayCode = new Map<string, { stops: number; eb: number }>();
+  for (const r of rows) {
+    const key = `${r.d}|${normalizeDaycode(r.route_code || "")}`;
+    const e = pocByDayCode.get(key) ?? { stops: 0, eb: 0 };
+    e.stops++;
+    if (ebIds.has(r.pocomos_id)) e.eb++;
+    pocByDayCode.set(key, e);
+  }
+  const ebFor = (date: string, daycode: string) => {
+    // A tech's daycode may be "101, 501" — sum EB across its parts.
+    let eb = 0;
+    for (const part of daycode.split(/[,/]/)) {
+      const k = `${date}|${normalizeDaycode(part)}`;
+      eb += pocByDayCode.get(k)?.eb ?? 0;
+    }
+    return eb;
+  };
+
+  // 2. Weather + sheet (both timeout-guarded — a slow external call can't stall a TV).
   const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T | null> =>
-    Promise.race([
-      p.catch(() => null),
-      new Promise<null>((res) => setTimeout(() => res(null), ms)),
-    ]);
-  const [forecast, sheet] = await Promise.all([
+    Promise.race([p.catch(() => null), new Promise<null>((res) => setTimeout(() => res(null), ms))]);
+  const [forecast, sheet, announcements] = await Promise.all([
     withTimeout(getForecast(), 6000),
-    withTimeout(getMasterRoutingSchedule(window), 6000),
+    withTimeout(getMasterRoutingSchedule(window), 8000),
+    getAnnouncements(),
   ]);
   const wxByDate = new Map((forecast ?? []).map((f) => [f.date, f]));
 
   const days: BoardDay[] = window.map((date, i) => {
-    const dayRows = rows.filter((r) => r.d === date);
-    const byCode = new Map<string, { stops: number; eb: number }>();
-    for (const r of dayRows) {
-      const key = normalizeDaycode(r.route_code || "") || "—";
-      const e = byCode.get(key) ?? { stops: 0, eb: 0 };
-      e.stops++;
-      if (ebIds.has(r.pocomos_id)) e.eb++;
-      byCode.set(key, e);
-    }
-    const overlay = sheet?.get(date);
-    // Map each daycode → the tech assigned to it on the sheet, so a Pocomos
-    // route row can be labelled with its tech.
-    const daycodeToTech = new Map<string, string>();
-    if (overlay) {
-      for (const tr of overlay.rows) {
-        for (const part of tr.daycode.split(/[,/]/)) {
-          const nc = normalizeDaycode(part);
-          if (nc) daycodeToTech.set(nc, tr.tech);
-        }
-      }
-    }
-    const routes: RouteStop[] = [...byCode.entries()]
-      .map(([daycode, v]) => ({
-        daycode,
-        area: daycodeArea(daycode),
-        towns: daycodeTowns(daycode),
-        stops: v.stops,
-        tech: daycodeToTech.get(daycode) ?? null,
-        ant: isAntDaycode(daycode),
-      }))
-      .sort((a, b) => b.stops - a.stops || a.daycode.localeCompare(b.daycode));
+    const sheetDay: SheetDay | undefined = sheet?.get(date) ?? undefined;
+    const wx = wxByDate.get(date) ?? null;
 
-    // ANT dry-day check: an ant route today needs no rain over 3 days.
-    const hasAnt = routes.some((r) => r.ant);
+    let rowsOut: BoardRoute[] = [];
+    if (sheetDay && sheetDay.rows.length) {
+      rowsOut = sheetDay.rows.map((r) => {
+        const off = isOffCode(r.daycode, r.tech) ? (r.daycode || r.towns || "OFF").trim() : null;
+        const ant = isAntDaycode(r.daycode);
+        // Towns: prefer the sheet's label; fall back to the DAYCODES snapshot.
+        const towns = r.towns || daycodeArea(r.daycode) || daycodeTowns(r.daycode).slice(0, 2).join(", ");
+        return {
+          tech: r.tech,
+          daycode: r.daycode,
+          van: r.van,
+          towns,
+          stops: r.stops,
+          ant,
+          electricBlower: off ? 0 : ebFor(date, r.daycode),
+          off,
+        };
+      });
+    }
+
+    // Pocomos fallback for days the sheet hasn't filled.
+    const fallback = rowsOut.length
+      ? []
+      : (() => {
+          const byCode = new Map<string, { stops: number; eb: number }>();
+          for (const r of rows.filter((x) => x.d === date)) {
+            const key = normalizeDaycode(r.route_code || "") || "—";
+            const e = byCode.get(key) ?? { stops: 0, eb: 0 };
+            e.stops++;
+            if (ebIds.has(r.pocomos_id)) e.eb++;
+            byCode.set(key, e);
+          }
+          return [...byCode.entries()]
+            .map(([daycode, v]) => ({
+              daycode,
+              area: daycodeArea(daycode),
+              stops: v.stops,
+              electricBlower: v.eb,
+              ant: isAntDaycode(daycode),
+            }))
+            .sort((a, b) => b.stops - a.stops || a.daycode.localeCompare(b.daycode));
+        })();
+
+    const hasAnt = rowsOut.some((r) => r.ant) || fallback.some((r) => r.ant);
     let antRainRisk = false;
     if (hasAnt) {
       for (let k = 0; k <= 2; k++) {
-        const wx = wxByDate.get(addDays(date, k));
-        if (wx && wx.precip >= RAIN_PROB) antRainRisk = true;
+        const w = wxByDate.get(addDays(date, k));
+        if (w && w.precip >= RAIN_PROB) antRainRisk = true;
       }
     }
 
@@ -171,19 +203,20 @@ export async function getScheduleBoard(): Promise<ScheduleBoard> {
       date,
       label: i === 0 ? "Today" : weekdayOf(date),
       weekday: weekdayOf(date),
-      routes,
-      totalStops: dayRows.length,
-      weather: wxByDate.get(date) ?? null,
-      electricBlower: dayRows.filter((r) => ebIds.has(r.pocomos_id)).length,
-      note: overlay?.note ?? null,
+      rows: rowsOut,
+      fallback,
+      weather: wx,
+      note: sheetDay?.note ?? null,
       antRainRisk,
+      fromSheet: rowsOut.length > 0,
     };
   });
 
   return {
     days,
+    announcements,
     sheetConnected: Boolean(sheet && sheet.size > 0),
     asOf: new Date().toISOString(),
-    stale: rows.length === 0,
+    stale: days.every((d) => d.rows.length === 0 && d.fallback.length === 0),
   };
 }

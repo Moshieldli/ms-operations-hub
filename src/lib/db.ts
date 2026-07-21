@@ -162,6 +162,42 @@ export async function initSchema(): Promise<void> {
   await c`CREATE INDEX IF NOT EXISTS feedback_created_idx ON feedback (created_at DESC)`;
   await c`CREATE INDEX IF NOT EXISTS feedback_status_idx ON feedback (status)`;
 
+  // ---- Board announcements (rev 50) ----
+  // Editable THIS WEEK / NEXT WEEK natural-vs-synthetic notes for the schedule
+  // board's announcements panel. Single-row table (id=1); edited from
+  // /service/board. Free text; no PII.
+  await c`
+    CREATE TABLE IF NOT EXISTS board_announcements (
+      id INT PRIMARY KEY DEFAULT 1,
+      this_week TEXT NOT NULL DEFAULT '',
+      next_week TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
+  // ---- Technician roster + compliments / shout-outs (rev 50) ----
+  // Roster = column A of the "Technician & Asset Information" sheet ONLY (names).
+  // NEVER store any other column of that sheet (it holds credentials/PII).
+  await c`
+    CREATE TABLE IF NOT EXISTS tech_roster (
+      name TEXT PRIMARY KEY,
+      sort_order INT NOT NULL DEFAULT 0,
+      refreshed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await c`
+    CREATE TABLE IF NOT EXISTS compliments (
+      id BIGSERIAL PRIMARY KEY,
+      technician TEXT NOT NULL,
+      body TEXT NOT NULL,
+      from_name TEXT NOT NULL,
+      customer_name TEXT,
+      hidden BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await c`CREATE INDEX IF NOT EXISTS compliments_created_idx ON compliments (created_at DESC)`;
+
   // ---- Referral awards (rev 41) ----
   // Source of truth is the weekly PAYROLL Google Sheet, not Pocomos: a referral
   // is an OTHER PAY row of exactly $50 whose NOTES cell holds the referred
