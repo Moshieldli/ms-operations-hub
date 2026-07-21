@@ -14,9 +14,11 @@
 - [ ] Marketing source breakdown: Long Island vs Westchester
 
 ## Needs a human decision
-- [ ] **Wellness live fill — GO/NO-GO (rev 51, 2026-07-21).** The feeder dry run would push **1,114**
-      customers (of 1,137 at 2+ sprays; 9 paused-balance + 2 no-phone + 12 shared-phone dupes
-      excluded). Rivka to eyeball the would-push list (`scripts/run-wellness-feed.ts`, dry by
+- [ ] **Wellness live fill — GO/NO-GO (rev 51, 2026-07-21).** The feeder dry run would push **1,113**
+      customers (of 1,137 at 2+ sprays; 9 paused-balance + 1 staff [Brittany, `EXCLUDED_POCOMOS_IDS`]
+      + 2 no-phone + 12 shared-phone dupes excluded; 1,096 bi-weekly / 17 weekly). Open question
+      flagged to ops: Rivka Leyton (1163970) is also in the list — exclude like Brittany, or keep
+      (Ohavia was deliberately kept)? Rivka to eyeball the would-push list (`scripts/run-wellness-feed.ts`, dry by
       default). On go: (1) run the script with `--live` for the initial fill, (2) flip the
       vercel.json cron path from `/api/cron/wellness-feed?dryRun=1` to the bare path (the shipped
       cron is dry-run-gated on purpose), (3) re-run the conversion-sweep dry-run as a final check,

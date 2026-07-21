@@ -42,6 +42,14 @@ import {
 /** One-line flip if ops decides paused-balance customers should be called too. */
 export const EXCLUDE_PAUSED_BALANCE = true;
 
+/**
+ * Staff / internal customer records that must never enter the wellness queue
+ * (ops, 2026-07-21). Keyed by INTERNAL pocomos id.
+ */
+export const EXCLUDED_POCOMOS_IDS = new Set<string>([
+  "1164546", // Brittany McAuliffe — staff (also a salesperson in the leads data)
+]);
+
 const POCOMOS_BASE = process.env.POCOMOS_BASE || "https://mypocomos.net";
 
 export interface WellnessCandidate {
@@ -51,6 +59,8 @@ export interface WellnessCandidate {
   sprays: number;
   last_spray: string | null;
   sign_up: string | null;
+  /** Weekly-cadence contract (mosquito_service_status.is_weekly) — display/review only. */
+  is_weekly: boolean;
 }
 
 export interface WellnessFeedResult {
@@ -66,6 +76,8 @@ export interface WellnessFeedResult {
   notActive: number;
   /** Excluded: paused on an open balance. */
   pausedSkipped: number;
+  /** Excluded: staff/internal records (EXCLUDED_POCOMOS_IDS). */
+  staffSkipped: number;
   /** Excluded: no usable 10-digit phone. */
   noPhone: number;
   /** Excluded: a contact with the same phone is already in the Queue folder. */
@@ -87,6 +99,7 @@ interface StatusRow {
   sprays: number;
   status: string;
   sign_up: string | null;
+  is_weekly: boolean;
 }
 
 interface LastJobRow {
@@ -111,6 +124,7 @@ export async function runWellnessFeed(
     alreadyCalled: 0,
     notActive: 0,
     pausedSkipped: 0,
+    staffSkipped: 0,
     noPhone: 0,
     alreadyQueued: 0,
     queueSize: 0,
@@ -144,7 +158,7 @@ export async function runWellnessFeed(
 
   // ---- DB inputs: spray counts, season guard rows, latest job (date+street). ----
   const statusRows = (await sql`
-    SELECT pocomos_id, sprays_this_season AS sprays, status,
+    SELECT pocomos_id, sprays_this_season AS sprays, status, is_weekly,
            to_char(sign_up_date, 'YYYY-MM-DD') AS sign_up
       FROM mosquito_service_status
      WHERE sprays_this_season >= 2
@@ -206,6 +220,10 @@ export async function runWellnessFeed(
   const candidates: Array<WellnessCandidate & { email: string; zip: string; address: string | null; first: string; last: string }> = [];
   for (const row of statusRows) {
     const id = String(row.pocomos_id);
+    if (EXCLUDED_POCOMOS_IDS.has(id)) {
+      result.staffSkipped += 1;
+      continue;
+    }
     if (called.has(id)) {
       result.alreadyCalled += 1;
       continue;
@@ -236,6 +254,7 @@ export async function runWellnessFeed(
       sprays: Number(row.sprays),
       last_spray: job?.last ?? null,
       sign_up: row.sign_up,
+      is_weekly: row.is_weekly === true,
       email: person.email,
       zip: person.zip,
       address: job?.address ?? null,
@@ -247,13 +266,14 @@ export async function runWellnessFeed(
   candidates.sort((a, b) => b.sprays - a.sprays || a.name.localeCompare(b.name));
   result.wouldPush = candidates.length;
   result.pushList = candidates.map(
-    ({ pocomos_id, name, phone, sprays, last_spray, sign_up }) => ({
+    ({ pocomos_id, name, phone, sprays, last_spray, sign_up, is_weekly }) => ({
       pocomos_id,
       name,
       phone,
       sprays,
       last_spray,
       sign_up,
+      is_weekly,
     })
   );
 
@@ -322,6 +342,7 @@ function summarize(r: WellnessFeedResult) {
     alreadyCalled: r.alreadyCalled,
     notActive: r.notActive,
     pausedSkipped: r.pausedSkipped,
+    staffSkipped: r.staffSkipped,
     noPhone: r.noPhone,
     alreadyQueued: r.alreadyQueued,
     queueSize: r.queueSize,

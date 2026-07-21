@@ -95,6 +95,15 @@ Reconciliation: 1,137 (2+) − 9 (paused) − 2 (no phone) − 12 (phone dupes) 
   smoke test on go-live day: one controlled call → check the `wellness_calls` row, the
   Queue→Called move, and the Pocomos "Wellness Call" note.
 
+## Addendum (same day, review follow-up)
+
+Ops review with the first-20 list: **Brittany McAuliffe (1164546) excluded as staff** — new
+`EXCLUDED_POCOMOS_IDS` constant in `wellnessFeed.ts` (+ `staffSkipped` counter). Would-push
+**1,114 → 1,113**; 1,096 of those are bi-weekly, 17 weekly. The driver script now also prints a
+random 20-row bi-weekly sample (the sprays-desc top-20 is all weekly customers). Flagged to ops:
+Rivka Leyton (1163970) is also in the list (staff-as-customer, like Ohavia who was deliberately
+kept) — awaiting a keep/exclude call before the live fill.
+
 ## Rollout — remaining steps (on your go)
 
 1. Rivka eyeballs the would-push list (`run-wellness-feed.ts`, dry).
