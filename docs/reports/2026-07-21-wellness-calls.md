@@ -206,6 +206,28 @@ written (replay guard)` and wrote nothing. This is also the historical-backfill 
 authorization, deleted the three old-format test notes (Leon 5375041, Ohavia 5375076, Rivka
 5375089) after verifying each note's customer mapping. Rivka's duplicate is resolved.
 
+## Historical backfill EXECUTED (rev 54, same day — ops-approved)
+
+**251 of 290 dead-parser-era calls (Jun 4 – Jul 16) now have v2 Pocomos notes** with the original
+call date in line 1 (`Win-back call — No Answer · 6/16/26`) and `Email sent: {subject}` where one
+went out (202 of the 251 — 72% of historical dials sent a one-touch email). Composition: Win-back
+243 · Lead 37 · other 1; oldest-first; 3 Test-Folder dials excluded per ops; safety check PASS
+(0 today/wellness rows — the first dry run correctly ABORTED on 8 false flags caused by
+classifying historical calls with TODAY's folder state; fixed to call-time payload data).
+Verified in Pocomos: 254 notes on today's all-notes report = 251 backfilled + 2 v2 test notes
+(+1 staff). The call_id gate held across all three attempts — zero double-writes.
+
+**Two landmines found by the run (both fixed + deployed):**
+1. `find-customer-by-office` is a **WEB-SESSION endpoint** — the JWT client gets a 200
+   login-redirect JSON, so the webhook's resolve path had silently never worked; AND it returns
+   **empty for cancelled customers** regardless of params — fatal for win-back dials. Fix: session
+   client + a **contact-details bridge** (email → phone+last-name against the full JWT customer
+   list; 242/250 untracked rows bridged, 234 by email). The live route now falls back to the
+   enriched `customers` table by phone+last-name.
+2. The **lead-note endpoint is DEAD** (`/jwt/{office}/lead/{id}/note` → 404 on all 9 real leads).
+   39 lead-record rows (9 tracked leads + 30 frozen-lead-id contacts) remain `note_written=FALSE`
+   — retryable automatically once a working lead-note path exists (BACKLOG item).
+
 **Final state on record (all-notes readback):** exactly two notes today —
 Rivka 5375168: `Wellness call — Left Message ⏎ Ohavia Feldman · 14s`; Ohavia 5375192:
 `Wellness call — Left Message ⏎ Email sent: Are we living up to your expectations? ⏎

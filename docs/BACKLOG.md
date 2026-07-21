@@ -1,11 +1,12 @@
 # Backlog — MS Operations Hub
 
 ## Ready to build (unblocked)
-- [ ] **Historical webhook-notes backfill** (unlocked by rev 52): the 294+ stored
-      `webhook_log.raw_payload` rows never produced Pocomos notes (the §4 top-level-fields bug).
-      They replay cleanly through `parseWebhook` into the NEW note format — a one-off script can
-      backfill call notes onto lead/customer records (dedupe on webhook_log id; skip rows whose
-      contact no longer resolves). Decide with ops whether year-old call notes are wanted first.
+- [ ] **Lead-note write path is DEAD — 39 backfill rows waiting (rev 54).** `/jwt/{office}/lead/{id}/note`
+      404s on every real lead, so lead calls get NO Pocomos note (live webhook + backfill alike).
+      39 lead-record rows remain `note_written=FALSE` (9 tracked leads + 30 frozen-lead-id contacts)
+      and will backfill automatically via `scripts/backfill-webhook-notes.ts` once a working path
+      exists. Finding one means probing lead-note creation endpoints — MUTATION territory, probe
+      with care (the lead-information page's note widget form is the likely candidate).
 - [ ] **"Email sent · opened" enhancement (backlog-only, do not build yet):** PB's contact Activity
       stream tracks one-touch OPENS ("Rivka Leyton just opened a one-touch message") as well as
       sends. The open happens after the call, so it can't ride the `api_calldone` payload — it
@@ -141,6 +142,13 @@
       wired and dormant). Until then those boards run off Pocomos + the DAYCODES snapshot.
 
 ## Done (recent)
+- [x] **Historical webhook-notes backfill (rev 54, 2026-07-21)** — 251 of 290 dead-parser-era calls
+      (Jun 4–Jul 16) now have v2 Pocomos notes with the original call date + `Email sent:` where one
+      went out (202). Test-folder dials excluded (ops); 0 today/wellness rows (safety-checked);
+      call_id gate held across three attempts (no double-writes). Two resolve landmines found +
+      fixed on the way (find-customer is session-only AND can't see cancelled customers → contact-
+      details bridge; live route got a customers-table fallback). Remaining 39 = lead records
+      blocked on the dead lead-note endpoint (open item above).
 - [x] **Wellness-calls campaign (rev 51, 2026-07-21)** — self-refilling PhoneBurner queue of active
       customers with 2+ completed mosquito sprays this season. Two EXEMPT folders (Queue 66255089 /
       Called 66255090), `sprays_this_season` counter (aggregated from `respray_jobs` — no scrape;
