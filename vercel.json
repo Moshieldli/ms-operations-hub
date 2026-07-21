@@ -40,6 +40,10 @@
     {
       "path": "/api/cron/tech-roster",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/wellness-feed?dryRun=1",
+      "schedule": "0 7 * * *"
     }
   ]
 }

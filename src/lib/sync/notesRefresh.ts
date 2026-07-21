@@ -1,7 +1,15 @@
 import { sql, initSchema } from "@/lib/db";
 import { getNotesForLead, getNotesForCustomer, formatNotesForPhoneBurner } from "@/lib/pocomos/notes";
 import { updateContact } from "@/lib/phoneburner/client";
-import { POLICED_FOLDERS } from "@/lib/phoneburner/folders";
+import { POLICED_FOLDERS, WELLNESS_QUEUE_FOLDER } from "@/lib/phoneburner/folders";
+
+/**
+ * Folders whose tracked contacts get the lazy notes refresh: the policed
+ * dial/cancelled buckets, plus the wellness QUEUE (its contacts wait to be
+ * dialed, so fresh Pocomos notes help the CSR open the call). Wellness CALLED
+ * is deliberately absent — those contacts are done for the season.
+ */
+const NOTES_REFRESH_FOLDERS: string[] = [...POLICED_FOLDERS, WELLNESS_QUEUE_FOLDER];
 
 const NOTES_REFRESH_AGE_MS = 24 * 60 * 60 * 1000;
 const POCOMOS_BASE = process.env.POCOMOS_BASE || "https://mypocomos.net";
@@ -50,7 +58,7 @@ export async function refreshTrackedNotes(
   const tracked = (await sql`
     SELECT pocomos_id, pocomos_type, pb_contact_id, folder_id, last_notes_refresh_at
       FROM phoneburner_contacts
-     WHERE folder_id = ANY(${POLICED_FOLDERS}::text[])
+     WHERE folder_id = ANY(${NOTES_REFRESH_FOLDERS}::text[])
        AND (last_notes_refresh_at IS NULL OR last_notes_refresh_at < ${cutoffIso})
      ORDER BY last_notes_refresh_at ASC NULLS FIRST
      LIMIT ${limit}

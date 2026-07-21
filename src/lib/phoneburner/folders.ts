@@ -17,6 +17,13 @@ export const FOLDERS = {
   CANCELLED_NO_REACH: "66223887",
   CANCELLED_PERSONAL: "66223888",
   ACTIVE_CUSTOMER: "66233602",
+  // Wellness-call campaign (2026 season) — probed 2026-07-20 by
+  // scripts/probe-wellness-folders.ts. Queue = Rena's dial list of active
+  // customers with 2+ sprays this season; ONE dial attempt of ANY kind moves
+  // the contact to Called for the rest of the season. BOTH are EXEMPT (they
+  // hold active customers on purpose) — never police them.
+  WELLNESS_QUEUE: "66255089",
+  WELLNESS_CALLED: "66255090",
   FOLLOW_UP: "66223503",
   // Default catch-all where contacts land when category_id is invalid.
   // Used by the cleanup script — never written to by the sync.
@@ -64,5 +71,16 @@ export const DESTINATION_FOLDER: FolderId = FOLDERS.ACTIVE_CUSTOMER;
  */
 export const EXEMPT_FOLDERS: FolderId[] = [
   FOLDERS.ACTIVE_CUSTOMER,
+  // Wellness campaign (2026): BOTH folders hold ACTIVE customers on purpose —
+  // the queue is the point of the campaign, and Called preserves the one-call-
+  // per-season record. If either were policed, the hourly conversion sweep
+  // would empty the queue within an hour. NEVER move these to POLICED_FOLDERS.
+  FOLDERS.WELLNESS_QUEUE,
+  FOLDERS.WELLNESS_CALLED,
   // <-- future active-customer-calling project folders go here
 ];
+
+/** Wellness campaign — the self-refilling dial queue (EXEMPT, never policed). */
+export const WELLNESS_QUEUE_FOLDER: FolderId = FOLDERS.WELLNESS_QUEUE;
+/** Wellness campaign — one dial attempt of any kind lands the contact here. */
+export const WELLNESS_CALLED_FOLDER: FolderId = FOLDERS.WELLNESS_CALLED;

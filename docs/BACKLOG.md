@@ -14,6 +14,15 @@
 - [ ] Marketing source breakdown: Long Island vs Westchester
 
 ## Needs a human decision
+- [ ] **Wellness live fill — GO/NO-GO (rev 51, 2026-07-21).** The feeder dry run would push **1,114**
+      customers (of 1,137 at 2+ sprays; 9 paused-balance + 2 no-phone + 12 shared-phone dupes
+      excluded). Rivka to eyeball the would-push list (`scripts/run-wellness-feed.ts`, dry by
+      default). On go: (1) run the script with `--live` for the initial fill, (2) flip the
+      vercel.json cron path from `/api/cron/wellness-feed?dryRun=1` to the bare path (the shipped
+      cron is dry-run-gated on purpose), (3) re-run the conversion-sweep dry-run as a final check,
+      (4) Rena starts dialing. Suggested first-dial
+      smoke test: one controlled call on a known customer → verify the `wellness_calls` row, the
+      Queue→Called move, and the Pocomos "Wellness Call" note.
 - [ ] **RESPRAY-YOY weather probe (rev 47, 2026-07-20) — rainfall is NOT a monthly driver of resprays
       or cadence; the YoY decline is operational.** Pulled Open-Meteo historical daily rainfall for our
       area (40.597/-73.702), Apr–Oct 2024/2025/2026, vs monthly respray rate (Re-service ÷ apps; 2025
@@ -119,6 +128,13 @@
       wired and dormant). Until then those boards run off Pocomos + the DAYCODES snapshot.
 
 ## Done (recent)
+- [x] **Wellness-calls campaign (rev 51, 2026-07-21)** — self-refilling PhoneBurner queue of active
+      customers with 2+ completed mosquito sprays this season. Two EXEMPT folders (Queue 66255089 /
+      Called 66255090), `sprays_this_season` counter (aggregated from `respray_jobs` — no scrape;
+      5/5 spot-checks matched the service-history page), `wellness_calls` season guard, webhook
+      fall-out (any disposition → record + move to Called + direct Pocomos note), daily 07:00 feeder
+      cron with `?dryRun=1`. Built + deployed; **queue NOT live-filled yet** — see the go item below.
+      See §5.21.
 - [x] **/tv/board v2 tech-first + /service/board + compliments (rev 50, 2026-07-20)** — Master Routing
       CALENDAR now primary (tech-first rows, Pocomos fallback), ant/electric-blower markers, legend,
       editable announcements, new-customer box, day notes. New /service/board browser mirror + shout-out

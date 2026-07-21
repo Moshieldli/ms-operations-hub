@@ -5,10 +5,15 @@ import { sql, initSchema } from "@/lib/db";
 import { getJson, postJson, pocomosOffice } from "@/lib/pocomos";
 import { POCOMOS_CALL_INTERACTION_TYPE } from "@/lib/pocomos/interactionTypes";
 import {
+  buildPocomosSummary,
+  isWellnessContact,
   parseWebhook,
   type PBCallDonePayload,
   type ParsedWebhook,
 } from "@/lib/sync/webhookProcessor";
+import { updateContact } from "@/lib/phoneburner/client";
+import { WELLNESS_QUEUE_FOLDER, WELLNESS_CALLED_FOLDER } from "@/lib/phoneburner/folders";
+import { CURRENT_YEAR } from "@/lib/pocomos/categorize";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -45,11 +50,12 @@ async function resolveCustomerUrlId(customerId: string): Promise<string | null> 
   }
 }
 
-async function writeCustomerNote(urlId: string, summary: string): Promise<void> {
+async function writeCustomerNote(urlId: string, summary: string, subject?: string): Promise<void> {
   await postJson(`/jwt/pronexis/${pocomosOffice()}/customer/${urlId}/note/create`, {
     note: {
       interactionType: POCOMOS_CALL_INTERACTION_TYPE,
       summary,
+      ...(subject ? { subject } : {}),
       displayOnWorkorder: false,
       favorite: false,
       displayOnLoad: false,
@@ -92,9 +98,106 @@ async function logWebhook(args: {
   `;
 }
 
+/**
+ * Wellness-campaign fall-out (2026-07-20, REFERENCE §5.21). A dial attempt of
+ * ANY disposition — connected, VM, No Answer — removes the customer from the
+ * queue for the rest of the season:
+ *
+ *   1. Insert the `wellness_calls` row FIRST — it IS the season re-entry guard.
+ *      If the PB move below fails, the guard still holds (the daily feeder
+ *      reconciles the folder); a re-fired webhook hits the PK and no-ops.
+ *   2. Move the PB contact to Wellness — Called (form-urlencoded PUT) and
+ *      re-point the phoneburner_contacts cache row.
+ *   3. Write the Pocomos note DIRECTLY: for wellness contacts the stored
+ *      Customer ID is the INTERNAL url_id (that's what the feeder stamps), so
+ *      the find-customer-by-office resolve step is skipped.
+ *
+ * The note is written even when the parser's loop guard blanked the note body —
+ * the CALL still happened (api_calldone fired); only the body is suppressed.
+ */
+async function processWellnessCall(parsed: ParsedWebhook, raw: unknown): Promise<void> {
+  const errors: string[] = [];
+
+  // 1. Season guard row — FIRST, before any external write.
+  let guardInserted = false;
+  try {
+    const rows = (await sql`
+      INSERT INTO wellness_calls (pocomos_id, season, disposition, csr_name, pb_contact_id)
+      VALUES (${parsed.pocomosId}, ${Number(CURRENT_YEAR)}, ${parsed.disposition || null},
+              ${parsed.csrName || null}, ${parsed.pbContactId || null})
+      ON CONFLICT (pocomos_id, season) DO NOTHING
+      RETURNING pocomos_id
+    `) as Array<{ pocomos_id: string }>;
+    guardInserted = rows.length > 0;
+  } catch (e) {
+    errors.push(`wellness_calls insert: ${(e as Error).message}`);
+  }
+
+  // 2. PB folder move Queue → Called + cache re-point.
+  try {
+    if (parsed.pbContactId) {
+      await updateContact(parsed.pbContactId, { category_id: WELLNESS_CALLED_FOLDER });
+      await sql`
+        UPDATE phoneburner_contacts
+           SET folder_id = ${WELLNESS_CALLED_FOLDER}, last_updated_at = NOW()
+         WHERE pb_contact_id = ${parsed.pbContactId}
+      `;
+    }
+  } catch (e) {
+    errors.push(`PB move to Called: ${(e as Error).message}`);
+  }
+
+  // 3. Pocomos note — direct write, the stored Customer ID IS the url_id.
+  //    Repeat webhooks (guard already present) still log the call as a note:
+  //    full call history on the account is the existing §5.4 behavior.
+  let noteWritten = false;
+  try {
+    const summary =
+      parsed.pocomosSummary ||
+      buildPocomosSummary({
+        disposition: parsed.disposition,
+        duration: parsed.duration,
+        csrName: parsed.csrName,
+        noteBody: "",
+        recordingUrl: parsed.recordingUrl,
+      });
+    await writeCustomerNote(parsed.pocomosId, summary, "Wellness Call");
+    noteWritten = true;
+  } catch (e) {
+    errors.push(`Pocomos note: ${(e as Error).message}`);
+  }
+
+  console.log(
+    JSON.stringify({
+      event: "webhook.wellness",
+      pocomos_id: parsed.pocomosId,
+      pb_contact_id: parsed.pbContactId,
+      disposition: parsed.disposition,
+      guard_inserted: guardInserted,
+      note_written: noteWritten,
+      errors: errors.length ? errors : undefined,
+    })
+  );
+  await logWebhook({
+    parsed,
+    noteWritten,
+    error: errors.length ? `wellness: ${errors.join(" | ")}` : null,
+    raw,
+  });
+}
+
 async function processNoteWrite(payload: PBCallDonePayload): Promise<void> {
   await initSchema();
   const parsed = parseWebhook(payload);
+
+  // Wellness-campaign fall-out: queue-folder contacts (or Hub Source=wellness)
+  // get the record-move-note flow regardless of disposition. Requires a
+  // Customer ID; without one there is nothing to guard or write against, so
+  // fall through to the normal skip logging below.
+  if (parsed.pocomosId && isWellnessContact(payload, WELLNESS_QUEUE_FOLDER)) {
+    await processWellnessCall(parsed, payload);
+    return;
+  }
 
   if (parsed.skipReason) {
     console.warn(

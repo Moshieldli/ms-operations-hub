@@ -96,6 +96,10 @@ export interface RefreshMeta {
   pendingDurationMs: number;
   /** True if the completed-jobs cache (respray_jobs) was refreshed this run — feeds sprayed-today. */
   completedJobsRefreshed: boolean;
+  /** Wellness spray counter: eligible rows whose sprays_this_season changed this run. */
+  sprayCountsUpdated: number;
+  /** Eligible customers currently at 2+ completed mosquito sprays this season. */
+  spraysTwoPlus: number;
   /** Customers found in the unpaid-invoices report (telemetry). */
   balanceCustomers: number;
   /** Sum of all open balances across eligible customers (telemetry). */
@@ -235,6 +239,45 @@ async function pruneStale(eligibleIds: Set<string>): Promise<number> {
     await sql`DELETE FROM mosquito_service_status WHERE pocomos_id = ANY(${stale})`;
   }
   return stale.length;
+}
+
+/**
+ * Wellness spray counter (2026-07-20, §5.21): aggregate each customer's
+ * COMPLETED mosquito services this season (any type, matching
+ * COUNT_ANY_SERVICE_TYPE semantics) from respray_jobs into
+ * `mosquito_service_status.sprays_this_season`. NO Pocomos calls — respray_jobs
+ * is the bulk per-season source (CURRENT_YEAR, mosquito-family only, keyed by
+ * internal customer id) and is contract-independent, so it also covers add-on
+ * customers whose default rendered service-history table isn't mosquito.
+ *
+ * `zeroMissing` should be true only when the completed-jobs refresh SUCCEEDED
+ * this run: a customer absent from respray_jobs then genuinely has 0 sprays
+ * this season (year rollover empties the table legitimately in January), while
+ * after a FAILED refresh absence proves nothing and nobody must be zeroed.
+ */
+export async function updateSprayCounts(
+  zeroMissing: boolean
+): Promise<{ updated: number; twoPlus: number }> {
+  const updatedRows = (await sql`
+    UPDATE mosquito_service_status m
+       SET sprays_this_season = c.n
+      FROM (SELECT customer_id, COUNT(*)::int AS n FROM respray_jobs GROUP BY customer_id) c
+     WHERE m.pocomos_id = c.customer_id
+       AND m.sprays_this_season IS DISTINCT FROM c.n
+    RETURNING m.pocomos_id
+  `) as Array<{ pocomos_id: string }>;
+  if (zeroMissing) {
+    await sql`
+      UPDATE mosquito_service_status
+         SET sprays_this_season = 0
+       WHERE sprays_this_season <> 0
+         AND pocomos_id NOT IN (SELECT DISTINCT customer_id FROM respray_jobs)
+    `;
+  }
+  const twoPlusRows = (await sql`
+    SELECT COUNT(*)::int AS n FROM mosquito_service_status WHERE sprays_this_season >= 2
+  `) as Array<{ n: number }>;
+  return { updated: updatedRows.length, twoPlus: twoPlusRows[0]?.n ?? 0 };
 }
 
 /**
@@ -482,6 +525,24 @@ export async function refreshMosquitoStatus(
   });
   failed = result.failures.length;
 
+  // ---- SPRAY-COUNTER phase (wellness campaign, 2026-07-20). Aggregate each
+  //      customer's COMPLETED mosquito services this season (any type —
+  //      Regular/Initial/Re-service, matching COUNT_ANY_SERVICE_TYPE semantics)
+  //      from respray_jobs, which the completed-jobs refresh above just
+  //      reloaded for CURRENT_YEAR (Jan 1 → today, mosquito-family only, keyed
+  //      by internal customer id). NO extra Pocomos calls — the spec's
+  //      per-customer service-history scrape is unnecessary because this bulk
+  //      source already carries a full per-season count, and it is
+  //      contract-independent (covers add-on customers whose default rendered
+  //      contract isn't mosquito). Runs AFTER the upsert phases so brand-new
+  //      eligible rows exist; the main upserts never touch the column, so a
+  //      count persists until the next aggregate. If the completed-jobs refresh
+  //      failed this run, respray_jobs holds yesterday's rows and the counts
+  //      stay one day stale — never zeroed. ----
+  const sprayCounts = await updateSprayCounts(completedJobsRefreshed);
+  const sprayCountsUpdated = sprayCounts.updated;
+  const spraysTwoPlus = sprayCounts.twoPlus;
+
   // ---- ROUTE phase: scrape each customer's route code from the "Routing"
   //      widget on /customer/{id}/service-information. Incremental by default
   //      (only rows missing a code); `forceRoutes` re-scrapes all. READ-ONLY
@@ -628,6 +689,8 @@ export async function refreshMosquitoStatus(
     pendingFailed,
     pendingDurationMs,
     completedJobsRefreshed,
+    sprayCountsUpdated,
+    spraysTwoPlus,
     balanceCustomers: balances.byId.size,
     openBalanceTotal: balances.totalBalance,
     reachedEndOfQueue: !budgetHit && work.length === toScrape.length,

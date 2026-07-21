@@ -116,6 +116,7 @@ export async function initSchema(): Promise<void> {
       next_service_date DATE,
       is_weekly BOOLEAN NOT NULL DEFAULT FALSE,
       route_code TEXT,
+      sprays_this_season INTEGER NOT NULL DEFAULT 0,
       last_checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
@@ -141,6 +142,11 @@ export async function initSchema(): Promise<void> {
   // is 8-21 days old (the booking + completion window).
   await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS pending_reservice BOOLEAN NOT NULL DEFAULT FALSE`;
   await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS pending_checked_at TIMESTAMPTZ`;
+  // Wellness campaign (2026-07-20): COMPLETED mosquito services this season
+  // (any type — Regular/Initial/Re-service), aggregated from respray_jobs after
+  // each completed-jobs refresh. Drives the 2+-spray feeder eligibility. The
+  // main status upserts never touch it, so it persists across refreshes.
+  await c`ALTER TABLE mosquito_service_status ADD COLUMN IF NOT EXISTS sprays_this_season INTEGER NOT NULL DEFAULT 0`;
 
   // ---- In-dashboard feedback / feature requests (rev 42) ----
   // Submitted by staff from the floating bubble on any dashboard page. No auth
@@ -260,11 +266,33 @@ export async function initSchema(): Promise<void> {
       technician TEXT,
       job_type TEXT NOT NULL,
       service_type TEXT,
-      completed_date DATE NOT NULL
+      completed_date DATE NOT NULL,
+      address TEXT
     )
   `;
   await c`CREATE INDEX IF NOT EXISTS respray_jobs_customer_idx ON respray_jobs (customer_id, completed_date)`;
   await c`CREATE INDEX IF NOT EXISTS respray_jobs_tech_idx ON respray_jobs (technician)`;
+  // Wellness campaign (2026-07-20): the report's Address column, kept so the
+  // feeder can push a street address to PhoneBurner without extra scrapes.
+  await c`ALTER TABLE respray_jobs ADD COLUMN IF NOT EXISTS address TEXT`;
+
+  // ---- Wellness-call campaign (2026-07-20) ----
+  // One wellness call per customer per season — the row IS the re-entry guard:
+  // the webhook inserts it FIRST (before the PhoneBurner folder move), so a
+  // failed move or a re-fired webhook can never re-queue the customer.
+  // pocomos_id = the INTERNAL customer id (7-digit url_id — what getDataset()
+  // keys on, and directly usable for the Pocomos note write).
+  await c`
+    CREATE TABLE IF NOT EXISTS wellness_calls (
+      pocomos_id  TEXT NOT NULL,
+      season      INTEGER NOT NULL,
+      called_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      disposition TEXT,
+      csr_name    TEXT,
+      pb_contact_id TEXT,
+      PRIMARY KEY (pocomos_id, season)
+    )
+  `;
 
   // ---- /tv/techs award history (rev 28) ----
   // Who won which award in which board week. Written when the board is computed;

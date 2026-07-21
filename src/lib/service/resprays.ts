@@ -91,6 +91,8 @@ export interface RespJob {
   jobType: string;
   serviceType: string;
   completedDate: string; // ISO YYYY-MM-DD
+  /** The report's Address cell (street, city, state zip) — wellness feeder uses it. */
+  address?: string;
 }
 
 /**
@@ -361,6 +363,7 @@ export function parseJobsReport(html: string): RespJob[] {
       jobType: tds[4],
       serviceType: tds[5],
       completedDate,
+      address: tds[3] || undefined,
     });
   }
   return out;
@@ -726,12 +729,12 @@ export async function refreshResprays(): Promise<RespraysRefreshMeta> {
     const c = jobs.slice(i, i + CHUNK);
     await sql`
       INSERT INTO respray_jobs
-        (invoice_no, customer_id, customer_name, technician, job_type, service_type, completed_date)
+        (invoice_no, customer_id, customer_name, technician, job_type, service_type, completed_date, address)
       SELECT * FROM UNNEST(
         ${c.map((j) => j.invoiceNo)}::text[], ${c.map((j) => j.customerId)}::text[],
         ${c.map((j) => j.customerName)}::text[], ${c.map((j) => j.technician)}::text[],
         ${c.map((j) => j.jobType)}::text[], ${c.map((j) => j.serviceType)}::text[],
-        ${c.map((j) => j.completedDate)}::date[]
+        ${c.map((j) => j.completedDate)}::date[], ${c.map((j) => j.address ?? null)}::text[]
       )
       ON CONFLICT (invoice_no) DO NOTHING
     `;

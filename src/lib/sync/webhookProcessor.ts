@@ -40,6 +40,8 @@ export interface PBContact {
   notes?: string;
   custom_fields?: Record<string, string>;
   typed_custom_fields?: PBTypedCustomField[];
+  /** Folder the contact sits in at call time — wellness-queue detection. */
+  category?: { category_id?: string | number; name?: string };
 }
 
 export interface PBCallDonePayload {
@@ -154,6 +156,35 @@ export function extractCustomerId(payload: PBCallDonePayload): string {
     if (v != null && String(v).trim()) return String(v).trim();
   }
   return "";
+}
+
+/** Read a named typed_custom_fields value (with the flat custom_fields fallback). */
+export function extractCustomField(payload: PBCallDonePayload, name: string): string {
+  const typed = payload.contact?.typed_custom_fields ?? [];
+  for (const f of typed) {
+    if (f?.name === name && f.value != null && String(f.value).trim()) {
+      return String(f.value).trim();
+    }
+  }
+  const flat = payload.contact?.custom_fields;
+  if (flat && typeof flat === "object") {
+    const v = (flat as Record<string, unknown>)[name];
+    if (v != null && String(v).trim()) return String(v).trim();
+  }
+  return "";
+}
+
+/**
+ * Wellness-campaign detection (2026-07-20): the call belongs to the wellness
+ * queue when the contact sits in the Wellness Queue folder at call time OR
+ * carries the `Hub Source = wellness` custom field the feeder stamps on every
+ * push. The custom-field path covers a contact whose folder was hand-moved (or
+ * a payload without `contact.category`).
+ */
+export function isWellnessContact(payload: PBCallDonePayload, queueFolderId: string): boolean {
+  const cat = payload.contact?.category?.category_id;
+  if (cat != null && String(cat) === queueFolderId) return true;
+  return extractCustomField(payload, "Hub Source").toLowerCase() === "wellness";
 }
 
 export function extractCsrName(payload: PBCallDonePayload): string {
