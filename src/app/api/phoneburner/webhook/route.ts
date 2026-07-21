@@ -23,6 +23,7 @@ interface FindCustomerResponse {
 }
 
 interface TrackedRow {
+  pocomos_id: string;
   pocomos_type: "lead" | "customer";
   folder_id: string;
 }
@@ -30,7 +31,7 @@ interface TrackedRow {
 async function lookupTrackedContact(pbContactId: string): Promise<TrackedRow | null> {
   if (!pbContactId) return null;
   const rows = (await sql`
-    SELECT pocomos_type, folder_id
+    SELECT pocomos_id, pocomos_type, folder_id
       FROM phoneburner_contacts
      WHERE pb_contact_id = ${pbContactId}
      LIMIT 1
@@ -189,12 +190,42 @@ async function processWellnessCall(parsed: ParsedWebhook, raw: unknown): Promise
 async function processNoteWrite(payload: PBCallDonePayload): Promise<void> {
   await initSchema();
   const parsed = parseWebhook(payload);
+  const tracked = await lookupTrackedContact(parsed.pbContactId);
 
-  // Wellness-campaign fall-out: queue-folder contacts (or Hub Source=wellness)
-  // get the record-move-note flow regardless of disposition. Requires a
-  // Customer ID; without one there is nothing to guard or write against, so
-  // fall through to the normal skip logging below.
-  if (parsed.pocomosId && isWellnessContact(payload, WELLNESS_QUEUE_FOLDER)) {
+  // DB-bridge fallback (2026-07-21): if the payload carried no Customer ID
+  // (fields missing/renamed — PB's wire shape has drifted before), resolve it
+  // from our own phoneburner_contacts cache via the PB contact id. This is the
+  // bridge rev 20 identified; it makes the note flow resilient to payload
+  // shape changes instead of silently skipping.
+  // Our cache stores INTERNAL customer ids (url_ids), so a bridged customer id
+  // skips the find-customer-by-office resolve (that endpoint takes the
+  // EXTERNAL number, which is what PB custom fields on legacy contacts hold).
+  let idIsInternal = false;
+  if (!parsed.pocomosId && tracked) {
+    parsed.pocomosId = tracked.pocomos_id;
+    idIsInternal = tracked.pocomos_type === "customer";
+    if (parsed.skipReason?.startsWith("no Customer ID")) {
+      parsed.skipReason = null;
+      parsed.pocomosSummary = buildPocomosSummary({
+        disposition: parsed.disposition,
+        duration: parsed.duration,
+        csrName: parsed.csrName,
+        noteBody: parsed.noteBody,
+        recordingUrl: parsed.recordingUrl,
+      });
+    }
+  }
+
+  // Wellness-campaign fall-out: a dial from the Queue folder (payload-level
+  // `folder`), a Queue-category contact, a Hub Source=wellness field, OR our
+  // own cache row saying the contact lives in the Queue — any of these makes
+  // it a wellness call, regardless of disposition. Requires a Customer ID;
+  // without one there is nothing to guard or write against, so fall through
+  // to the normal skip logging below.
+  const wellness =
+    isWellnessContact(payload, WELLNESS_QUEUE_FOLDER) ||
+    tracked?.folder_id === WELLNESS_QUEUE_FOLDER;
+  if (parsed.pocomosId && wellness) {
     await processWellnessCall(parsed, payload);
     return;
   }
@@ -212,7 +243,6 @@ async function processNoteWrite(payload: PBCallDonePayload): Promise<void> {
     return;
   }
 
-  const tracked = await lookupTrackedContact(parsed.pbContactId);
   const isLead = tracked?.pocomos_type === "lead";
 
   let noteWritten = false;
@@ -221,6 +251,10 @@ async function processNoteWrite(payload: PBCallDonePayload): Promise<void> {
   try {
     if (isLead) {
       await writeLeadNote(parsed.pocomosId, parsed.pocomosSummary);
+      noteWritten = true;
+    } else if (idIsInternal) {
+      // Bridged from phoneburner_contacts — already the internal url_id.
+      await writeCustomerNote(parsed.pocomosId, parsed.pocomosSummary);
       noteWritten = true;
     } else {
       const urlId = await resolveCustomerUrlId(parsed.pocomosId);

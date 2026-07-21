@@ -6,9 +6,10 @@
  * HTTP listener. The route is just a thin wrapper that handles auth,
  * persistence, and the Pocomos write call.
  *
- * Field map (verified against the real Call End example payload — early
- * versions of this code used the spec's placeholder names like
- * `disposition` / `csr_name` which don't actually exist on the wire):
+ * Field map (RE-verified against LIVE api_calldone payloads 2026-07-21,
+ * webhook_log 294/295 — the earlier map wrongly placed custom fields under
+ * `contact`, which is why webhook_log.pocomos_id was NULL on every historical
+ * row and no webhook note write ever fired):
  *
  *   status                              → call disposition (string)
  *   duration                            → seconds (number or string)
@@ -16,8 +17,10 @@
  *   recording_url                       → fallback recording URL
  *   agent.first_name + agent.last_name  → CSR name
  *   contact.user_id                     → PhoneBurner contact ID
- *   contact.typed_custom_fields[]       → array of {type,name,value};
+ *   typed_custom_fields[]  (TOP LEVEL)  → array of {type,name,value};
  *                                          we look for name === "Customer ID"
+ *   custom_fields          (TOP LEVEL)  → flat {name: value} object (or FALSE)
+ *   folder                 (TOP LEVEL)  → {id, name} of the dialed folder
  *   contact.notes                       → FULL history string, newline-separated.
  *                                          Each entry starts with "-- DATE @ TIME [TZ] -- "
  *                                          and PB prepends, so the first entry is the latest.
@@ -51,6 +54,17 @@ export interface PBCallDonePayload {
   recording_url?: string;
   agent?: PBAgent;
   contact?: PBContact;
+  /**
+   * ⚠️ REAL wire shape (verified against live payloads 2026-07-21, webhook_log
+   * 294/295): custom fields and the dial folder arrive at the PAYLOAD TOP
+   * LEVEL, NOT under `contact`. `contact.typed_custom_fields` does not exist on
+   * the wire — the earlier field map was wrong, which is why
+   * webhook_log.pocomos_id was NULL on all 293 historical rows (rev 20).
+   */
+  typed_custom_fields?: PBTypedCustomField[];
+  custom_fields?: Record<string, unknown> | false;
+  /** The folder the dial session ran from, e.g. {id:"66255089", name:"Wellness — Queue 2026"}. */
+  folder?: { id?: string | number; name?: string };
   // Allow extra fields without flagging — PB sends a lot we don't use.
   [k: string]: unknown;
 }
@@ -143,31 +157,31 @@ export function isAutoDispositionNote(body: string, disposition: string): boolea
 }
 
 export function extractCustomerId(payload: PBCallDonePayload): string {
-  const typed = payload.contact?.typed_custom_fields ?? [];
-  for (const f of typed) {
-    if (f?.name === "Customer ID" && f.value != null && String(f.value).trim()) {
-      return String(f.value).trim();
-    }
-  }
-  // Fallback: the flat custom_fields object (older PB payloads keyed it by name).
-  const flat = payload.contact?.custom_fields;
-  if (flat && typeof flat === "object") {
-    const v = (flat as Record<string, unknown>)["Customer ID"];
-    if (v != null && String(v).trim()) return String(v).trim();
-  }
-  return "";
+  return extractCustomField(payload, "Customer ID");
 }
 
-/** Read a named typed_custom_fields value (with the flat custom_fields fallback). */
+/**
+ * Read a named custom-field value from EVERY place PB is known to put them.
+ *
+ * ⚠️ On the real `api_calldone` wire (verified 2026-07-21 against stored
+ * payloads), `typed_custom_fields` and the flat `custom_fields` object live at
+ * the PAYLOAD TOP LEVEL — `contact.*` carries neither. The contact-level
+ * variants are kept as fallbacks in case some PB event shape uses them.
+ */
 export function extractCustomField(payload: PBCallDonePayload, name: string): string {
-  const typed = payload.contact?.typed_custom_fields ?? [];
-  for (const f of typed) {
-    if (f?.name === name && f.value != null && String(f.value).trim()) {
-      return String(f.value).trim();
+  const typedLists = [payload.typed_custom_fields, payload.contact?.typed_custom_fields];
+  for (const typed of typedLists) {
+    if (!Array.isArray(typed)) continue;
+    for (const f of typed) {
+      if (f?.name === name && f.value != null && String(f.value).trim()) {
+        return String(f.value).trim();
+      }
     }
   }
-  const flat = payload.contact?.custom_fields;
-  if (flat && typeof flat === "object") {
+  // PB sends custom_fields: false (boolean!) when a dial session has none.
+  const flats = [payload.custom_fields, payload.contact?.custom_fields];
+  for (const flat of flats) {
+    if (!flat || typeof flat !== "object") continue;
     const v = (flat as Record<string, unknown>)[name];
     if (v != null && String(v).trim()) return String(v).trim();
   }
@@ -175,13 +189,15 @@ export function extractCustomField(payload: PBCallDonePayload, name: string): st
 }
 
 /**
- * Wellness-campaign detection (2026-07-20): the call belongs to the wellness
- * queue when the contact sits in the Wellness Queue folder at call time OR
- * carries the `Hub Source = wellness` custom field the feeder stamps on every
- * push. The custom-field path covers a contact whose folder was hand-moved (or
- * a payload without `contact.category`).
+ * Wellness-campaign detection (2026-07-20; wire-corrected 2026-07-21): the call
+ * belongs to the wellness queue when the payload's top-level `folder` (the
+ * folder the dial session ran from) is the Wellness Queue, OR the contact's
+ * category matches (fallback shape), OR the fields carry `Hub Source =
+ * wellness` (the feeder stamps it on every push — covers hand-moved contacts).
  */
 export function isWellnessContact(payload: PBCallDonePayload, queueFolderId: string): boolean {
+  const folderId = payload.folder?.id;
+  if (folderId != null && String(folderId) === queueFolderId) return true;
   const cat = payload.contact?.category?.category_id;
   if (cat != null && String(cat) === queueFolderId) return true;
   return extractCustomField(payload, "Hub Source").toLowerCase() === "wellness";
@@ -260,7 +276,7 @@ export function parseWebhook(payload: PBCallDonePayload): ParsedWebhook {
 
   let skipReason: string | null = null;
   if (loopGuardTripped) skipReason = "loop guard: latest contact.notes entry started with [Pocomos]";
-  else if (!pocomosId) skipReason = "no Customer ID in contact.typed_custom_fields";
+  else if (!pocomosId) skipReason = "no Customer ID in payload custom fields";
 
   const pocomosSummary = skipReason
     ? ""
