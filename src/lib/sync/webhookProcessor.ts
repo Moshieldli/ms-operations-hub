@@ -45,6 +45,12 @@ export interface PBContact {
   typed_custom_fields?: PBTypedCustomField[];
   /** Folder the contact sits in at call time — wellness-queue detection. */
   category?: { category_id?: string | number; name?: string };
+  /** 10-digit string on the real wire — drives the resolve fallbacks. */
+  phone?: string;
+  primary_email?: string;
+  emails?: string[];
+  first_name?: string;
+  last_name?: string;
 }
 
 export interface PBCallDonePayload {

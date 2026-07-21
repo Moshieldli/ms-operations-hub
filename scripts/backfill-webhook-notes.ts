@@ -18,7 +18,9 @@
  */
 import { sql, initSchema } from "../src/lib/db";
 import { postJson, pocomosOffice } from "../src/lib/pocomos";
+import { fetchAllCustomers } from "../src/lib/pocomos/customers";
 import { getSessionedHtml } from "../src/lib/pocomos/webSession";
+import { normalizePhone } from "../src/lib/phoneburner/client";
 import { POCOMOS_CALL_INTERACTION_TYPE } from "../src/lib/pocomos/interactionTypes";
 import {
   parseWebhook,
@@ -117,9 +119,57 @@ interface FindCustomerResponse {
   results?: Array<{ id?: string | number }>;
 }
 
+interface BridgeHit {
+  id: string;
+  how: "email" | "phone";
+}
+
 (async () => {
   const live = process.argv.includes("--live");
   await initSchema();
+
+  // ---- Contact-details bridge (found on live attempt #2): the
+  //      find-customer-by-office endpoint returns EMPTY for cancelled
+  //      customers no matter the params, and the win-back folder is nothing
+  //      but cancelled customers. Neither does any bulk source expose the
+  //      external number (re-confirmed: customer_number empty on all 3,846
+  //      JWT records). So external id → internal id goes through CONTACT
+  //      DETAILS, the same email → phone+last-name laddering as
+  //      conversionSweep/idMap. One bulk JWT pull, all statuses. ----
+  const allCustomers = (await fetchAllCustomers()) as Array<Record<string, unknown>>;
+  const byEmail = new Map<string, Array<{ id: string; last: string }>>();
+  const byPhone = new Map<string, Array<{ id: string; last: string }>>();
+  for (const c of allCustomers) {
+    const id = String(c.id);
+    const last = String(c.lastName ?? "").toLowerCase().trim();
+    const em = String(c.emailAddress ?? "").toLowerCase().trim();
+    if (em) byEmail.set(em, [...(byEmail.get(em) ?? []), { id, last }]);
+    const ph = normalizePhone(String(c.phone ?? ""));
+    if (ph.length === 10) byPhone.set(ph, [...(byPhone.get(ph) ?? []), { id, last }]);
+  }
+  console.log(`bridge loaded: ${allCustomers.length} customers · ${byEmail.size} emails · ${byPhone.size} phones`);
+
+  function bridge(payload: PBCallDonePayload): BridgeHit | null {
+    const c = (payload.contact ?? {}) as Record<string, unknown>;
+    const last = String(c.last_name ?? "").toLowerCase().trim();
+    const em = String(
+      c.primary_email ?? (Array.isArray(c.emails) ? c.emails[0] : "") ?? ""
+    ).toLowerCase().trim();
+    if (em && byEmail.has(em)) {
+      const cands = byEmail.get(em)!;
+      const named = cands.filter((x) => last && x.last === last);
+      if (named.length) return { id: named[0].id, how: "email" };
+      if (cands.length === 1) return { id: cands[0].id, how: "email" };
+    }
+    const ph = normalizePhone(String(c.phone ?? ""));
+    if (ph.length === 10 && byPhone.has(ph)) {
+      // Phone alone isn't identity (spouses/relatives share numbers — the
+      // sweep's rule); require the last name to agree.
+      const named = byPhone.get(ph)!.filter((x) => last && x.last === last);
+      if (named.length) return { id: named[0].id, how: "phone" };
+    }
+    return null;
+  }
 
   // ---- Selection: dead-parser era rows, oldest first. ----
   const rows = (await sql`
@@ -152,6 +202,7 @@ interface FindCustomerResponse {
   const items: Item[] = [];
   const skippedGate: number[] = [];
   const excludedTest: number[] = [];
+  const bridgedBy = { email: 0, phone: 0 };
   const unresolvable: Array<{ logId: number; receivedAt: string; pbContactId: string; reason: string }> = [];
   let wellnessInSet = 0;
   let todayInSet = 0;
@@ -182,16 +233,21 @@ interface FindCustomerResponse {
     if (isWellnessRow(payload)) wellnessInSet++;
     if (etIsToday(row.received_at)) todayInSet++;
 
-    // Resolution (req 4): payload Customer ID, else DB bridge.
+    // Resolution (req 4): tracked row → contact-details bridge → the
+    // find-customer endpoint as a last resort (active customers only).
     let target: Item["target"] | null = null;
     if (tracked?.pocomos_type === "lead") {
       target = { kind: "lead", id: parsed.pocomosId || tracked.pocomos_id };
     } else if (tracked?.pocomos_type === "customer") {
       target = { kind: "customer-internal", id: tracked.pocomos_id };
-    } else if (parsed.pocomosId) {
-      // Untracked: stored Customer ID is an external number / lead id — the
-      // live flow resolves it via find-customer-by-office at write time.
-      target = { kind: "customer-resolve", id: parsed.pocomosId };
+    } else {
+      const hit = bridge(payload);
+      if (hit) {
+        bridgedBy[hit.how]++;
+        target = { kind: "customer-internal", id: hit.id };
+      } else if (parsed.pocomosId) {
+        target = { kind: "customer-resolve", id: parsed.pocomosId };
+      }
     }
     if (!target) {
       unresolvable.push({
@@ -243,6 +299,7 @@ interface FindCustomerResponse {
     if (it.emailSent != null) withEmail++;
   }
   console.log(`  by write path: ${JSON.stringify(byKind)}`);
+  console.log(`  bridged: ${bridgedBy.email} by email · ${bridgedBy.phone} by phone+lastname`);
   console.log(`  by campaign:   ${JSON.stringify(byCampaign)}`);
   console.log(`  with an "Email sent:" line: ${withEmail}`);
 

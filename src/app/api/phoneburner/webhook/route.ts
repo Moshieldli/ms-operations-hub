@@ -13,7 +13,7 @@ import {
   type PBCallDonePayload,
   type ParsedWebhook,
 } from "@/lib/sync/webhookProcessor";
-import { updateContact } from "@/lib/phoneburner/client";
+import { updateContact, normalizePhone } from "@/lib/phoneburner/client";
 import { WELLNESS_QUEUE_FOLDER, WELLNESS_CALLED_FOLDER } from "@/lib/phoneburner/folders";
 import { CURRENT_YEAR } from "@/lib/pocomos/categorize";
 
@@ -297,7 +297,22 @@ async function processNoteWrite(payload: PBCallDonePayload): Promise<void> {
       await writeCustomerNote(parsed.pocomosId, parsed.pocomosSummary);
       noteWritten = true;
     } else {
-      const urlId = await resolveCustomerUrlId(parsed.pocomosId);
+      let urlId = await resolveCustomerUrlId(parsed.pocomosId);
+      if (!urlId) {
+        // find-customer-by-office can't see CANCELLED customers (proven on the
+        // rev-54 backfill — every win-back id came back empty), so fall back to
+        // the enriched `customers` Neon table by phone + last name (the sweep's
+        // identity rule). Win-back dials are exactly this population.
+        const digits = normalizePhone(String(payload.contact?.phone ?? ""));
+        const last = String(payload.contact?.last_name ?? "").trim();
+        if (digits.length === 10 && last) {
+          const cands = (await sql`
+            SELECT pocomos_id, phone FROM customers WHERE LOWER(last_name) = ${last.toLowerCase()}
+          `) as Array<{ pocomos_id: string; phone: string | null }>;
+          const hit = cands.find((c) => normalizePhone(c.phone ?? "") === digits);
+          if (hit) urlId = String(hit.pocomos_id);
+        }
+      }
       if (!urlId) {
         error = `could not resolve URL ID for Customer ID ${parsed.pocomosId}`;
       } else {
