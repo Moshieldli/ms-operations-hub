@@ -181,3 +181,33 @@ the new format — backfill-ready with no shim (BACKLOG item added).
 `Wellness call — Left Message` ⏎ `Ohavia Feldman · 14s`. Live replay of that payload against the
 production webhook wrote the new-format note to her record (all-notes report readback confirms),
 duplicate-guard no-op on wellness_calls as designed.
+
+## Email-sent line + replay gate + cleanup (rev 53, same day — ops correction)
+
+Ops corrected rev 52's "no email example" caveat: one-touch emails DID go out on the test calls.
+Re-search of the FULL payloads found the marker **in the same `api_calldone` payload**, as a
+contact-notes entry — `-- 07/21/2026 @ 8:52 AM EDT by Ohavia Feldman -- Email sent: Are we living
+up to your expectations?` — I'd previously missed it (only read the first 2 note lines +
+`events`/`call_notes`). Two more finds: (1) the modern header inserts `by {agent}`, which the old
+`ENTRY_HEADER` regex didn't consume — entry parsing was silently dead on every modern payload
+(fixed); (2) payload `start_time`/`end_time` are CT while note headers are ET, so the timestamp
+guard compares note headers to each other: only "Email sent" entries in the newest same-day
+cluster (±3 min) count. **Proven on all 4 real payloads** — 3 sends extracted with the exact
+subject; Ohavia's 10:01 re-dial (payload carries only her stale 8:52 email entry) correctly null.
+No REST activity endpoint needed.
+
+**Replay gate (6b):** webhook hard-skips the note write when a `webhook_log` row with the same PB
+`call_id` already has `note_written=TRUE` (expression index added). Live-proven: replay #1 of
+log 294 wrote Ohavia's note; replay #2 logged `duplicate call_id 3046404595 — note already
+written (replay guard)` and wrote nothing. This is also the historical-backfill dedupe.
+
+**Cleanup (6a):** Pocomos DOES have a delete path — `POST /customer/{id}/note/{noteId}/delete`
+(`data-method=post` UI action; 405 on GET, as the landmine rule predicts for actions). With ops
+authorization, deleted the three old-format test notes (Leon 5375041, Ohavia 5375076, Rivka
+5375089) after verifying each note's customer mapping. Rivka's duplicate is resolved.
+
+**Final state on record (all-notes readback):** exactly two notes today —
+Rivka 5375168: `Wellness call — Left Message ⏎ Ohavia Feldman · 14s`; Ohavia 5375192:
+`Wellness call — Left Message ⏎ Email sent: Are we living up to your expectations? ⏎
+Ohavia Feldman · 17s`. BACKLOG: email-capture item closed; added backlog-only "Email sent ·
+opened" enhancement (PB Activity tracks opens; arrives post-call, needs a later read — unprobed).

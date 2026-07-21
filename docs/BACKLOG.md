@@ -6,10 +6,13 @@
       They replay cleanly through `parseWebhook` into the NEW note format — a one-off script can
       backfill call notes onto lead/customer records (dedupe on webhook_log id; skip rows whose
       contact no longer resolves). Decide with ops whether year-old call notes are wanted first.
-- [ ] **Capture a real one-touch-email `api_calldone` payload**: `extractEmailSent` (rev 52) is
-      unproven against a live email send — have a CSR send one from PB, then check the stored
-      payload (`events.last_event` / `call_notes`) and tighten the pattern + template-name
-      extraction if needed.
+- [ ] **"Email sent · opened" enhancement (backlog-only, do not build yet):** PB's contact Activity
+      stream tracks one-touch OPENS ("Rivka Leyton just opened a one-touch message") as well as
+      sends. The open happens after the call, so it can't ride the `api_calldone` payload — it
+      would need a later notes/activity read (does the open land in `contact.notes`? unprobed) or
+      a REST activity endpoint (unprobed). Would let CSR notes read "Email sent: … · opened" so the
+      team knows who actually read the follow-up. (The SEND side shipped in rev 53 —
+      `extractEmailSent`, proven live.)
 - [ ] Cancelled – This Year (by deactivation date) + cancelled-by-reason — needs the per-customer
       deactivation scrape job (date+reason are scrape-only; sales_status scrapeable from
       service-information). See REFERENCE §9 #6.
