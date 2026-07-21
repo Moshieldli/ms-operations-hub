@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import crypto from "node:crypto";
 import { waitUntil } from "@vercel/functions";
 import { sql, initSchema } from "@/lib/db";
-import { getJson, postJson, pocomosOffice } from "@/lib/pocomos";
+import { postJson, pocomosOffice } from "@/lib/pocomos";
+import { getSessionedHtml } from "@/lib/pocomos/webSession";
 import { POCOMOS_CALL_INTERACTION_TYPE } from "@/lib/pocomos/interactionTypes";
 import {
   buildPocomosSummary,
@@ -41,10 +42,16 @@ async function lookupTrackedContact(pbContactId: string): Promise<TrackedRow | n
 }
 
 async function resolveCustomerUrlId(customerId: string): Promise<string | null> {
+  // ⚠️ find-customer-by-office is a WEB-SESSION endpoint, NOT JWT (found
+  // 2026-07-21 during the notes backfill): the JWT client gets a 200
+  // login-redirect JSON ({"type":"redirect"}) with no results, so every
+  // resolve silently failed. Use the sessioned web client. No &active=1 —
+  // win-back dials resolve INACTIVE customers by design.
   try {
-    const resp = await getJson<FindCustomerResponse>(
-      `/customer/find-customer-by-office?suggest=${encodeURIComponent(customerId)}&active=1`
+    const body = await getSessionedHtml(
+      `/customer/find-customer-by-office?suggest=${encodeURIComponent(customerId)}`
     );
+    const resp = JSON.parse(body) as FindCustomerResponse;
     const first = resp.results?.[0];
     return first?.id != null ? String(first.id) : null;
   } catch {

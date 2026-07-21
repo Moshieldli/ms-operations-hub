@@ -91,7 +91,7 @@ const POCOMOS_NOTE_PREFIX = "📞 PhoneBurner Call —";
  * Call —" as Pocomos stores it, bare "PhoneBurner Call —"). The em-dash
  * survives the Pocomos round-trip (verified), but "-"/"–" are tolerated too.
  */
-export const PB_NOTE_GUARD = /^(?:📞\s*|\?\s*)?(?:wellness|lead|win-?back|phoneburner)\s+call\s*[—–-]/i;
+export const PB_NOTE_GUARD = /^(?:📞\s*|\?\s*)?(?:wellness|lead|win-?back|phoneburner|phone)\s+call\s*[—–-]/i;
 
 /** True when a Pocomos note summary originated from a PhoneBurner call write. */
 export function isPbOriginatedNote(summary: string | null | undefined): boolean {
@@ -391,9 +391,17 @@ export function buildPocomosSummary(input: {
   csrName: string;
   noteBody: string;
   emailSent?: string | null;
+  /**
+   * Original call date ("M/D/YY") — HISTORICAL BACKFILL ONLY. Pocomos stamps
+   * every note with the write date, so a backfilled note carries the real call
+   * date in the first line: "Win-back call — Left Message · 5/22/26".
+   * Live webhooks omit it (the stamp is the call date).
+   */
+  callDate?: string;
 }): string {
   const csr = input.csrName || "(unknown)";
-  const lines = [`${input.campaign || "PhoneBurner"} call — ${input.disposition}`];
+  const dateSuffix = input.callDate ? ` · ${input.callDate}` : "";
+  const lines = [`${input.campaign || "PhoneBurner"} call — ${input.disposition}${dateSuffix}`];
   if (input.emailSent != null) {
     lines.push(input.emailSent ? `Email sent: ${input.emailSent}` : "Email sent");
   }
