@@ -21,7 +21,12 @@ const BASE = "https://ms-operations-hub.vercel.app";
     const cta = page.locator(".ms-collect-cta");
     check("idle CTA renders", await cta.isVisible());
     const body1 = await page.evaluate(() => document.body.innerText);
-    check("idle CTA copy", body1.includes("Start collections session") && body1.includes("Ring the register"));
+    check(
+      "idle CTA copy (audio-neutral sub-line)",
+      body1.includes("Start collections session") &&
+        body1.includes("Track payments as they land") &&
+        !body1.includes("Ring the register")
+    );
     await page.screenshot({ path: `${outDir}/finance-cta-idle.png` });
 
     await cta.click();

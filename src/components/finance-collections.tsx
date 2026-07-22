@@ -438,8 +438,9 @@ export function FinancePausedSection({
               <span className="block text-sm font-bold leading-tight">
                 Start collections session
               </span>
+              {/* Neutral sub-line — the register sound stays a surprise. */}
               <span className="block text-xs text-emerald-100">
-                Ring the register as payments land
+                Track payments as they land
               </span>
             </span>
           </button>

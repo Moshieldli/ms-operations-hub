@@ -52,8 +52,10 @@ Five parts (Part 5 added mid-run), each its own commit + deploy, in order. Scree
 
 ## Part 5 (mid-run addition) — /finance collections CTA (rev 61)
 
-- Idle: large emerald-gradient button with DollarSign badge, "Start collections session / Ring the
-  register as payments land", soft glow pulse (2.8s; off under prefers-reduced-motion).
+- Idle: large emerald-gradient button with DollarSign badge, "Start collections session / Track
+  payments as they land", soft glow pulse (2.8s; off under prefers-reduced-motion).
+  (Same-day tweak: sub-line was "Ring the register as payments land" — reworded audio-neutral so
+  the register sound stays a surprise; kept a sub-line for the button's visual weight.)
 - LIVE: transforms into a bordered emerald panel — pulsing dot, "Collections session LIVE",
   running tally, separate Stop button.
 - Verified 6/6 (`scripts/verify-collect-cta.ts`); before = this morning's `2026-07-22-img/
