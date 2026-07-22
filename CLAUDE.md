@@ -35,6 +35,9 @@ them without any upload.
 - **Work autonomously.** Don't ask for confirmation; make reasonable calls on ambiguity and note
   them in the final report. Only stop for something destructive, irreversible, or blocking.
 - **Display-only tasks must not touch** `categorize.ts` / `sales-provider.ts` / `sales-data.ts`.
+- **Every new page ships WITH its nav entry** (`components/nav.tsx`, same build) — not in the
+  nav = not shipped. Taxonomy: Customers · Leads · Service · Finance · Texting · Requests · TV
+  (TV children open in a new tab).
 
 ## Verify LIVE via Playwright — NOT curl+regex
 After deploying, verify the deployed UI with a real browser: `scripts/verify-live.ts` (smoke test

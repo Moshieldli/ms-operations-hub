@@ -16,6 +16,17 @@ const nextConfig = {
    * `beforeFiles` so the rewrite runs BEFORE filesystem resolution — the exact
    * phase that was swallowing these paths.
    */
+  /**
+   * Retired placeholder pages (rev 59). Permanent so bookmarks re-learn:
+   * /combined → /sales (Customers), /calling → /leads (until the real calling
+   * dashboard arrives with the PhoneBurner backfill).
+   */
+  async redirects() {
+    return [
+      { source: "/combined", destination: "/sales", permanent: true },
+      { source: "/calling", destination: "/leads", permanent: true },
+    ];
+  },
   async rewrites() {
     return {
       beforeFiles: [

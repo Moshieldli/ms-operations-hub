@@ -19,15 +19,13 @@ interface NavLink {
   children?: Array<{ href: string; label: string; newTab?: boolean }>;
 }
 
+// Nav taxonomy (rev 59): Customers · Leads · Service · Finance · Texting ·
+// Requests · TV. STANDING RULE: every new page ships WITH its nav entry in the
+// same build — not in the nav = not shipped (CLAUDE.md).
 const links: NavLink[] = [
-  {
-    href: "/sales",
-    label: "Sales",
-    children: [
-      { href: "/sales", label: "Sales" },
-      { href: "/finance", label: "Paused — open balance" },
-    ],
-  },
+  // Label renamed Sales → Customers (rev 59); routes unchanged (/sales, /tv/sales).
+  // Plain tab: /finance is its own tab, so no dropdown and no double-highlight.
+  { href: "/sales", label: "Customers" },
   {
     href: "/leads",
     label: "Leads",
@@ -36,8 +34,6 @@ const links: NavLink[] = [
       { href: "/leads/followup", label: "Follow-ups" },
     ],
   },
-  { href: "/calling", label: "Calling" },
-  { href: "/combined", label: "Combined" },
   {
     href: "/service",
     label: "Service",
@@ -58,6 +54,7 @@ const links: NavLink[] = [
       { href: "/tv/sales", label: "Sales board", newTab: true },
       { href: "/tv/techs", label: "Tech board", newTab: true },
       { href: "/tv/techs/tall", label: "Tech board — narrow", newTab: true },
+      { href: "/tv/board", label: "Route board", newTab: true },
     ],
   },
 ];

@@ -47,6 +47,9 @@ need a re-scrape (e.g. respray attribution, followup buckets).
 - `components/nav.tsx` → `NavDropdown` (click-driven, closes on outside-click/Escape/navigation,
   works on touch). A tab is active on its page AND children:
   `pathname === href || pathname.startsWith(href + "/")`.
+  **STANDING RULE (rev 59): every new page MUST be added to the nav in the same build that
+  creates it — not in the nav = not shipped.** Taxonomy: Customers (/sales) · Leads · Service ·
+  Finance · Texting · Requests · TV (all /tv/* children, each `newTab: true`).
 
 ## Idioms
 

@@ -6,26 +6,38 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
+// Mirrors the top-nav taxonomy (rev 59): Customers · Leads · Service · Finance
+// · Texting · Requests. New page => new nav entry => (usually) a card here.
 const sections = [
   {
     href: "/sales",
-    title: "Sales",
-    description: "Pipeline, conversions, and rep performance.",
+    title: "Customers",
+    description: "Active roster, season buckets, return rate.",
   },
   {
-    href: "/calling",
-    title: "Calling",
-    description: "Outbound call activity and outcomes.",
-  },
-  {
-    href: "/combined",
-    title: "Combined",
-    description: "Cross-channel view across sales and calling.",
+    href: "/leads",
+    title: "Leads",
+    description: "Close rate and follow-up state.",
   },
   {
     href: "/service",
     title: "Service",
-    description: "Field-service reports — overdue sprays and more.",
+    description: "Overdue sprays, respray performance, route board.",
+  },
+  {
+    href: "/finance",
+    title: "Finance",
+    description: "Paused accounts with open balances — collections.",
+  },
+  {
+    href: "/texting",
+    title: "Texting",
+    description: "Aerialink SMS archive (password-gated).",
+  },
+  {
+    href: "/requests",
+    title: "Requests",
+    description: "Feedback queue and the prompt builder.",
   },
 ];
 
