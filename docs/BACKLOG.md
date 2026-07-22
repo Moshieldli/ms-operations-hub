@@ -142,6 +142,15 @@
       wired and dormant). Until then those boards run off Pocomos + the DAYCODES snapshot.
 
 ## Done (recent)
+- [x] **PASSWORD + NAV + SALE BELL + CTA + BOARD V2 (revs 58-62, 2026-07-22)** — texting password
+      rotated (cookies invalidated by design; Proganic typo fixed); nav taxonomy Customers · Leads ·
+      Service · Finance · Texting · Requests · TV (/combined + /calling deleted with permanent
+      redirects; /tv/board added to TV dropdown; standing new-page-nav rule in CLAUDE.md + skill);
+      /tv/sales new-sale bell (3 synthesized WAVs, Sat-Fri weekly tally vs Saturday snapshot,
+      once-per-week milestones in sync_state, autoplay affordance, /sales subtle tally); /finance
+      collections CTA redesigned (gradient glow + LIVE panel); board v2 weekly mirror (Sun-Fri
+      6-col current week, ?week= review, urgent banner, special-code pills, Day Code parser fix,
+      announcements seeded). Reports: 2026-07-22-nav-bell-board.md.
 - [x] **Feedback bubble "Record screen" with mic narration (rev 56, 2026-07-22)** — third capture
       option (Attach file / Take screenshot untouched): getDisplayMedia + getUserMedia mic →
       MediaRecorder (vp9/opus preferred, mic-denied → silent fallback with note), 60s max +

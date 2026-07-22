@@ -125,7 +125,10 @@ export function parseCalendar(
         }
         return fallback;
       };
-      const cDay = findCol(/^daycode$/i, dc + 1);
+      // "DayCode" and "Day Code" both appear on the hand-edited sheet (rev 62 —
+      // the space variant made findCol fall back to the Van column and swap
+      // daycode/van on those days).
+      const cDay = findCol(/^day\s*code$/i, dc + 1);
       const cVan = findCol(/van|loc/i, dc + 2);
       const cTown = findCol(/^towns$/i, dc + 3);
       const cStop = findCol(/stops/i, dc + 4);

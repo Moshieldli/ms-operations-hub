@@ -207,9 +207,13 @@ export async function initSchema(): Promise<void> {
       id INT PRIMARY KEY DEFAULT 1,
       this_week TEXT NOT NULL DEFAULT '',
       next_week TEXT NOT NULL DEFAULT '',
+      urgent TEXT NOT NULL DEFAULT '',
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
+  // rev 62 — URGENT ANNOUNCEMENT ("MON MORNING MEETINGS!"), big banner on both
+  // boards when non-empty; edited only on /service/board.
+  await c`ALTER TABLE board_announcements ADD COLUMN IF NOT EXISTS urgent TEXT NOT NULL DEFAULT ''`;
 
   // ---- Technician roster + compliments / shout-outs (rev 50) ----
   // Roster = column A of the "Technician & Asset Information" sheet ONLY (names).

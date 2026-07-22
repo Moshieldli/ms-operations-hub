@@ -76,11 +76,33 @@ function MegaphoneIcon({ size = "1em", color = "#fbbf24" }: { size?: string; col
   );
 }
 
+/** Weekly/special codes (WF1/WF2/WG1/RLW/TKO/ASAP/ANT/TRN…) vs numeric daycodes. */
+const isSpecialCode = (code: string) =>
+  code
+    .split(/[,/]/)
+    .some((part) => /[A-Z]/i.test(part.replace(/\(P\)|P\b/gi, "").trim()));
+
+/** Daycode chip — numeric routes read mono-sky; weekly/special codes get the violet pill. */
+function DaycodeChip({ code }: { code: string }) {
+  if (!code) return null;
+  return isSpecialCode(code) ? (
+    <span className="shrink-0 rounded bg-violet-500/25 px-1.5 py-0.5 font-mono text-sm font-bold text-violet-300">
+      {code}
+    </span>
+  ) : (
+    <span className="shrink-0 font-mono text-sm font-bold text-sky-300">{code}</span>
+  );
+}
+
+/**
+ * One tech row. FIDELITY (rev 62): names/towns NEVER truncate — they wrap
+ * (`break-words`); OFF/OUT/RAIN/OFFICE DAY renders as a status row.
+ */
 function RouteRow({ r }: { r: BoardRoute }) {
   if (r.off) {
     return (
       <div className="flex items-baseline justify-between gap-2 rounded border border-slate-800 bg-slate-900/40 px-2 py-1">
-        <span className="font-semibold text-slate-200">{r.tech}</span>
+        <span className="min-w-0 break-words font-semibold text-slate-200">{r.tech}</span>
         <span className="text-xs font-bold uppercase tracking-wide text-amber-400">{r.off}</span>
       </div>
     );
@@ -88,15 +110,15 @@ function RouteRow({ r }: { r: BoardRoute }) {
   return (
     <div className="rounded border border-slate-800 bg-slate-900/70 px-2 py-1">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="flex items-baseline gap-1.5 truncate">
-          <span className="truncate font-semibold text-slate-100">{r.tech}</span>
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span className="min-w-0 break-words font-semibold text-slate-100">{r.tech}</span>
           {r.ant ? <BugIcon size="0.9em" /> : null}
           {r.electricBlower > 0 ? <BoltIcon size="0.9em" /> : null}
         </span>
-        <span className="shrink-0 font-mono text-sm font-bold text-sky-300">{r.daycode}</span>
+        <DaycodeChip code={r.daycode} />
       </div>
       <div className="flex items-baseline justify-between gap-2 text-xs text-slate-400">
-        <span className="truncate">
+        <span className="min-w-0 break-words">
           {r.van ? <span className="text-slate-500">{r.van} · </span> : null}
           {r.towns || "—"}
         </span>
@@ -149,7 +171,10 @@ export function TvBoardView({
           <h1 className="text-4xl font-black tracking-tight">Route Board</h1>
         </div>
         <div className="text-right text-xs text-slate-500">
-          <div>{prettyDate(board.days[0].date)} – {prettyDate(board.days[board.days.length - 1].date)}</div>
+          <div className="text-sm font-semibold text-slate-300">
+            Week of {prettyDate(board.weekStart)} – {prettyDate(board.weekEnd)}
+            {board.weekOverridden ? <span className="ml-1 text-amber-400">(review)</span> : null}
+          </div>
           <div>
             {board.sheetConnected ? (
               <span className="text-emerald-400">routing sheet connected</span>
@@ -160,25 +185,53 @@ export function TvBoardView({
         </div>
       </header>
 
-      {/* Legend */}
+      {/* URGENT announcement — big, loud, on BOTH boards; edited on /service/board only. */}
+      {board.announcements.urgent ? (
+        <div className="mt-2 flex shrink-0 items-center justify-center gap-3 rounded-xl border-2 border-red-500 bg-red-950/50 px-4 py-2">
+          <MegaphoneIcon size="1.6em" color="#f87171" />
+          <span className="break-words text-2xl font-black uppercase tracking-wide text-red-300">
+            {board.announcements.urgent}
+          </span>
+        </div>
+      ) : null}
+
+      {/* SERVICE CODES legend (SVG only, no emoji) */}
       <div className="mt-2 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
+        <span className="font-bold uppercase tracking-wide text-slate-500">Service codes</span>
         {LEGEND.map(([abbr, full]) => (
           <span key={abbr}>
             <span className="font-mono font-bold text-sky-300">{abbr}</span> {full}
           </span>
         ))}
+        <span className="inline-flex items-center gap-1">
+          <span className="rounded bg-violet-500/25 px-1 font-mono font-bold text-violet-300">WF·WG·RLW·TKO·ASAP</span>
+          weekly / special route
+        </span>
         <span className="ml-2 inline-flex items-center gap-1"><BugIcon size="1em" /> ant day</span>
         <span className="inline-flex items-center gap-1"><BoltIcon size="1em" /> electric blower</span>
       </div>
 
       <div className="mt-3 grid min-h-0 flex-1 grid-cols-[1fr_320px] gap-3">
-        {/* Day columns */}
-        <div className="grid min-h-0 grid-cols-5 gap-2">
+        {/* Weekly grid: ALWAYS Sun→Fri, 6 columns — the current week, not a
+            rolling window. Sunday renders even when empty; today is ringed. */}
+        <div className="grid min-h-0 grid-cols-6 gap-2">
           {board.days.map((day) => (
-            <div key={day.date} className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/40">
+            <div
+              key={day.date}
+              className={`flex min-h-0 flex-col overflow-hidden rounded-xl border bg-slate-900/40 ${
+                day.isToday ? "border-sky-400 ring-2 ring-sky-500/40" : "border-slate-800"
+              }`}
+            >
               <div className="shrink-0 border-b border-slate-800 px-2 py-2">
                 <div className="flex items-baseline justify-between">
-                  <span className="text-xl font-black">{day.label}</span>
+                  <span className="text-xl font-black">
+                    {day.label}
+                    {day.isToday ? (
+                      <span className="ml-1.5 align-middle rounded bg-sky-500/25 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-300">
+                        Today
+                      </span>
+                    ) : null}
+                  </span>
                   <span className="text-xs text-slate-400">{prettyDate(day.date)}</span>
                 </div>
                 <div className="mt-1 flex items-center justify-between">
@@ -206,19 +259,34 @@ export function TvBoardView({
                     {day.rows.map((r, i) => <RouteRow key={`${r.tech}-${i}`} r={r} />)}
                   </div>
                 ) : day.fallback.length ? (
+                  /* Sheet-empty day: SAME row format as scheduled days, tech "—"
+                     (rev 62) — not a bare route-code list. Counts are Pocomos
+                     mosquito next-services only, so they undercount the sheet. */
                   <div className="flex flex-col gap-1">
-                    <div className="px-1 text-[10px] uppercase tracking-wide text-slate-600">not yet scheduled · Pocomos routes</div>
-                    {day.fallback.map((f) => (
-                      <div key={f.daycode} className="flex items-baseline justify-between rounded border border-slate-800 bg-slate-900/70 px-2 py-1">
-                        <span className="flex items-baseline gap-1.5">
-                          <span className="font-mono text-sm font-bold text-sky-300">{f.daycode}</span>
-                          {f.ant ? <BugIcon size="0.85em" /> : null}
-                          {f.electricBlower > 0 ? <BoltIcon size="0.85em" /> : null}
-                          <span className="text-xs text-slate-400">{f.area}</span>
-                        </span>
-                        <span className="text-xs font-semibold tabular-nums text-emerald-300">{f.stops}</span>
-                      </div>
+                    <div className="px-1 text-[10px] uppercase tracking-wide text-slate-600">
+                      not on sheet yet · Pocomos (mosquito only)
+                    </div>
+                    {day.fallback.slice(0, 9).map((f) => (
+                      <RouteRow
+                        key={f.daycode}
+                        r={{
+                          tech: "—",
+                          daycode: f.daycode,
+                          van: "",
+                          towns: f.area,
+                          stops: f.stops,
+                          ant: f.ant,
+                          electricBlower: f.electricBlower,
+                          off: null,
+                        }}
+                      />
                     ))}
+                    {day.fallback.length > 9 ? (
+                      <div className="px-1 text-[11px] text-slate-500">
+                        +{day.fallback.length - 9} more routes ·{" "}
+                        {day.fallback.slice(9).reduce((s, f) => s + f.stops, 0)} stops
+                      </div>
+                    ) : null}
                   </div>
                 ) : (
                   <div className="px-1 py-3 text-xs text-slate-600">No stops.</div>

@@ -43,7 +43,9 @@ export function ServiceBoardView({
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <AnnouncementEditor initial={board?.announcements ?? { thisWeek: "", nextWeek: "" }} />
+        <AnnouncementEditor
+          initial={board?.announcements ?? { thisWeek: "", nextWeek: "", urgent: "" }}
+        />
         <ShoutoutForm roster={roster} onCreated={(s) => setShouts((p) => [s, ...p])} />
       </div>
 
@@ -54,9 +56,14 @@ export function ServiceBoardView({
   );
 }
 
-function AnnouncementEditor({ initial }: { initial: { thisWeek: string; nextWeek: string } }) {
+function AnnouncementEditor({
+  initial,
+}: {
+  initial: { thisWeek: string; nextWeek: string; urgent: string };
+}) {
   const [thisWeek, setThisWeek] = useState(initial.thisWeek);
   const [nextWeek, setNextWeek] = useState(initial.nextWeek);
+  const [urgent, setUrgent] = useState(initial.urgent);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
@@ -67,7 +74,7 @@ function AnnouncementEditor({ initial }: { initial: { thisWeek: string; nextWeek
       const r = await fetch("/api/board/announcements", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ thisWeek, nextWeek }),
+        body: JSON.stringify({ thisWeek, nextWeek, urgent }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || "save failed");
@@ -86,6 +93,15 @@ function AnnouncementEditor({ initial }: { initial: { thisWeek: string; nextWeek
         <CardDescription>THIS WEEK / NEXT WEEK — natural vs synthetic, shown on the board.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
+        <label className="block text-xs font-semibold uppercase tracking-wide text-red-600 dark:text-red-400">
+          Urgent announcement — big red banner on BOTH boards; leave empty for none
+        </label>
+        <input
+          value={urgent}
+          onChange={(e) => setUrgent(e.target.value.slice(0, 300))}
+          placeholder="MON MORNING MEETINGS!"
+          className="w-full rounded-md border-2 border-red-300 bg-background px-2.5 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-red-400 dark:border-red-800"
+        />
         <label className="block text-xs font-medium text-muted-foreground">This week</label>
         <textarea value={thisWeek} onChange={(e) => setThisWeek(e.target.value)} rows={2}
           className="w-full resize-y rounded-md border bg-background px-2.5 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />

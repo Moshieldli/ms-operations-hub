@@ -14,6 +14,7 @@ import { sql } from "@/lib/db";
 import { getForecast, type ForecastDay } from "@/lib/weather";
 import { daycodeArea, daycodeTowns, isAntDaycode, normalizeDaycode } from "./routeTowns";
 import { getMasterRoutingSchedule, type SheetDay } from "./masterRouting";
+import { weekStart } from "./resprays";
 
 /** Precip probability (%) that counts as a wet day for the ant dry-day check. */
 const RAIN_PROB = 55;
@@ -37,6 +38,8 @@ export interface BoardDay {
   date: string;
   label: string;
   weekday: string;
+  /** Today (Eastern) — highlighted on the weekly grid (rev 62). */
+  isToday: boolean;
   /** Tech-first rows. Empty when the sheet hasn't scheduled this day yet. */
   rows: BoardRoute[];
   /** Pocomos daycode fallback (used only when `rows` is empty). */
@@ -51,6 +54,8 @@ export interface BoardDay {
 export interface Announcements {
   thisWeek: string;
   nextWeek: string;
+  /** URGENT banner ("MON MORNING MEETINGS!") — big on both boards when set. */
+  urgent: string;
 }
 
 export interface ScheduleBoard {
@@ -59,6 +64,11 @@ export interface ScheduleBoard {
   sheetConnected: boolean;
   asOf: string;
   stale: boolean;
+  /** Sun–Fri SERVICE week being shown (rev 62). */
+  weekStart: string;
+  weekEnd: string;
+  /** True when a ?week= override is being viewed (admin review, never the TV). */
+  weekOverridden: boolean;
 }
 
 const addDays = (iso: string, n: number) => {
@@ -76,15 +86,17 @@ function easternToday(): string {
   ).padStart(2, "0")}`;
 }
 
-/** Today + the next 4 workdays (Sun–Fri; the crew never works Saturday). */
-function workdayWindow(today: string): string[] {
-  const out: string[] = [];
-  let d = today;
-  while (out.length < 5) {
-    if (weekdayOf(d) !== "Sat") out.push(d);
-    d = addDays(d, 1);
-  }
-  return out;
+/**
+ * The CURRENT Sun–Fri SERVICE week (rev 62) — the whole week, not a rolling
+ * today-forward window, mirroring the physical board. Flips on SATURDAY (same
+ * convention as the tech board: nothing lands after a week's Friday, so
+ * Saturday already shows next week). ⚠️ Distinct from the Sat–Fri SALES week
+ * (categorize.ts::startOfSaturdayWeek) used by the /tv/sales bell.
+ */
+function serviceWeek(today: string): string[] {
+  let ws = weekStart(today); // Sunday of today's week (resprays.ts convention)
+  if (weekdayOf(today) === "Sat") ws = addDays(ws, 7);
+  return [0, 1, 2, 3, 4, 5].map((n) => addDays(ws, n)); // Sun..Fri, ALWAYS 6
 }
 
 const OFF_RE = /off|out|rain|sick|office|vac|holiday|trn|training/i;
@@ -93,21 +105,33 @@ const isOffCode = (code: string, tech: string) =>
 
 async function getAnnouncements(): Promise<Announcements> {
   const rows = (await sql`
-    SELECT this_week, next_week FROM board_announcements WHERE id = 1
-  `) as Array<{ this_week: string; next_week: string }>;
-  return { thisWeek: rows[0]?.this_week ?? "", nextWeek: rows[0]?.next_week ?? "" };
+    SELECT this_week, next_week, urgent FROM board_announcements WHERE id = 1
+  `) as Array<{ this_week: string; next_week: string; urgent: string }>;
+  return {
+    thisWeek: rows[0]?.this_week ?? "",
+    nextWeek: rows[0]?.next_week ?? "",
+    urgent: rows[0]?.urgent ?? "",
+  };
 }
 
-export async function getScheduleBoard(): Promise<ScheduleBoard> {
+export async function getScheduleBoard(
+  options: { weekOf?: string } = {}
+): Promise<ScheduleBoard> {
   const today = easternToday();
-  const window = workdayWindow(today);
+  // ?week= override (admin review on /service/board only — the TV never passes it).
+  const weekOverridden = Boolean(options.weekOf && /^\d{4}-\d{2}-\d{2}$/.test(options.weekOf));
+  const window = weekOverridden
+    ? [0, 1, 2, 3, 4, 5].map((n) => addDays(weekStart(options.weekOf!), n))
+    : serviceWeek(today);
+  const first = window[0];
   const last = window[window.length - 1];
 
   // 1. Pocomos scheduled stops per day+route + which are electric-blower.
+  //    Whole week — past days keep whatever next_service_date rows remain.
   const rows = (await sql`
     SELECT next_service_date::text AS d, route_code, pocomos_id
     FROM mosquito_service_status
-    WHERE next_service_date >= ${today}::date AND next_service_date <= ${last}::date
+    WHERE next_service_date >= ${first}::date AND next_service_date <= ${last}::date
   `) as Array<{ d: string; route_code: string | null; pocomos_id: string }>;
   const ebRows = (await sql`
     SELECT pocomos_id FROM customers WHERE tags::text ILIKE ${"%electric blower%"}
@@ -143,7 +167,7 @@ export async function getScheduleBoard(): Promise<ScheduleBoard> {
   ]);
   const wxByDate = new Map((forecast ?? []).map((f) => [f.date, f]));
 
-  const days: BoardDay[] = window.map((date, i) => {
+  const days: BoardDay[] = window.map((date) => {
     const sheetDay: SheetDay | undefined = sheet?.get(date) ?? undefined;
     const wx = wxByDate.get(date) ?? null;
 
@@ -201,8 +225,9 @@ export async function getScheduleBoard(): Promise<ScheduleBoard> {
 
     return {
       date,
-      label: i === 0 ? "Today" : weekdayOf(date),
+      label: weekdayOf(date),
       weekday: weekdayOf(date),
+      isToday: date === today,
       rows: rowsOut,
       fallback,
       weather: wx,
@@ -218,5 +243,8 @@ export async function getScheduleBoard(): Promise<ScheduleBoard> {
     sheetConnected: Boolean(sheet && sheet.size > 0),
     asOf: new Date().toISOString(),
     stale: days.every((d) => d.rows.length === 0 && d.fallback.length === 0),
+    weekStart: first,
+    weekEnd: last,
+    weekOverridden,
   };
 }
