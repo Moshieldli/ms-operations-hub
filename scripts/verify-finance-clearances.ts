@@ -37,14 +37,23 @@ const TEST_ID = "TEST-VERIFY-CLEAR";
     );
     const page = await ctx.newPage();
     await page.goto(`${BASE}/finance`, { waitUntil: "domcontentloaded", timeout: 45_000 });
-    await page.waitForTimeout(1400); // hydration + the clearances fetch
+    await page.waitForTimeout(2600); // hydration + the clearances fetch
     await page.screenshot({ path: `${outDir}/finance-celebration.png` });
 
     const body = await page.evaluate(() => document.body.innerText);
+    const played = await page.evaluate(
+      () =>
+        document.querySelector("[data-register-played]")?.getAttribute("data-register-played") ?? ""
+    );
+    const wavResp = await fetch(`${BASE}/sounds/register.wav`);
     const checks: Array<[string, boolean]> = [
-      ["collected line", body.includes("Collected $412.00 since you last looked (1 customer)")],
+      // Pattern, not exact: REAL clearances can share the line with the seed
+      // (first live catch: Rob Kurtz $479.31 joined the seeded $412 mid-verify).
+      ["collected line", /Collected \$[\d,]+\.\d{2} since you last looked \(\d+ customers?\)/.test(body)],
       ["session button", body.includes("Start collections session")],
       ["paused card", body.includes("Service paused — open balance")],
+      ["register.wav play attempted on clearance", played === "/sounds/register.wav"],
+      ["register.wav served", wavResp.ok && Number(wavResp.headers.get("content-length")) > 100_000],
     ];
     for (const [name, ok] of checks) {
       console.log(`${ok ? "✓" : "✗"} ${name}`);
@@ -72,7 +81,8 @@ const TEST_ID = "TEST-VERIFY-CLEAR";
     await page.waitForTimeout(800);
     const body2 = await page.evaluate(() => document.body.innerText);
     const sessionOk =
-      body2.includes("Session live") && body2.includes("This session: $0.00 · 0 customers");
+      body2.includes("Collections session LIVE") &&
+      body2.includes("This session: $0.00 · 0 customers");
     console.log(`${sessionOk ? "✓" : "✗"} collections session live + tally`);
     if (!sessionOk) pass = false;
     await page.screenshot({ path: `${outDir}/finance-session.png` });
