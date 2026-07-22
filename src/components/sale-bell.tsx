@@ -49,6 +49,9 @@ export interface SaleBellState {
 
 export function useSaleBell(newCount: number | null, opts: { sound: boolean }): SaleBellState {
   const [week, setWeek] = useState<WeekState | null>(null);
+  // Climb handling WAITS for the week fetch to settle — otherwise a climb that
+  // lands during the first render races the baseline and can't see milestones.
+  const [weekStatus, setWeekStatus] = useState<"pending" | "ready" | "error">("pending");
   const [splash, setSplash] = useState<SaleBellState["splash"]>(null);
   const [muted, setMuted] = useState(false);
   const [audioBlocked, setAudioBlocked] = useState(false);
@@ -73,10 +76,13 @@ export function useSaleBell(newCount: number | null, opts: { sound: boolean }): 
     void fetch("/api/sales/week-tally", { cache: "no-store" })
       .then((r) => r.json())
       .then((j: { ok: boolean } & WeekState) => {
-        if (j.ok) setWeek({ weekStart: j.weekStart, baselineNew: j.baselineNew, fired: j.fired });
+        if (j.ok) {
+          setWeek({ weekStart: j.weekStart, baselineNew: j.baselineNew, fired: j.fired });
+          setWeekStatus("ready");
+        } else setWeekStatus("error");
       })
       .catch(() => {
-        /* tally just stays hidden */
+        setWeekStatus("error"); // tally stays hidden; plain bell still rings
       });
   }, []);
 
@@ -93,9 +99,9 @@ export function useSaleBell(newCount: number | null, opts: { sound: boolean }): 
     [opts.sound]
   );
 
-  // Climb detection on every live value.
+  // Climb detection on every live value (and again once the week settles).
   useEffect(() => {
-    if (newCount == null) return;
+    if (newCount == null || weekStatus === "pending") return;
     if (prevRef.current == null) {
       // First observation: resume from the kiosk's last-seen count so sales
       // that landed while the tab was closed still ring ONCE — but a plain
@@ -149,7 +155,7 @@ export function useSaleBell(newCount: number | null, opts: { sound: boolean }): 
     } catch {
       /* ignore */
     }
-  }, [newCount, play]);
+  }, [newCount, weekStatus, play]);
 
   useEffect(() => {
     return () => {
