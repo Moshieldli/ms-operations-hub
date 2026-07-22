@@ -139,3 +139,30 @@ Third capture option next to **Attach file** and **Take screenshot** — both un
 
 **Deploys:** two manual `npx vercel --prod` deploys, both Ready (git auto-deploy also fired on the
 rev-55 push). `npx tsc --noEmit` + `npm run build` clean before each.
+
+---
+
+## Follow-up (same day, rev 57) — installments correctness probe: NO code change needed
+
+Ops correction: the paused list = customers with OVERDUE payments; installment customers may still
+owe future installments after a successful collection — does the zero-test hold?
+
+**Probe (read-only, `scripts/probe-unpaid-duedates.ts` + `probe-unpaid-duedates2.ts`):** parsed the
+Unpaid-Invoices report per-invoice. The Dates cell carries `Due MM/DD/YY`; each row carries an
+explicit `Status:` text. Findings, 2026-07-22:
+
+- **All 83 invoices are due as of today** — due-date range 2025-04-01 → exactly today, statuses
+  only "Past due" (46) / "Due" (37). **Zero future-due invoices**, even though our request's date
+  window extends through Dec 31 next year — the form's aging buckets (lessThan30…moreThan90) are
+  *past-due ages*, so a not-yet-due invoice has no bucket and the server never returns it.
+- A live installment customer proves it: "Installment 1 of 4 – 2025 Auto-Renew" (due 04/01/25)
+  appears only because it is past due; installments 2–4 are absent until they come due.
+- Paused-roster cross-check: all 10 stored balances equal their past-due-only sum; $0 future-due.
+
+**Conclusion — the past-due-only branch:** `open_balance` already means **overdue balance** by
+construction, so the >0 → $0 clearance test is correct for installment customers (paying the
+overdue installment rings the register even though future installments remain), and no roster
+membership changes. No code change; REFERENCE §5.14b documents the finding (rev 57). One nuance
+documented: an installment customer legitimately re-enters the paused roster when the next
+installment goes unpaid, and can ring again on a later UTC day — that's a genuine new collection,
+not a duplicate.

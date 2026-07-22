@@ -158,7 +158,9 @@
       autoplay-blocked → replay affordance) + "Start collections session" (visibilitychange re-check
       + 20s poll, per-clear ring, row slide-out, session tally, 10-min idle auto-stop). Display-only;
       never /tv/*. Open follow-up: Pocomos card-processed → invoice-paid latency unmeasured — first
-      real session validates. See §5.14b.
+      real session validates. See §5.14b. **Same-day rev-57 probe:** the unpaid report is
+      past-due-only (0 of 83 invoices future-due; installment invoices surface only once due), so
+      open_balance = OVERDUE balance and the zero-test is installment-safe — no code change.
 - [x] **Historical webhook-notes backfill (rev 54, 2026-07-21)** — 251 of 290 dead-parser-era calls
       (Jun 4–Jul 16) now have v2 Pocomos notes with the original call date + `Email sent:` where one
       went out (202). Test-folder dials excluded (ops); 0 today/wellness rows (safety-checked);
