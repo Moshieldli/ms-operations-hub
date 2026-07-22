@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Play, Square, Volume2, VolumeX } from "lucide-react";
+import { DollarSign, Square, Volume2, VolumeX } from "lucide-react";
 import { PausedBalanceCard, money } from "@/components/service-rows";
 import type { MosquitoStatusRow } from "@/lib/service/refresh";
 
@@ -397,36 +397,54 @@ export function FinancePausedSection({
           )}
         </button>
         {session ? (
-          <button
-            type="button"
-            onClick={() => stopSession(null)}
-            className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
-          >
-            <span className="relative flex h-2 w-2">
+          /* LIVE state (rev 61): an unmistakable active panel — pulsing dot,
+             running tally, and a clearly separate Stop — not a toggled label. */
+          <div className="flex items-center gap-3 rounded-xl border-2 border-emerald-500 bg-emerald-50 py-2 pl-4 pr-2 dark:bg-emerald-950/40">
+            <span className="relative flex h-2.5 w-2.5" aria-hidden="true">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-60 motion-reduce:animate-none" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-600" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-600" />
             </span>
-            Session live — stop
-            <Square className="h-3 w-3" aria-hidden="true" />
-          </button>
+            <span>
+              <span className="block text-sm font-semibold leading-tight text-emerald-800 dark:text-emerald-300">
+                Collections session LIVE
+              </span>
+              <span className="block text-xs tabular-nums text-emerald-700 dark:text-emerald-400">
+                This session: {money(tally.amount)} · {tally.count} customer
+                {tally.count === 1 ? "" : "s"}
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={() => stopSession(null)}
+              className="ml-1 inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-background px-3 py-2 text-xs font-semibold hover:bg-muted"
+            >
+              <Square className="h-3 w-3" aria-hidden="true" />
+              Stop
+            </button>
+          </div>
         ) : (
+          /* Idle state (rev 61): THE primary action on the page — big emerald
+             gradient, soft glow pulse (off under prefers-reduced-motion). */
           <button
             type="button"
             onClick={startSession}
-            className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-muted"
             title="Re-checks balances every time you tab back from Pocomos (plus every 20s)"
+            className="ms-collect-cta group inline-flex items-center gap-3 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-500 px-5 py-3 text-left text-white shadow-lg transition-transform hover:scale-[1.03] active:scale-[0.99]"
           >
-            <Play className="h-3.5 w-3.5" aria-hidden="true" />
-            Start collections session
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/20">
+              <DollarSign className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <span>
+              <span className="block text-sm font-bold leading-tight">
+                Start collections session
+              </span>
+              <span className="block text-xs text-emerald-100">
+                Ring the register as payments land
+              </span>
+            </span>
           </button>
         )}
       </div>
-      {session ? (
-        <span className="text-xs tabular-nums text-emerald-700 dark:text-emerald-400">
-          This session: {money(tally.amount)} · {tally.count} customer
-          {tally.count === 1 ? "" : "s"}
-        </span>
-      ) : null}
       {sessionNote ? <span className="text-xs text-muted-foreground">{sessionNote}</span> : null}
       {sinceLine ? (
         <span className="text-xs font-medium tabular-nums text-emerald-700 dark:text-emerald-400">
@@ -459,6 +477,12 @@ export function FinancePausedSection({
           .ms-flyer { animation: msFlyFade 2.4s ease-out forwards; }
         }
         @keyframes msFlyFade { 0% { opacity: 0; } 15% { opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; } }
+        @keyframes msGlowPulse {
+          0%, 100% { box-shadow: 0 4px 14px rgb(16 185 129 / 0.35); }
+          50% { box-shadow: 0 4px 26px rgb(16 185 129 / 0.65); }
+        }
+        .ms-collect-cta { animation: msGlowPulse 2.8s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) { .ms-collect-cta { animation: none; } }
       `}</style>
 
       {/* Flying dollar amounts (pointer-transparent overlay). */}
