@@ -11,6 +11,7 @@ import {
 import { RefreshedAt } from "@/components/refreshed-at";
 import { useLiveSales, type SalesMeta } from "@/components/use-live-sales";
 import { useSalesTaxonomy } from "@/components/use-sales-taxonomy";
+import { useSaleBell, WeekTallyLine } from "@/components/sale-bell";
 import type { SalesSummary } from "@/lib/sales-data";
 import type { ReturnRatePair, SalesTaxonomy } from "@/lib/sales-taxonomy";
 import { cn } from "@/lib/utils";
@@ -49,17 +50,22 @@ export function SalesView({
 }) {
   const { summary, live, refreshing, liveAsOf } = useLiveSales(initial, meta);
   const { taxonomy, loading: taxLoading } = useSalesTaxonomy();
+  // Weekly tally only — NO auto-sound on the browser page (rev 60): office
+  // machines shouldn't all ding; the /tv/sales kiosk owns the bell.
+  const bell = useSaleBell(live ? summary.buckets.NEW : null, { sound: false });
 
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Sales</h1>
+          {/* Page title matches the rev-59 nav label (route unchanged). */}
+          <h1 className="text-2xl font-semibold tracking-tight">Customers</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Live customer pipeline from Pocomos · year tags.
           </p>
         </div>
         <div className="flex items-center gap-3 text-sm text-muted-foreground">
+          <WeekTallyLine bell={bell} subtle />
           <LiveStatus
             live={live}
             refreshing={refreshing}

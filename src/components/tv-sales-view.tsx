@@ -3,6 +3,7 @@
 import { RefreshedAt } from "@/components/refreshed-at";
 import { useLiveSales, type SalesMeta } from "@/components/use-live-sales";
 import { useSalesTaxonomy } from "@/components/use-sales-taxonomy";
+import { useSaleBell, SaleBellOverlay, WeekTallyLine } from "@/components/sale-bell";
 import type { SalesSummary } from "@/lib/sales-data";
 import type { SalesTaxonomy } from "@/lib/sales-taxonomy";
 
@@ -17,6 +18,10 @@ export function TvSalesView({
 }) {
   const { summary, live, refreshing, liveAsOf } = useLiveSales(initial, meta);
   const { taxonomy } = useSalesTaxonomy();
+  // New-sale bell (rev 60): rings on the live buckets.NEW series — sound ON
+  // here (real Chrome kiosk, not Yodeck). Only after the first LIVE value so a
+  // stale snapshot → live jump on load can't ring.
+  const bell = useSaleBell(live ? summary.buckets.NEW : null, { sound: true });
 
   return (
     <div className="flex min-h-screen w-full flex-col bg-background p-6 lg:p-10">
@@ -31,6 +36,7 @@ export function TvSalesView({
           </h1>
         </div>
         <div className="flex items-center gap-3 text-base text-muted-foreground lg:text-lg">
+          <WeekTallyLine bell={bell} />
           <span
             className={`inline-flex h-3 w-3 rounded-full ${
               live ? "animate-pulse bg-emerald-500" : "bg-amber-500"
@@ -49,7 +55,8 @@ export function TvSalesView({
         </div>
       </header>
 
-      <TvDashboard summary={summary} taxonomy={taxonomy} />
+      <TvDashboard summary={summary} taxonomy={taxonomy} newFlash={bell.splash != null} />
+      <SaleBellOverlay bell={bell} />
     </div>
   );
 }
@@ -57,9 +64,11 @@ export function TvSalesView({
 function TvDashboard({
   summary,
   taxonomy,
+  newFlash,
 }: {
   summary: SalesSummary;
   taxonomy: SalesTaxonomy | null;
+  newFlash?: boolean;
 }) {
   const { totals, contractTypeGroups } = summary;
   // All three season tiles come from the taxonomy (rev 19), not categorize.ts —
@@ -87,7 +96,7 @@ function TvDashboard({
           for the one bucket that needs attention (Not Renewed → amber).
         */}
         <div className="grid flex-1 grid-cols-2 gap-4 lg:grid-cols-5 lg:gap-6">
-          <BigBucket label="New" value={sb ? sb.newCount : "…"} />
+          <BigBucket label="New" value={sb ? sb.newCount : "…"} flash={newFlash} />
           <BigBucket label="New – Season Skipped" value={sb ? sb.seasonSkipped : "…"} />
           <BigBucket
             label="Returning"
@@ -206,14 +215,23 @@ function BigBucket({
   value,
   hint,
   tone = "neutral",
+  flash,
 }: {
   label: string;
   value: number | string;
   hint?: string;
   tone?: keyof typeof TV_TONE;
+  /** New-sale celebration flash (rev 60) — emerald pulse while the splash runs. */
+  flash?: boolean;
 }) {
   return (
-    <div className="flex flex-col rounded-xl border p-5 lg:p-7">
+    <div
+      className={`flex flex-col rounded-xl border p-5 lg:p-7 ${
+        flash
+          ? "animate-pulse border-emerald-500 bg-emerald-50 motion-reduce:animate-none dark:bg-emerald-950/30"
+          : ""
+      }`}
+    >
       <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground lg:text-sm">
         {label}
       </div>
