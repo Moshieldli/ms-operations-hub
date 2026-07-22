@@ -66,6 +66,7 @@ export async function POST(req: Request) {
       submitter?: string;
       sourceUrl?: string;
       imageDataUri?: string;
+      videoDataUri?: string;
     };
     if (!b.body || !b.body.trim()) {
       return NextResponse.json({ ok: false, error: "Feedback text is required." }, { status: 400 });
@@ -75,6 +76,7 @@ export async function POST(req: Request) {
       submitter: b.submitter,
       sourceUrl: b.sourceUrl,
       imageDataUri: b.imageDataUri,
+      videoDataUri: b.videoDataUri,
     });
     // Never echo the image back — the bubble only needs the id to confirm.
     return NextResponse.json({ ok: true, id: item.id });

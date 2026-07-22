@@ -167,6 +167,10 @@ export async function initSchema(): Promise<void> {
   `;
   await c`CREATE INDEX IF NOT EXISTS feedback_created_idx ON feedback (created_at DESC)`;
   await c`CREATE INDEX IF NOT EXISTS feedback_status_idx ON feedback (status)`;
+  // rev 56 — screen recording with mic narration ("Record screen" in the
+  // bubble). Same inline-base64 call as the image; capped at MAX_VIDEO_BYTES
+  // (~3 MB, the Vercel body limit is the ceiling). List reads never select it.
+  await c`ALTER TABLE feedback ADD COLUMN IF NOT EXISTS video_data_uri TEXT`;
 
   // ---- Balance clearances (rev 55) ----
   // A paused-balance customer whose open balance went >0 → $0 between two

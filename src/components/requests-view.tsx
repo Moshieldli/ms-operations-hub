@@ -16,6 +16,7 @@ import {
   type FeedbackStatus,
 } from "@/lib/feedback";
 import { cn } from "@/lib/utils";
+import { Video } from "lucide-react";
 
 const shortDate = (iso: string) => iso.slice(0, 10);
 const pagePath = (url: string | null) => {
@@ -58,7 +59,7 @@ export function RequestsView({
   const [prompt, setPrompt] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [zoom, setZoom] = useState<number | null>(null);
+  const [zoom, setZoom] = useState<{ id: number; kind: "image" | "video" } | null>(null);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: items.length };
@@ -151,7 +152,7 @@ export function RequestsView({
     }
   }, [prompt]);
 
-  const zoomItem = zoom != null ? items.find((i) => i.id === zoom) : null;
+  const zoomItem = zoom != null ? items.find((i) => i.id === zoom.id) : null;
 
   return (
     <div className="space-y-4">
@@ -280,9 +281,21 @@ export function RequestsView({
                   <img
                     src={`/api/feedback/${it.id}/image`}
                     alt="attachment thumbnail"
-                    onClick={() => setZoom(it.id)}
+                    onClick={() => setZoom({ id: it.id, kind: "image" })}
                     className="h-16 w-16 shrink-0 cursor-zoom-in rounded-md border object-cover"
                   />
+                ) : null}
+                {it.hasVideo ? (
+                  <button
+                    type="button"
+                    onClick={() => setZoom({ id: it.id, kind: "video" })}
+                    title="Play screen recording"
+                    aria-label="Play screen recording"
+                    className="flex h-16 w-16 shrink-0 flex-col items-center justify-center gap-1 rounded-md border bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    <Video className="h-6 w-6" aria-hidden="true" />
+                    <span className="text-[10px] font-medium uppercase tracking-wide">Video</span>
+                  </button>
                 ) : null}
                 <div className="min-w-0 flex-1">
                   <p className="whitespace-pre-wrap break-words text-sm">{it.body}</p>
@@ -314,12 +327,23 @@ export function RequestsView({
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6"
           onClick={() => setZoom(null)}
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={`/api/feedback/${zoomItem.id}/image`}
-            alt="attachment full size"
-            className="max-h-[90vh] max-w-[90vw] rounded-lg border"
-          />
+          {zoom?.kind === "video" ? (
+            // Click-to-open is the user gesture, so autoplay WITH audio is allowed.
+            <video
+              src={`/api/feedback/${zoomItem.id}/video`}
+              controls
+              autoPlay
+              onClick={(e) => e.stopPropagation()}
+              className="max-h-[90vh] max-w-[90vw] rounded-lg border"
+            />
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={`/api/feedback/${zoomItem.id}/image`}
+              alt="attachment full size"
+              className="max-h-[90vh] max-w-[90vw] rounded-lg border"
+            />
+          )}
         </div>
       ) : null}
     </div>

@@ -2,10 +2,38 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { MAX_IMAGE_BYTES } from "@/lib/feedback";
+import { MAX_IMAGE_BYTES, MAX_VIDEO_BYTES } from "@/lib/feedback";
 import { FeedbackMarkup } from "@/components/feedback-markup";
 
 const NAME_KEY = "ms_feedback_name";
+
+// ---- Screen recording (rev 56) ----
+const MAX_RECORD_SECONDS = 60;
+/** Screen content compresses well — probed: 60s at these rates ≈ 2.9 MB worst case. */
+const VIDEO_BPS = 350_000;
+const AUDIO_BPS = 32_000; // ~32kbps opus narration ≈ 240 KB of the 60s budget
+/** Auto-stop threshold — stop before the cap so the last chunk still fits. */
+const SIZE_STOP_BYTES = Math.floor(MAX_VIDEO_BYTES * 0.95);
+/** Preferred container/codec order; Safari lands on mp4. */
+const MIME_CANDIDATES = [
+  "video/webm;codecs=vp9,opus",
+  "video/webm;codecs=vp8,opus",
+  "video/webm",
+  "video/mp4",
+];
+
+interface RecState {
+  secondsLeft: number;
+  micLive: boolean;
+  sizePct: number;
+}
+
+interface RecPreview {
+  dataUri: string;
+  silent: boolean;
+  seconds: number;
+  sizeLimitHit: boolean;
+}
 
 /**
  * Floating feedback bubble (rev 42) — bottom-right on every dashboard page.
@@ -29,6 +57,21 @@ export function FeedbackBubble() {
   const [markupSrc, setMarkupSrc] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  // ---- Screen recording (rev 56) ----
+  const [canRecord, setCanRecord] = useState(false);
+  const [video, setVideo] = useState<string | null>(null);
+  const [videoLabel, setVideoLabel] = useState<string | null>(null);
+  const [rec, setRec] = useState<RecState | null>(null);
+  const [recPreview, setRecPreview] = useState<RecPreview | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamsRef = useRef<MediaStream[]>([]);
+  const chunksRef = useRef<Blob[]>([]);
+  const bytesRef = useRef(0);
+  const sizeHitRef = useRef(false);
+  const micLiveRef = useRef(false);
+  const timerRef = useRef<number | null>(null);
+  const secondsUsedRef = useRef(0);
+
   // Name is remembered so each person types it once (rev 49).
   useEffect(() => {
     try {
@@ -39,6 +82,25 @@ export function FeedbackBubble() {
     }
   }, []);
 
+  // Feature-detect in an effect (SSR-safe): no getDisplayMedia or MediaRecorder
+  // (mobile Safari etc.) → the button never renders.
+  useEffect(() => {
+    setCanRecord(
+      typeof navigator !== "undefined" &&
+        typeof navigator.mediaDevices?.getDisplayMedia === "function" &&
+        typeof window.MediaRecorder === "function"
+    );
+  }, []);
+
+  // Unmount safety: never leave a live mic/screen track behind.
+  useEffect(() => {
+    return () => {
+      if (timerRef.current != null) window.clearInterval(timerRef.current);
+      for (const s of streamsRef.current) s.getTracks().forEach((t) => t.stop());
+      streamsRef.current = [];
+    };
+  }, []);
+
   // Belt-and-braces: never show on a TV screen even if mounted there.
   if (pathname?.startsWith("/tv")) return null;
 
@@ -47,10 +109,159 @@ export function FeedbackBubble() {
     // Keep the remembered name.
     setImage(null);
     setImageName(null);
+    setVideo(null);
+    setVideoLabel(null);
     setNote(null);
     setDone(false);
     setMarkupSrc(null);
     if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const stopAllTracks = () => {
+    for (const s of streamsRef.current) s.getTracks().forEach((t) => t.stop());
+    streamsRef.current = [];
+  };
+
+  const stopRecorder = () => {
+    const r = recorderRef.current;
+    if (r && r.state !== "inactive") r.stop();
+    else {
+      // Recorder never started (or already stopped) — still kill the tracks.
+      stopAllTracks();
+    }
+  };
+
+  /**
+   * "Record screen" (rev 56): getDisplayMedia (screen picker is inherent) +
+   * getUserMedia mic merged into one MediaRecorder stream. Mic denied/failing
+   * NEVER aborts — it falls back to a silent recording with a visible note.
+   * Auto-stops at 60s or ~95% of the size cap; ends cleanly when the user
+   * stops the share from the browser chrome.
+   */
+  const startRecording = async () => {
+    setNote(null);
+    setRecPreview(null);
+    // Hide the panel so it isn't in the recording (same trick as the screenshot).
+    setOpen(false);
+    await new Promise((r) => setTimeout(r, 120));
+
+    let screen: MediaStream;
+    try {
+      screen = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    } catch {
+      setOpen(true);
+      setNote("Screen share was cancelled or blocked.");
+      return;
+    }
+    streamsRef.current.push(screen);
+
+    // MIC IS THE POINT — but its failure only downgrades to silent, never aborts.
+    let mic: MediaStream | null = null;
+    try {
+      mic = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+      });
+      streamsRef.current.push(mic);
+    } catch {
+      mic = null;
+    }
+    micLiveRef.current = Boolean(mic);
+
+    const mime = MIME_CANDIDATES.find((m) => MediaRecorder.isTypeSupported(m));
+    const combined = new MediaStream([
+      ...screen.getVideoTracks(),
+      ...(mic ? mic.getAudioTracks() : []),
+    ]);
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(combined, {
+        ...(mime ? { mimeType: mime } : {}),
+        videoBitsPerSecond: VIDEO_BPS,
+        audioBitsPerSecond: AUDIO_BPS,
+      });
+    } catch {
+      stopAllTracks();
+      setOpen(true);
+      setNote("Couldn't start the recorder in this browser.");
+      return;
+    }
+    recorderRef.current = recorder;
+    chunksRef.current = [];
+    bytesRef.current = 0;
+    sizeHitRef.current = false;
+    secondsUsedRef.current = 0;
+
+    recorder.ondataavailable = (e) => {
+      if (!e.data || e.data.size === 0) return;
+      chunksRef.current.push(e.data);
+      bytesRef.current += e.data.size;
+      setRec((prev) =>
+        prev ? { ...prev, sizePct: Math.min(100, Math.round((bytesRef.current / MAX_VIDEO_BYTES) * 100)) } : prev
+      );
+      if (bytesRef.current >= SIZE_STOP_BYTES && recorder.state === "recording") {
+        sizeHitRef.current = true;
+        recorder.stop();
+      }
+    };
+
+    recorder.onstop = () => {
+      if (timerRef.current != null) {
+        window.clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      // End BOTH tracks (screen + mic) — no orphaned live mic, ever.
+      stopAllTracks();
+      setRec(null);
+      // Strip codec parameters ("video/webm;codecs=vp9,opus" → "video/webm"):
+      // the comma inside codecs= breaks data-URI parsing, and <video> sniffs
+      // the container anyway. The bare mime is what gets stored and served.
+      const blobType = (recorder.mimeType || mime || "video/webm").split(";")[0];
+      const blob = new Blob(chunksRef.current, { type: blobType });
+      chunksRef.current = [];
+      recorderRef.current = null;
+      if (blob.size === 0) {
+        setOpen(true);
+        setNote("Nothing was recorded — try again.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUri = String(reader.result || "");
+        if (!dataUri.startsWith("data:video/") || dataUri.length > MAX_VIDEO_BYTES * 1.4) {
+          setOpen(true);
+          setNote("The recording came out too large — try a shorter one.");
+          return;
+        }
+        setRecPreview({
+          dataUri,
+          silent: !micLiveRef.current,
+          seconds: secondsUsedRef.current,
+          sizeLimitHit: sizeHitRef.current,
+        });
+      };
+      reader.onerror = () => {
+        setOpen(true);
+        setNote("Couldn't read the recording.");
+      };
+      reader.readAsDataURL(blob);
+    };
+
+    // User ends the share from the browser chrome → same clean stop path.
+    screen.getVideoTracks()[0]?.addEventListener("ended", () => {
+      if (recorder.state === "recording") recorder.stop();
+    });
+
+    recorder.start(1000); // 1s chunks so the size cap reacts quickly
+    setRec({ secondsLeft: MAX_RECORD_SECONDS, micLive: Boolean(mic), sizePct: 0 });
+    timerRef.current = window.setInterval(() => {
+      secondsUsedRef.current += 1;
+      setRec((prev) =>
+        prev ? { ...prev, secondsLeft: Math.max(0, MAX_RECORD_SECONDS - secondsUsedRef.current) } : prev
+      );
+      if (secondsUsedRef.current >= MAX_RECORD_SECONDS && recorder.state === "recording") {
+        recorder.stop();
+      }
+    }, 1000);
   };
 
   /**
@@ -140,6 +351,7 @@ export function FeedbackBubble() {
           submitter,
           sourceUrl: typeof window !== "undefined" ? window.location.href : pathname,
           imageDataUri: image,
+          videoDataUri: video,
         }),
       });
       const json = await res.json();
@@ -221,6 +433,16 @@ export function FeedbackBubble() {
                 >
                   Take screenshot
                 </button>
+                {canRecord ? (
+                  <button
+                    type="button"
+                    onClick={startRecording}
+                    className="rounded-md border px-2.5 py-1.5 text-xs hover:bg-muted"
+                    title="Record your screen (up to 60s) and talk through the issue"
+                  >
+                    Record screen
+                  </button>
+                ) : null}
                 {imageName ? (
                   <span className="truncate text-xs text-muted-foreground" title={imageName}>
                     {imageName}
@@ -241,6 +463,25 @@ export function FeedbackBubble() {
                   alt="attachment preview"
                   className="max-h-28 w-full rounded-md border object-contain"
                 />
+              ) : null}
+              {video ? (
+                <div className="space-y-1">
+                  {/* Compact playable preview — audio available via the controls. */}
+                  <video src={video} controls className="max-h-28 w-full rounded-md border" />
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span className="truncate">{videoLabel}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVideo(null);
+                        setVideoLabel(null);
+                      }}
+                      className="hover:text-foreground"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
               ) : null}
               {note ? <p className="text-xs text-amber-600 dark:text-amber-400">{note}</p> : null}
               <div className="flex items-center justify-between pt-0.5">
@@ -272,6 +513,94 @@ export function FeedbackBubble() {
       {capturing ? (
         <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/40 text-sm text-white">
           Capturing…
+        </div>
+      ) : null}
+
+      {/* Recording indicator — visible so people know the mic is hot. */}
+      {rec ? (
+        <div className="fixed inset-x-0 bottom-4 z-[60] flex justify-center">
+          <div className="flex items-center gap-3 rounded-full border bg-background px-4 py-2 text-sm shadow-lg">
+            <span className="relative flex h-2.5 w-2.5" aria-hidden="true">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-60 motion-reduce:animate-none" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-600" />
+            </span>
+            <span className="tabular-nums font-medium">
+              Recording — {rec.secondsLeft}s left
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {rec.micLive ? "Mic live" : "Recording without audio"}
+              {rec.sizePct >= 60 ? ` · ${rec.sizePct}% of size limit` : ""}
+            </span>
+            <button
+              type="button"
+              onClick={stopRecorder}
+              className="rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background"
+            >
+              Stop
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Post-recording preview — confirm the narration recorded, then attach. */}
+      {recPreview ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4">
+          <div className="w-[min(94vw,40rem)] space-y-3 rounded-xl border bg-background p-4 shadow-xl">
+            <div className="text-sm font-semibold">Screen recording preview</div>
+            <video src={recPreview.dataUri} controls className="max-h-[60vh] w-full rounded-md border" />
+            <div className="space-y-1 text-xs text-muted-foreground">
+              <p>
+                {recPreview.seconds}s recorded.{" "}
+                Play it back to confirm the narration came through before attaching.
+              </p>
+              {recPreview.silent ? (
+                <p className="text-amber-600 dark:text-amber-400">
+                  Recorded without audio — the mic was unavailable or denied.
+                </p>
+              ) : null}
+              {recPreview.sizeLimitHit ? (
+                <p className="text-amber-600 dark:text-amber-400">
+                  Stopped early — size limit reached.
+                </p>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setRecPreview(null);
+                  setOpen(true);
+                }}
+                className="rounded-md border px-3 py-1.5 text-sm hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRecPreview(null);
+                  void startRecording();
+                }}
+                className="rounded-md border px-3 py-1.5 text-sm hover:bg-muted"
+              >
+                Discard &amp; re-record
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setVideo(recPreview.dataUri);
+                  setVideoLabel(
+                    `Screen recording · ${recPreview.seconds}s${recPreview.silent ? " · no audio" : ""}`
+                  );
+                  setRecPreview(null);
+                  setOpen(true);
+                }}
+                className="rounded-md bg-foreground px-3.5 py-1.5 text-sm font-medium text-background"
+              >
+                Attach recording
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
       {markupSrc ? (

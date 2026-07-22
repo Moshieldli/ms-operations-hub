@@ -142,6 +142,14 @@
       wired and dormant). Until then those boards run off Pocomos + the DAYCODES snapshot.
 
 ## Done (recent)
+- [x] **Feedback bubble "Record screen" with mic narration (rev 56, 2026-07-22)** — third capture
+      option (Attach file / Take screenshot untouched): getDisplayMedia + getUserMedia mic →
+      MediaRecorder (vp9/opus preferred, mic-denied → silent fallback with note), 60s max +
+      countdown + Stop + mic-hot indicator, preview-with-audio → attach/discard, MAX_VIDEO_BYTES
+      3 MB (auto-stop at 95%), `feedback.video_data_uri` + `hasVideo` + GET /api/feedback/{id}/video,
+      /requests Video tile → full-screen playback with audio. Landmine logged: recorder.mimeType's
+      `;codecs=vp9,opus` comma breaks data-URI parsing — client stores the bare container mime.
+      E2E-verified live (real Chromium MediaRecorder); test row cleaned up. See §5.18.
 - [x] **Cash-register moment on /finance + Collections Mode (rev 55, 2026-07-22)** — new
       `balance_clearances` log (full clears only, per-day ring-once dedupe), detection in the
       mosquito refresh (prior-balance diff, eligibility + empty-report guards) AND a lightweight

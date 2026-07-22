@@ -56,7 +56,8 @@ export default async function FinancePage() {
           asOf={
             report.lastRefreshedAt ? (
               <span className="text-muted-foreground">
-                Updated <RefreshedAt asOf={report.lastRefreshedAt} />.
+                {/* RefreshedAt renders its own "Updated …" prefix. */}
+                <RefreshedAt asOf={report.lastRefreshedAt} />.
               </span>
             ) : undefined
           }
