@@ -56,7 +56,16 @@ function rowToneClass(row: MosquitoStatusRow): string {
   return "";
 }
 
-export function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowKind }) {
+export function RowTable({
+  rows,
+  kind,
+  rowExtraClass,
+}: {
+  rows: MosquitoStatusRow[];
+  kind: RowKind;
+  /** Optional per-row class hook (e.g. the /finance clear-out animation). */
+  rowExtraClass?: (row: MosquitoStatusRow) => string;
+}) {
   return (
     <div>
       {/* No overflow wrapper: an overflow-x/-y container becomes the sticky
@@ -85,7 +94,11 @@ export function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowK
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.pocomos_id} className={`border-b last:border-0 ${rowToneClass(r)}`}>
+            <tr
+              key={r.pocomos_id}
+              data-customer-id={r.pocomos_id}
+              className={`border-b last:border-0 ${rowToneClass(r)} ${rowExtraClass ? rowExtraClass(r) : ""}`}
+            >
               <td className="py-2 pr-4 font-medium">
                 <span className="inline-flex items-center gap-1.5">
                   {r.full_name || r.pocomos_id}
@@ -177,15 +190,23 @@ export function RowTable({ rows, kind }: { rows: MosquitoStatusRow[]; kind: RowK
 export function PausedBalanceCard({
   rows,
   asOf,
+  headerExtra,
+  rowExtraClass,
 }: {
   rows: MosquitoStatusRow[];
   asOf?: React.ReactNode;
+  /** Optional right-side header slot (the /finance Collections-Mode controls). */
+  headerExtra?: React.ReactNode;
+  rowExtraClass?: (row: MosquitoStatusRow) => string;
 }) {
   const total = rows.reduce((s, r) => s + r.open_balance, 0);
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Service paused — open balance</CardTitle>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <CardTitle>Service paused — open balance</CardTitle>
+          {headerExtra ?? null}
+        </div>
         <CardDescription>
           Eligible mosquito accounts carrying an open balance. We intentionally
           pause spray on unpaid accounts, so these are kept out of the overdue
@@ -208,7 +229,7 @@ export function PausedBalanceCard({
             No eligible accounts with an open balance.
           </p>
         ) : (
-          <RowTable rows={rows} kind="paused" />
+          <RowTable rows={rows} kind="paused" rowExtraClass={rowExtraClass} />
         )}
       </CardContent>
     </Card>

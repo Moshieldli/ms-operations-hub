@@ -1,4 +1,4 @@
-import { PausedBalanceCard } from "@/components/service-rows";
+import { FinancePausedSection } from "@/components/finance-collections";
 import { RefreshedAt } from "@/components/refreshed-at";
 import {
   Card,
@@ -10,13 +10,16 @@ import {
 import { getOverdueReport, type OverdueReport } from "@/lib/service/refresh";
 
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
+export const revalidate = 0;
 export const maxDuration = 60;
 
 /**
- * /finance — money-side of operations. Today it hosts the "Service paused —
- * open balance" roster (the SAME shared PausedBalanceCard the /service/overdue
- * page renders in place — the data comes from getOverdueReport()). Built with
- * room to grow: the next tenant is payment-retry review.
+ * /finance — money-side of operations. Hosts the "Service paused — open
+ * balance" roster (same data as /service/overdue, via getOverdueReport()),
+ * wrapped in FinancePausedSection (rev 55) which adds the cash-register
+ * celebration + Collections Mode. Built with room to grow: the next tenant is
+ * payment-retry review.
  */
 export default async function FinancePage() {
   let report: OverdueReport | null = null;
@@ -48,8 +51,8 @@ export default async function FinancePage() {
           </CardContent>
         </Card>
       ) : (
-        <PausedBalanceCard
-          rows={report.pausedBalance}
+        <FinancePausedSection
+          initialRows={report.pausedBalance}
           asOf={
             report.lastRefreshedAt ? (
               <span className="text-muted-foreground">

@@ -168,6 +168,32 @@ export async function initSchema(): Promise<void> {
   await c`CREATE INDEX IF NOT EXISTS feedback_created_idx ON feedback (created_at DESC)`;
   await c`CREATE INDEX IF NOT EXISTS feedback_status_idx ON feedback (status)`;
 
+  // ---- Balance clearances (rev 55) ----
+  // A paused-balance customer whose open balance went >0 → $0 between two
+  // Unpaid-Invoices reads = a collected payment. Written by the mosquito
+  // refresh (cron + "Refresh now") AND the /finance Collections-Mode check;
+  // read by /finance for the cash-register celebration. DISPLAY-ONLY — the hub
+  // never touches payments. The per-day unique index is the ring-once guard:
+  // poll + visibilitychange + nightly refresh can all see the same clear, but
+  // only the first insert lands (ON CONFLICT DO NOTHING).
+  await c`
+    CREATE TABLE IF NOT EXISTS balance_clearances (
+      id BIGSERIAL PRIMARY KEY,
+      pocomos_id TEXT NOT NULL,
+      full_name TEXT,
+      amount_cleared NUMERIC(10,2) NOT NULL,
+      detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      source TEXT NOT NULL
+    )
+  `;
+  // (detected_at AT TIME ZONE 'UTC')::date is immutable (a bare ::date on
+  // timestamptz isn't), so it can back the dedupe index.
+  await c`
+    CREATE UNIQUE INDEX IF NOT EXISTS balance_clearances_day_dedupe
+    ON balance_clearances (pocomos_id, ((detected_at AT TIME ZONE 'UTC')::date))
+  `;
+  await c`CREATE INDEX IF NOT EXISTS balance_clearances_detected_idx ON balance_clearances (detected_at DESC)`;
+
   // ---- Board announcements (rev 50) ----
   // Editable THIS WEEK / NEXT WEEK natural-vs-synthetic notes for the schedule
   // board's announcements panel. Single-row table (id=1); edited from

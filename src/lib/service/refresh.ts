@@ -38,6 +38,7 @@ import {
 } from "./serviceHistory";
 import { fetchAllCustomersLastService } from "./customersData";
 import { fetchOpenBalances } from "./openBalance";
+import { detectRefreshClearances } from "@/lib/finance/clearances";
 import { refreshResprays } from "./resprays";
 import {
   selectEligible,
@@ -102,6 +103,8 @@ export interface RefreshMeta {
   spraysTwoPlus: number;
   /** Customers found in the unpaid-invoices report (telemetry). */
   balanceCustomers: number;
+  /** Full balance clears (>0 → $0) newly logged this run — rev 55 (§5.14). */
+  balanceClearances: number;
   /** Sum of all open balances across eligible customers (telemetry). */
   openBalanceTotal: number;
   reachedEndOfQueue: boolean;
@@ -297,6 +300,17 @@ export async function refreshMosquitoStatus(
   const ds = await getDataset({ force: options.forceDataset ?? false });
   const eligible = selectEligible(ds.customers);
   const eligibleIds = new Set(eligible.map((e) => e.id));
+
+  // Snapshot PRIOR per-customer balances BEFORE the prune + upsert overwrite
+  // them — the balance-clearance diff (rev 55) compares these against the fresh
+  // unpaid pull. Read before pruneStale so the eligibility check below (not row
+  // disappearance) is what excludes cancelled customers.
+  const priorBalances = (await sql`
+    SELECT pocomos_id, full_name, open_balance::float AS open_balance
+    FROM mosquito_service_status
+    WHERE open_balance > 0
+  `) as Array<{ pocomos_id: string; full_name: string | null; open_balance: number }>;
+
   await pruneStale(eligibleIds);
 
   const mosquitoOnly = eligible.filter((e) => !e.hasAddOn);
@@ -419,6 +433,26 @@ export async function refreshMosquitoStatus(
     });
   }
   await bulkUpsert(bulkRows);
+
+  // ---- BALANCE-CLEARANCE phase (rev 55, display-only): prior balance > 0 →
+  //      fresh balance exactly 0 for a still-eligible customer = a collected
+  //      payment. Logged idempotently (per-day unique index) so a clear the
+  //      /finance Collections Mode already rang never double-logs here. ----
+  let balanceClearances = 0;
+  try {
+    const cleared = await detectRefreshClearances(
+      priorBalances,
+      balanceFor,
+      balances.byId.size,
+      eligibleIds
+    );
+    balanceClearances = cleared.length;
+  } catch (e) {
+    // Celebration is garnish — never let it fail the refresh.
+    console.error(
+      JSON.stringify({ event: "mosquito.status.clearances.error", error: (e as Error).message })
+    );
+  }
 
   // ---- SCRAPE phase: add-on customers with no balance / not brand-new,
   //      targeted per-page (READ-ONLY GET). ----
@@ -692,6 +726,7 @@ export async function refreshMosquitoStatus(
     sprayCountsUpdated,
     spraysTwoPlus,
     balanceCustomers: balances.byId.size,
+    balanceClearances,
     openBalanceTotal: balances.totalBalance,
     reachedEndOfQueue: !budgetHit && work.length === toScrape.length,
     durationMs: Date.now() - t0,

@@ -142,6 +142,15 @@
       wired and dormant). Until then those boards run off Pocomos + the DAYCODES snapshot.
 
 ## Done (recent)
+- [x] **Cash-register moment on /finance + Collections Mode (rev 55, 2026-07-22)** — new
+      `balance_clearances` log (full clears only, per-day ring-once dedupe), detection in the
+      mosquito refresh (prior-balance diff, eligibility + empty-report guards) AND a lightweight
+      `POST /api/finance/collections-check` (fresh unpaid pull ~2.4-3.4s measured). /finance gets a
+      passive since-you-last-looked celebration (WebAudio cha-ching, flying amounts, mute persisted,
+      autoplay-blocked → replay affordance) + "Start collections session" (visibilitychange re-check
+      + 20s poll, per-clear ring, row slide-out, session tally, 10-min idle auto-stop). Display-only;
+      never /tv/*. Open follow-up: Pocomos card-processed → invoice-paid latency unmeasured — first
+      real session validates. See §5.14b.
 - [x] **Historical webhook-notes backfill (rev 54, 2026-07-21)** — 251 of 290 dead-parser-era calls
       (Jun 4–Jul 16) now have v2 Pocomos notes with the original call date + `Email sent:` where one
       went out (202). Test-folder dials excluded (ops); 0 today/wellness rows (safety-checked);
